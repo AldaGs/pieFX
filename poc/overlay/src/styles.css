@@ -1,0 +1,19 @@
+/* The window is transparent and click-through; the canvas paints the wheel and
+   nothing else. No page background, no scrollbars. */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  cursor: none;
+  user-select: none;
+}
+
+#wheel {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
