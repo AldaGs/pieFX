@@ -5,15 +5,19 @@
 	accept:
 
 	  right-button DOWN ....... swallowed (AE opens its menu on DOWN; S2D)
-	  held past 200ms ......... summon: query selection, tell the overlay to show
-	                            the 3x3 grid at the cursor
-	  mouse moves ............. stream the highlighted cell to the overlay
-	  right-button UP ......... if it was a hold: swallow the UP too, hide the
-	                            overlay, and queue the anchor move for the chosen
-	                            cell (run from IdleHook, never from inside the
-	                            mouse hook)
+	  held past 200ms ......... summon: query selection, tell the overlay to
+	                            show the wheel at the cursor
+	  mouse moves ............. stream the raw cursor position to the overlay
+	  right-button UP ......... if it was a hold: swallow the UP too and send
+	                            release. The overlay decides what was chosen and
+	                            sends back an action, which IdleHook executes -
+	                            never from inside the mouse hook.
 	                            if it was a short click: replay it so AE's normal
 	                            context menu still appears
+
+	The native side deliberately has NO opinion about which slot is under the
+	cursor. The overlay draws the wheel, so it owns the geometry and the
+	hit-testing; deciding here as well would fire every action twice.
 
 	Modelled on Persisto (five-param entry point) and on the frozen Phase-0
 	spike (../../pieFX.cpp), whose gesture engine this reuses almost verbatim.
@@ -40,20 +44,16 @@ static A_Boolean		S_rdownB		= FALSE;
 static A_Boolean		S_hold_firedB	= FALSE;
 static int				S_replay_pending = 0;
 
-//	summon session
+//	summon session. No cell here: the overlay owns the wheel geometry and does
+//	its own hit-testing, so the native side only reports where the cursor is.
 static LONG				S_summon_cx		= 0;
 static LONG				S_summon_cy		= 0;
-static int				S_cur_cell		= -1;
+static POINT			S_last_sent		= { 0, 0 };
 
 //	selection context, refreshed in IdleHook so the summon (which runs inside the
 //	mouse hook, where AEGP calls would be reentrant) can read a cached value.
 static A_Boolean		S_has_selection	= FALSE;
 static A_long			S_layer_count	= 0;
-
-//	deferred action: the mouse hook must not run a script. It parks the chosen
-//	cell here and IdleHook fires it once the modal press loop has ended.
-static A_Boolean		S_action_pending = FALSE;
-static int				S_action_cell	= -1;
 
 // ---------------------------------------------------------------------------
 //	actions coming back from the overlay
@@ -161,26 +161,6 @@ static const char *S_anchor_script_fmt =
 	"})()";
 
 // ---------------------------------------------------------------------------
-//	wheel geometry - MUST mirror ../overlay/src/main.js
-// ---------------------------------------------------------------------------
-static int
-CellForPoint(LONG cx, LONG cy, LONG px, LONG py)
-{
-	const int span = 3 * PIEFX_CELL + 2 * PIEFX_GAP;
-	const int half = span / 2;
-	for (int i = 0; i < 9; i++) {
-		int row = i / 3, col = i % 3;
-		LONG gx = cx - half + col * (PIEFX_CELL + PIEFX_GAP);
-		LONG gy = cy - half + row * (PIEFX_CELL + PIEFX_GAP);
-		if (px >= gx && px <= gx + PIEFX_CELL &&
-			py >= gy && py <= gy + PIEFX_CELL) {
-			return i;
-		}
-	}
-	return -1;
-}
-
-// ---------------------------------------------------------------------------
 //	pipe: write side (UI thread)
 // ---------------------------------------------------------------------------
 static void
@@ -213,11 +193,12 @@ static void SendSummon(LONG x, LONG y, A_Boolean hasSel, A_long layers)
 		x, y, hasSel ? "true" : "false", layers);
 	PipeWrite(m);
 }
-static void SendCursor(LONG x, LONG y, int cell)
+//	Raw position only. The overlay owns the wheel geometry and hit-tests for
+//	itself, so there is no cell to report.
+static void SendCursor(LONG x, LONG y)
 {
-	char m[160];
-	sprintf_s(m, sizeof(m),
-		"{\"type\":\"cursor\",\"x\":%ld,\"y\":%ld,\"cell\":%d}\n", x, y, cell);
+	char m[128];
+	sprintf_s(m, sizeof(m), "{\"type\":\"cursor\",\"x\":%ld,\"y\":%ld}\n", x, y);
 	PipeWrite(m);
 }
 static void SendRelease(void) { PipeWrite("{\"type\":\"release\"}\n"); }
@@ -603,7 +584,7 @@ static void OnHoldDetected(void)
 	S_hold_firedB = TRUE;
 	S_summon_cx = S_rdown_pt.x;
 	S_summon_cy = S_rdown_pt.y;
-	S_cur_cell  = -1;
+	S_last_sent = S_rdown_pt;
 
 	if (S_has_selection) {
 		SendSummon(S_summon_cx, S_summon_cy, TRUE, S_layer_count);
@@ -668,13 +649,13 @@ MouseProc(int code, WPARAM wParam, LPARAM lParam)
 					(GetTickCount() - S_rdown_tick) >= PIEFX_HOLD_MS) {
 					OnHoldDetected();
 				}
+				//	Raw cursor only. The overlay owns the wheel geometry, so it
+				//	does its own hit-testing; the native side deliberately no
+				//	longer has an opinion about which slot is under the cursor.
 				if (S_rdownB && S_hold_firedB && mhs) {
-					int cell = S_has_selection
-						? CellForPoint(S_summon_cx, S_summon_cy, mhs->pt.x, mhs->pt.y)
-						: -1;
-					if (cell != S_cur_cell) {
-						S_cur_cell = cell;
-						SendCursor(mhs->pt.x, mhs->pt.y, cell);
+					if (mhs->pt.x != S_last_sent.x || mhs->pt.y != S_last_sent.y) {
+						S_last_sent = mhs->pt;
+						SendCursor(mhs->pt.x, mhs->pt.y);
 					}
 				}
 			} break;
@@ -684,17 +665,14 @@ MouseProc(int code, WPARAM wParam, LPARAM lParam)
 				if (S_rdownB) {
 					if (S_hold_firedB) {
 						//	Ours. AE saw neither DOWN nor UP.
+						//
+						//	We do NOT decide what fires: the overlay knows which
+						//	slot the cursor is on and sends back a finished
+						//	action, which IdleHook executes. Deciding here as
+						//	well would fire twice.
 						S_rdownB = FALSE;
 						SendRelease();
-						if (S_has_selection && S_cur_cell >= 0) {
-							//	Never run a script from inside the hook - defer.
-							S_action_cell = S_cur_cell;
-							S_action_pending = TRUE;
-							Log("  UP -> fire cell %d (deferred to idle)\n", S_cur_cell);
-						} else {
-							Log("  UP -> no fire (hasSel=%d cell=%d)\n",
-								S_has_selection, S_cur_cell);
-						}
+						Log("  UP -> release sent; awaiting the overlay's action\n");
 						return 1;
 					} else {
 						//	Short click: give AE back its right-click.
@@ -939,23 +917,12 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 		}
 		S_rdownB	  = FALSE;
 		S_hold_firedB = FALSE;
-		S_cur_cell	  = -1;
 		Log("  backstop: right-up unseen (released off-AE) -> cancel, wheel hidden\n");
 	}
 
 	//	Keep selection context warm while armed (cheap; only when not dragging).
 	if (S_active && !S_rdownB) {
 		RefreshSelectionContext(suites);
-	}
-
-	//	Run any queued anchor move here, where AEGP calls are safe.
-	if (S_action_pending) {
-		S_action_pending = FALSE;
-		int cell = S_action_cell;
-		S_action_cell = -1;
-		if (cell >= 0) {
-			RunAnchorAction(suites, cell);
-		}
 	}
 
 	//	Drain actions the overlay sent back. They arrive on the pipe thread and
