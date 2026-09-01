@@ -114,15 +114,18 @@ const DEFAULTS = {
       {
         label: "Layer",
         slots: [
-          { label: "Pre-comp", action: { kind: "ae-command", id: 2071, name: "Pre-compose…" } },
-          { label: "Split + Dup", action: { kind: "ae-command", id: 2158, name: "Split Layer" } },
+          { label: "Pre-comp", action: { kind: "ae-command", id: 2071, name: "Precompose" } },
+          // "Split + Dup" as drawn has no single menu id — there is no Split
+          // Layer entry in the command map at all, so it is a script action
+          // waiting to be written. Duplicate stands in until then.
+          { label: "Duplicate", action: { kind: "ae-command", id: 2080, name: "Duplicate" } },
           {
             label: "Save Frame as PNG",
-            action: { kind: "ae-command", id: 2104, name: "Save Frame As…" },
+            action: { kind: "ae-command", id: 2233, name: "SaveFrameAs" },
           },
           {
             label: "Center in Comp",
-            action: { kind: "ae-command", id: 2400, name: "Center in View" },
+            action: { kind: "ae-command", id: 3819, name: "CenterInView" },
           },
           null,
           null,
@@ -163,6 +166,32 @@ function compile(slot) {
 
 let SETTINGS = DEFAULTS;
 let MENU = { kind: "ring", children: DEFAULTS.wheel.slots.map(compile) };
+
+// --- AE command map -------------------------------------------------------
+// id -> name, for the settings picker. NAMING AID ONLY: the id stays the key
+// (see SETTINGS.md). Two caveats the file itself carries:
+//   - it is version-stamped (2025), and ids are mostly but not provably stable
+//     across AE versions, so a binding wants a test-fire before it is trusted;
+//   - the names are internal identifiers ("AddtoRenderQueue"), NOT AE's display
+//     strings, so app.findMenuCommandId cannot validate them.
+// Negative ids are effects; prefer the `effect` action kind for those, since
+// apply-by-match-name is the documented path and does not depend on menus.
+const AE_COMMANDS = {};
+
+async function loadCommandMap() {
+  try {
+    const r = await fetch("ae-commands-2025.json");
+    Object.assign(AE_COMMANDS, await r.json());
+  } catch (_) {
+    /* picker falls back to raw ids */
+  }
+}
+loadCommandMap();
+
+function commandName(id) {
+  return AE_COMMANDS[String(id)] || `#${id}`;
+}
+window.pieFXCommands = { AE_COMMANDS, commandName };
 
 // --- state ----------------------------------------------------------------
 const S = {

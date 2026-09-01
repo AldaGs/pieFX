@@ -46,6 +46,37 @@ A stored id that no longer resolves is a real case (an older AE, a removed
 feature). Those slots grey out at summon, reusing the context gating that already
 exists rather than failing at fire time.
 
+### The command map
+
+`overlay/src/ae-commands-2025.json` is an id → name table (909 entries: 613 menu
+commands, 296 effects) brought over from another project. It exists so the
+settings picker can offer searchable **names** while still persisting the
+**number**. Three things about it are load-bearing:
+
+- **It is version-stamped, and the stamp is the point.** It was captured from AE
+  2025; we target 2026. Ids are mostly stable across versions but not provably
+  so, which is why the settings UI needs a **test-fire** button: the user
+  confirms a binding does what they expect before committing it. That is the
+  practical safety net, because —
+- **the names are internal identifiers, not display strings.** `AddtoRenderQueue`
+  is not what the menu says, so `app.findMenuCommandId` cannot round-trip these
+  and cannot validate them for us.
+- **Names are not unique.** `AdjustmentLayer` appears at both 2263 and 2279,
+  `File` at four different ids. The id disambiguates; the name never can. One
+  more reason the name is never the key.
+
+Checking the first draft of the defaults against this map caught three wrong
+guesses — `SaveFrameAs` is 2233 (not 2104, which is `File`), `CenterInView` is
+3819, and **Split Layer has no menu id in the map at all**, which means the
+"Split + Dup" slot from the mockups is a script action waiting to be written
+rather than a menu command. Guessing ids is exactly as unreliable as it looks.
+
+Also worth noting for the Anchor tool: **10312 `CenterAnchor`** exists as a menu
+command, which may make part of the anchor grid reachable without ExtendScript.
+
+Negative ids are effects. Prefer the `effect` action kind for those —
+apply-by-match-name is the documented path and does not depend on menu structure.
+
 ## User scripts: snippet and file are different, and snippet matters more
 
 Both kinds exist because they solve different problems.
