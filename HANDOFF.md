@@ -74,6 +74,7 @@ is mandatory, not optional: without it you never observe the end of a press.
     README.md            Public-facing overview
     HANDOFF.md           This file
     SPIKES.md            The full spike log — the real deliverable of Phase 0
+    ARCHITECTURE.md      The locked two-process design (read before POC code)
     MAC_SESSION.md       The pre-written macOS checklist (now executed)
     MAC_RESULTS.md       What the macOS bench actually found
 
@@ -106,10 +107,10 @@ is mandatory, not optional: without it you never observe the end of a press.
   are internally consistent, but it has **not been rebuilt on a Mac** — do that
   first next Mac session. No AEGP *match names* were involved (menu commands are
   runtime handles, not persisted), so no saved project can break.
-- **Architecture lock.** The roadmap wants two processes: the AEGP plugin (C++,
-  owns input + catalogue + ExtendScript) and a Tauri overlay/settings app
-  (Rust + webview), talking over a local socket / named pipe. S3B proved the
-  separate-process overlay works. Lock this before writing POC code.
+- **Architecture lock.** DONE (2026-09-01) — see `ARCHITECTURE.md`. Two
+  processes: the native AEGP plug-in (input + catalogue + AE access, on AE's UI
+  thread) and a Tauri overlay/settings app (Rust + webview), over a local socket
+  / named pipe. All the assumptions it rested on passed in Phase 0.
 - **The 300ms replay window (macOS).** A genuine right-press within 300ms of a
   replayed short click passes through un-gestured. Fine for a spike; decide
   deliberately before ship, since fast repeated right-clicks are real.
