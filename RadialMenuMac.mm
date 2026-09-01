@@ -27,8 +27,17 @@
 	  S4      the real spike: NSEvent addLocalMonitorForEventsMatchingMask.
 	          "Local" is the payoff - a local monitor only sees events for our
 	          own application, and we ARE inside AE's application. No
-	          Accessibility permission prompt, no CGEventTap, no notarisation
-	          scrutiny over input capture.
+	          CGEventTap, no notarisation scrutiny over input capture.
+
+	          MEASURED, and true only once the replay stopped synthesising
+	          events. Observing and swallowing always cost nothing. But the
+	          original CGEventPost replay DID raise macOS's Accessibility
+	          prompt - synthesising input at the HID layer is gated on
+	          AXIsProcessTrusted, and that prompt lands on After Effects, not
+	          on the plug-in. Handing AE back the ORIGINAL NSEvent instead
+	          removed the requirement entirely: verified with Accessibility
+	          revoked - no prompt, menu still opening under the cursor.
+	          See ReplaySwallowedClick.
 
 	  S3-Mac  the overlay: a borderless transparent NSWindow above AE, and
 	          whether taking focus costs the layer selection.
@@ -65,7 +74,9 @@
 	THE STRATEGY PORTS EVEN WHERE THE CODE DOES NOT:
 	  swallow the DOWN; if the press outlives the threshold it is our gesture;
 	  if it is released early, replay it so AE's menu still appears.
-	Windows needed SendInput for the replay. Here it is CGEventPost.
+	Windows needed SendInput for the replay. Here the original NSEvent is
+	simply handed back to AE with -[NSApplication postEvent:atStart:], which
+	needs no permission and no coordinate translation.
 */
 
 #import <Cocoa/Cocoa.h>
@@ -196,29 +207,49 @@ Report(const char *fmtZ, ...)
 	suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, msg);
 }
 
-//	The same measurement the Windows spike used for the focus question.
+//	The same measurement the Windows spike used for the focus question: the
+//	number of SELECTED LAYERS IN THE ACTIVE COMP.
+//
+//	This was originally written as a walk over project items with a NULL
+//	AEGP_ProjectH. That is not a valid handle - the only other call site in the
+//	whole SDK passes one from AEGP_GetProjectByIndex - so the very first call
+//	set err, the loop never ran, and it returned 0 every time. The first Mac run
+//	duly reported "0 before, 0 after" with a comp full of selected layers, and
+//	"SELECTION SURVIVED" was true for the wrong reason.
+//
+//	Ported from the Windows spike verbatim so the two platforms are comparing
+//	the same number.
 static A_u_long
 CountSelection(AEGP_SuiteHandler &suites)
 {
-	A_Err		err		= A_Err_NONE;
-	AEGP_ItemH	itemH	= NULL;
-	A_u_long	count	= 0;
+	A_Err				err				= A_Err_NONE;
+	AEGP_ItemH			active_itemH	= NULL;
+	AEGP_ItemType		item_type		= AEGP_ItemType_NONE;
+	AEGP_CompH			compH			= NULL;
+	AEGP_Collection2H	collectionH		= NULL;
+	A_u_long			count			= 0;
 
-	ERR(suites.ItemSuite6()->AEGP_GetFirstProjItem(NULL, &itemH));
+	ERR(suites.ItemSuite6()->AEGP_GetActiveItem(&active_itemH));
 
-	while (!err && itemH) {
-		A_Boolean	selectedB	= FALSE;
-		AEGP_ItemH	nextH		= NULL;
-
-		ERR(suites.ItemSuite6()->AEGP_IsItemSelected(itemH, &selectedB));
-		if (!err && selectedB) {
-			count++;
-		}
-
-		ERR(suites.ItemSuite6()->AEGP_GetNextProjItem(NULL, itemH, &nextH));
-		itemH = nextH;
+	if (err || !active_itemH) {
+		return 0;
 	}
-	return count;
+
+	ERR(suites.ItemSuite6()->AEGP_GetItemType(active_itemH, &item_type));
+
+	if (err || AEGP_ItemType_COMP != item_type) {
+		return 0;
+	}
+
+	ERR(suites.CompSuite11()->AEGP_GetCompFromItem(active_itemH, &compH));
+	ERR(suites.CompSuite11()->AEGP_GetNewCollectionFromCompSelection(S_my_id, compH, &collectionH));
+
+	if (!err && collectionH) {
+		ERR(suites.CollectionSuite2()->AEGP_GetCollectionNumItems(collectionH, &count));
+		suites.CollectionSuite2()->AEGP_DisposeCollection(collectionH);
+	}
+
+	return err ? 0 : count;
 }
 
 
@@ -236,11 +267,33 @@ static int		S_hold_count		= 0;
 static int		S_click_count		= 0;
 static int		S_replay_count		= 0;
 
-//	Counts events WE injected, so the monitor does not mistake its own replay
-//	for a new gesture. A counter rather than a flag, for the same reason as on
-//	Windows: injected events arrive asynchronously, after any flag would already
-//	have been cleared.
-static int		S_replay_pending	= 0;
+//	Ignore events WE injected, so the monitor does not mistake its own replay
+//	for a new gesture.
+//
+//	This was a count of 2 (the DOWN and the UP we post). The first Mac run
+//	proved that wrong: once AE opens a context menu, NSMenu's tracking loop
+//	consumes the mouse-UP before any local monitor sees it - 23 presses in the
+//	log produced 23 DOWNs and exactly 1 UP. So the replayed UP usually never
+//	comes back, the count sticks at 1, and the NEXT real press gets silently
+//	eaten as if it were ours. A deadline cannot desync that way.
+static double	S_replay_until		= 0.0;
+
+#define RM_REPLAY_WINDOW_MS	300
+
+//	The ORIGINAL down-click, retained from the moment we swallow it. postEvent
+//	replays this exact object rather than a synthetic stand-in, which is the
+//	whole point: it still carries its true window, view and location.
+//	(No ARC in this target, so this is a real retain/release pair.)
+static NSEvent	*S_swallowed_down	= nil;
+
+static void
+ForgetSwallowedDown(void)
+{
+	if (S_swallowed_down) {
+		[S_swallowed_down release];
+		S_swallowed_down = nil;
+	}
+}
 
 //	Generation counter, so a stale dispatch_after from an earlier press cannot
 //	fire a hold for a press that has already ended. Windows killed its timer;
@@ -267,40 +320,40 @@ OnHoldDetected(const char *sourceZ)
 
 //	Put back a right-click we swallowed but did not want.
 //
-//	kCGHIDEventTap posts at the lowest level, so the event travels the same path
-//	a real click would - which is what we want, since (as on Windows) we are in
-//	no position to address the event to a particular view.
+//	Hand AE back the ORIGINAL NSEvent, in-process. Nothing is synthesised, so
+//	there is nothing for macOS's Accessibility gate to catch, and the event
+//	still carries its own true window, view and location - which is why the menu
+//	lands under the cursor with no coordinate maths on our side.
+//
+//	This replaced a CGEventPost replay that worked but demanded Accessibility.
+//	That permission is granted to After Effects, not to the plug-in, so it would
+//	have put a system prompt in front of every user and been unavailable outright
+//	on a managed Mac. Measured with the permission revoked: no prompt, and the
+//	menu still opened correctly. The synthesised path, its primary-screen
+//	NSPoint->CGPoint flip, and the multi-monitor failure mode that flip carried
+//	all went with it.
+//
+//	Order is the one thing to get right. postEvent APPENDS to the queue, while a
+//	value returned from the monitor is dispatched in the CURRENT cycle - so the
+//	UP has to be posted after the DOWN rather than returned, or AE would see the
+//	release before the press.
 static void
-ReplayRightClick(NSPoint screenPt)
+ReplaySwallowedClick(NSEvent *upE)
 {
-	//	CGEvent uses a TOP-LEFT origin; NSEvent mouseLocation is BOTTOM-LEFT,
-	//	and the flip is against the primary screen, not the one under the
-	//	cursor. Worth checking on a multi-monitor setup with a screen above or
-	//	below the primary - a replayed click landing in the wrong place would
-	//	show up as "the menu opened somewhere else".
-	CGFloat	screenH	= NSMaxY([[[NSScreen screens] objectAtIndex:0] frame]);
-	CGPoint	cgPt	= CGPointMake(screenPt.x, screenH - screenPt.y);
-
-	CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDown, cgPt, kCGMouseButtonRight);
-	CGEventRef up   = CGEventCreateMouseEvent(NULL, kCGEventRightMouseUp,   cgPt, kCGMouseButtonRight);
-
-	if (!down || !up) {
-		if (down) { CFRelease(down); }
-		if (up)   { CFRelease(up); }
-		Log("  !! REPLAY FAILED: could not create CGEvents\n");
+	if (!S_swallowed_down) {
+		Log("  !! REPLAY SKIPPED: no swallowed DOWN was retained\n");
 		return;
 	}
 
-	S_replay_pending = 2;
+	S_replay_until = NowMs() + RM_REPLAY_WINDOW_MS;
 
-	CGEventPost(kCGHIDEventTap, down);
-	CGEventPost(kCGHIDEventTap, up);
-
-	CFRelease(down);
-	CFRelease(up);
+	[NSApp postEvent:S_swallowed_down atStart:NO];
+	if (upE) {
+		[NSApp postEvent:upE atStart:NO];
+	}
 
 	S_replay_count++;
-	Log("  << replayed the click (#%d) - AE's menu should appear now\n", S_replay_count);
+	Log("  << re-posted the ORIGINAL DOWN+UP via NSApp postEvent (#%d)\n", S_replay_count);
 }
 
 static void
@@ -320,10 +373,9 @@ InstallMonitor(void)
 			return e;
 		}
 
-		//	Our own injected click coming back around.
-		if (S_replay_pending > 0 &&
-			(e.type == NSEventTypeRightMouseDown || e.type == NSEventTypeRightMouseUp)) {
-			S_replay_pending--;
+		//	Our own injected click coming back around - pass it straight through
+		//	to AE untouched, and do not treat it as the start of a gesture.
+		if (NowMs() < S_replay_until) {
 			return e;
 		}
 
@@ -356,7 +408,9 @@ InstallMonitor(void)
 				});
 
 				if (S_swallow_on) {
-					Log("  >> swallowed the DOWN\n");
+					ForgetSwallowedDown();
+					S_swallowed_down = [e retain];
+					Log("  >> swallowed the DOWN (held for replay)\n");
 					return nil;			// consume
 				}
 			} break;
@@ -381,6 +435,7 @@ InstallMonitor(void)
 						//	Ours. AE saw neither the DOWN nor the UP, so there
 						//	is nothing to undo and no menu to suppress.
 						if (S_swallow_on) {
+							ForgetSwallowedDown();
 							Log("  >> swallowed the UP too. AE never saw this press.\n");
 							return nil;
 						}
@@ -393,7 +448,8 @@ InstallMonitor(void)
 						//	The real UP is consumed as well, because its DOWN is
 						//	already gone and an unmatched release would confuse AE.
 						if (S_swallow_on) {
-							ReplayRightClick(S_rdown_pt);
+							ReplaySwallowedClick(e);
+							ForgetSwallowedDown();
 							return nil;
 						}
 					}
@@ -424,6 +480,7 @@ WatchToggle(void)
 		S_watch_on		= NO;
 		S_swallow_on	= NO;
 		RemoveMonitor();
+		ForgetSwallowedDown();
 
 		Log("\n=== watch OFF: %d hold(s), %d short click(s), %d replayed ===\n",
 			S_hold_count, S_click_count, S_replay_count);
@@ -445,7 +502,7 @@ WatchToggle(void)
 	S_hold_count		= 0;
 	S_click_count		= 0;
 	S_replay_count		= 0;
-	S_replay_pending	= 0;
+	S_replay_until		= 0.0;
 	S_rdown				= NO;
 	S_watch_on			= YES;
 
@@ -474,10 +531,7 @@ WatchToggle(void)
 	*/
 
 	Report("S4 watch ON (threshold %dms).\n\n"
-			"FIRST, with swallow still OFF: right-click normally and note WHEN the menu\n"
-			"appears - on press, or on release? That answers the question the whole\n"
-			"strategy depends on, and it must be judged by eye, not from the log.\n\n"
-			"Then press and hold still - you should hear a beep at %dms.\n\n"
+			"Press and hold still - you should hear a beep at %dms.\n\n"
 			"Log: %s",
 			RM_HOLD_MS, RM_HOLD_MS, S_log_path);
 }
@@ -496,7 +550,7 @@ SwallowToggle(void)
 	if (S_swallow_on) {
 		Report("S4 swallow ARMED.\n\n"
 				"Every right-button DOWN is now consumed. A press past %dms is ours; a\n"
-				"shorter one is replayed with CGEventPost so AE's menu still opens.\n\n"
+				"shorter one is re-posted so AE's menu still opens.\n\n"
 				"By eye:\n"
 				"(1) a hold shows NO menu.\n"
 				"(2) a short right-click still shows the SAME menu, in the right place.\n"
@@ -504,6 +558,7 @@ SwallowToggle(void)
 				"(4) AE still feels normal afterwards - drags, selection, panels.",
 				RM_HOLD_MS);
 	} else {
+		ForgetSwallowedDown();
 		Report("S4 swallow disarmed.");
 	}
 }
@@ -653,7 +708,7 @@ DumpEffectCatalogue(AEGP_SuiteHandler &suites)
 	}
 
 	fprintf(fp, "Radial Menu (Mac) - S5 installed effects catalogue\n");
-	fprintf(fp, "AEGP_GetNumInstalledEffects reports: %ld\n\n", claimed);
+	fprintf(fp, "AEGP_GetNumInstalledEffects reports: %ld\n\n", (long)claimed);
 	fprintf(fp, "%-5s  %-28s  %-44s  %s\n", "#", "CATEGORY", "DISPLAY NAME", "MATCH NAME");
 
 	AEGP_InstalledEffectKey	key		= AEGP_InstalledEffectKey_NONE;
@@ -675,17 +730,17 @@ DumpEffectCatalogue(AEGP_SuiteHandler &suites)
 		ERR(suites.EffectSuite4()->AEGP_GetEffectCategory(key, cat));
 
 		walked++;
-		fprintf(fp, "%-5ld  %-28s  %-44s  %s\n", walked, cat, name, match);
+		fprintf(fp, "%-5ld  %-28s  %-44s  %s\n", (long)walked, cat, name, match);
 	}
 
-	fprintf(fp, "\nWalked %ld entries; AE claimed %ld. %s\n", walked, claimed,
+	fprintf(fp, "\nWalked %ld entries; AE claimed %ld. %s\n", (long)walked, (long)claimed,
 			(walked == claimed) ? "MATCH." : "*** MISMATCH - enumeration incomplete. ***");
 	fclose(fp);
 
 	//	Windows saw 519/519. A different TOTAL here is expected - a different
 	//	machine has different plug-ins installed - but walked != claimed is not.
 	Report("S5-Mac: walked %ld effects; AE claims %ld. %s\n\n%s",
-			walked, claimed,
+			(long)walked, (long)claimed,
 			(walked == claimed) ? "Counts match." : "COUNTS DISAGREE.",
 			S_log_path);
 }
@@ -722,6 +777,7 @@ DeathHook(AEGP_GlobalRefcon plugin_refconP, AEGP_DeathRefcon refconP)
 	//	Leaving a monitor installed as the bundle unloads is how you take the
 	//	host down with you.
 	RemoveMonitor();
+	ForgetSwallowedDown();
 	S_watch_on = NO;
 	return A_Err_NONE;
 }
