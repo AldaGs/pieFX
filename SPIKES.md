@@ -649,3 +649,68 @@ needs re-checking on Mac before it is leaned on:**
 
 **The strategy ports even where the code does not.** Swallow the DOWN, replay a
 short click, decide at release - that shape is the same on both platforms.
+
+---
+
+# macOS results (see MAC_RESULTS.md for the full account)
+
+**S4 PASSES - detection and swallow.** 23/23 holds at 202-211ms, every one via
+`dispatch_after`, so Cocoa's run loop does NOT starve the way AE's Windows modal
+loop does and the `CFRunLoopTimer` contingency was never needed.
+
+**The roadmap's gate table is now pass/pass: the full product, hold gesture on
+both platforms.**
+
+Three findings from the Mac bench that change what we thought:
+
+**1. A local monitor does NOT see the whole press.** Watch-only mode logged 23
+DOWNs and 1 UP. Once AE opens a context menu, NSMenu's tracking loop eats mouse
+events before any local monitor sees them. Two consequences: it independently
+confirms AE raises the menu on mouse-DOWN, since only an already-tracking menu
+could eat the UP; and **swallow is not optional on macOS** - watching without
+swallowing can never observe the end of a press.
+
+**2. The permission premise was half wrong, and the half that was wrong was
+load-bearing.** `RadialMenuMac.mm` justified the local monitor partly on "no
+Accessibility prompt". Watching and swallowing are indeed free. But the
+`CGEventPost` *replay* tripped `AXIsProcessTrusted` - and that prompt names
+**After Effects**, not the plug-in, because a plug-in cannot hold its own TCC
+entitlement. Shipping it would have meant every user granting Accessibility to
+AE before a short right-click behaved normally, and users on managed Macs being
+unable to at all.
+
+Fixed by not synthesising anything: retain the original `NSEvent` when it is
+swallowed and hand it back with `[NSApp postEvent:atStart:NO]`. Verified with
+the permission **revoked** and `AXIsProcessTrusted()` reported in the log - no
+prompt, and the menu still opened under the cursor. That last part is the half
+no log can see; a silent discard would have produced an identical log.
+
+This is a better answer than the Windows one, and worth back-porting in spirit:
+a re-posted event carries its own true window, view and location, so the
+coordinate maths - and the multi-monitor failure mode it carried - simply
+disappear.
+
+**3. `CountSelection` on Mac was measuring nothing** (`AEGP_GetFirstProjItem`
+with a NULL project handle errors immediately) and returned 0 unconditionally,
+so S3's first run reported "0 before, 0 after" and passed for the wrong reason.
+A measurement that cannot fail is not a measurement - the same lesson S2C taught
+on Windows, in a different disguise.
+
+## Two things to carry into the POC
+
+**The 300ms replay window is a real, if small, behavioural limit.** It replaced a
+counter-based guard that would have desynced given finding 1. But it means a
+genuine right-press starting within 300ms of a replayed short click is passed
+through un-gestured. Fine for a spike; worth a deliberate decision before the
+gesture ships, since fast repeated right-clicks are a real thing people do.
+
+**The S5 encoding note needs a correction.** MAC_RESULTS suggests moving to "the
+Unicode accessors" - **there are none.** `AEGP_GetEffectName` /
+`AEGP_GetEffectCategory` have no Unicode variant, not even in `AEGP_EffectSuite5`
+(only `AEGP_ReportInfoUnicode` exists, for dialogs). The fix is to *decode* the
+legacy single-byte text with the system encoding, not to switch API.
+
+Related lead spotted while checking: `AEGP_EffectSuite5` has
+**`AEGP_GetIsInternalEffect`**, which may be the principled way to filter the 107
+uncategorised pseudo-effects the Windows S5 dump found, rather than keying on an
+empty category string.
