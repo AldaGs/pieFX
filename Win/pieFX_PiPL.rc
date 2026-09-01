@@ -1,6 +1,6 @@
 //Microsoft Developer Studio generated resource script.
 //
-#include "RadialMenu_PiPL_temp.rc"
+#include "pieFX_PiPL_temp.rc"
 #include "resource.h"
 #include "winres.h"
 /////////////////////////////////////////////////////////////////////////////
@@ -64,14 +64,14 @@ BEGIN
         BEGIN
             VALUE "Comments", "Radial menu spike S1.\0"
             VALUE "CompanyName", "Adobe Inc.\0"
-            VALUE "FileDescription", "RadialMenu\0"
+            VALUE "FileDescription", "pieFX\0"
             VALUE "FileVersion", "1, 0, 0, 1\0"
-            VALUE "InternalName", "RadialMenu\0"
+            VALUE "InternalName", "pieFX\0"
             VALUE "LegalCopyright", "Copyright © 2001\0"
             VALUE "LegalTrademarks", "\0"
-            VALUE "OriginalFilename", "RadialMenu.aex\0"
+            VALUE "OriginalFilename", "pieFX.aex\0"
             VALUE "PrivateBuild", "\0"
-            VALUE "ProductName", "Adobe Inc. RadialMenu\0"
+            VALUE "ProductName", "pieFX\0"
             VALUE "ProductVersion", "1, 0, 0, 1\0"
             VALUE "SpecialBuild", "\0"
         END

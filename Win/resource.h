@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
 // Microsoft Developer Studio generated include file.
-// Used by RadialMenu_PiPL.rc
+// Used by pieFX_PiPL.rc
 //
 
 // Next default values for new objects

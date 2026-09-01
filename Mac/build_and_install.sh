@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-#	Build RadialMenuMac and install it into After Effects.
+#	Build pieFXMac and install it into After Effects.
 #
 #	Mac time is the scarce resource, so this is one command per test cycle:
 #	build, check the export symbol, check the PiPL, install, done.
@@ -16,9 +16,9 @@ AE_VERSION="${1:-2026}"
 AE_PLUGINS="/Applications/Adobe After Effects ${AE_VERSION}/Plug-ins"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJ="${HERE}/RadialMenuMac.xcodeproj"
-BUILT="${HERE}/build/Debug/RadialMenuMac.plugin"
-BINARY="${BUILT}/Contents/MacOS/RadialMenuMac"
+PROJ="${HERE}/pieFXMac.xcodeproj"
+BUILT="${HERE}/build/Debug/pieFXMac.plugin"
+BINARY="${BUILT}/Contents/MacOS/pieFXMac"
 
 if pgrep -qf "Adobe After Effects"; then
 	echo "!! After Effects is running. Quit it first - AE only reads Plug-ins at launch,"
@@ -27,9 +27,9 @@ if pgrep -qf "Adobe After Effects"; then
 fi
 
 echo "==> building"
-xcodebuild -project "${PROJ}" -target RadialMenuMac -configuration Debug \
-	SYMROOT="${HERE}/build" build > /tmp/RadialMenuMac_build.log 2>&1 \
-	|| { echo "!! build FAILED. Log: /tmp/RadialMenuMac_build.log"; tail -40 /tmp/RadialMenuMac_build.log; exit 1; }
+xcodebuild -project "${PROJ}" -target pieFXMac -configuration Debug \
+	SYMROOT="${HERE}/build" build > /tmp/pieFXMac_build.log 2>&1 \
+	|| { echo "!! build FAILED. Log: /tmp/pieFXMac_build.log"; tail -40 /tmp/pieFXMac_build.log; exit 1; }
 
 #	A five-parameter drift in the entry point is a legal C++ overload: it links
 #	clean and exports mangled, and AE then says "Couldn't find main entry point".
@@ -44,7 +44,7 @@ echo "    _EntryPointFunc OK"
 
 #	An empty or missing PiPL means AE ignores the bundle without saying why.
 echo "==> checking the PiPL"
-RSRC="${BUILT}/Contents/Resources/RadialMenuMac.rsrc"
+RSRC="${BUILT}/Contents/Resources/pieFXMac.rsrc"
 [ -s "${RSRC}" ] || { echo "!! ${RSRC} is missing or empty - Rez did not run."; exit 1; }
 for tag in 8BIMkind 8BIMmi64 8BIMma64; do
 	strings "${RSRC}" | grep -q "${tag}" || { echo "!! PiPL is missing ${tag}"; exit 1; }
@@ -56,15 +56,15 @@ echo "==> arch: $(lipo -info "${BINARY}" | sed 's/.*are: //')"
 [ -d "${AE_PLUGINS}" ] || { echo "!! No such folder: ${AE_PLUGINS}"; exit 1; }
 
 echo "==> installing to ${AE_PLUGINS} (sudo)"
-sudo rm -rf "${AE_PLUGINS}/RadialMenuMac.plugin"
-sudo cp -R "${BUILT}" "${AE_PLUGINS}/RadialMenuMac.plugin"
+sudo rm -rf "${AE_PLUGINS}/pieFXMac.plugin"
+sudo cp -R "${BUILT}" "${AE_PLUGINS}/pieFXMac.plugin"
 
 echo
 echo "Installed. Launch After Effects and look for these under the Window menu:"
-echo "    Radial Menu (Mac) S1: Anchor to Center"
-echo "    Radial Menu (Mac) S5: Dump Effects Catalogue"
-echo "    Radial Menu (Mac) S4: Watch Right-Hold"
-echo "    Radial Menu (Mac) S4: Swallow Hold OFF/ON"
-echo "    Radial Menu (Mac) S3: Overlay Test"
+echo "    pieFX (Mac) S1: Anchor to Center"
+echo "    pieFX (Mac) S5: Dump Effects Catalogue"
+echo "    pieFX (Mac) S4: Watch Right-Hold"
+echo "    pieFX (Mac) S4: Swallow Hold OFF/ON"
+echo "    pieFX (Mac) S3: Overlay Test"
 echo
 echo "Run them in the order MAC_SESSION.md gives: S1, then S5, then S4, then S3."

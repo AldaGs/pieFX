@@ -1,5 +1,5 @@
 /*
-	RadialMenu.h - Phase 0 capability spikes.
+	pieFX.h - Phase 0 capability spikes.
 
 	Throwaway spike host for Phase 0. Currently carries:
 	   S1  - AEGP loads, menu command registers, ExtendScript dispatch works.
@@ -27,19 +27,19 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-#define RM_S1_MENU_NAME		"Radial Menu S1 (Anchor to Center)"
-#define RM_S2A_MENU_NAME	"Radial Menu S2A (Probe Window Under Cursor)"
-#define RM_S2B_MENU_NAME	"Radial Menu S2B (Watch Right-Hold: OFF/ON)"
-#define RM_S2C_MENU_NAME	"Radial Menu S2C (Swallow Hold: OFF/ON)"
-#define RM_S3_MENU_NAME		"Radial Menu S3A (Overlay Test, in-process)"
-#define RM_S3B_MENU_NAME	"Radial Menu S3B (Overlay Test, separate process)"
+#define RM_S1_MENU_NAME		"pieFX S1 (Anchor to Center)"
+#define RM_S2A_MENU_NAME	"pieFX S2A (Probe Window Under Cursor)"
+#define RM_S2B_MENU_NAME	"pieFX S2B (Watch Right-Hold: OFF/ON)"
+#define RM_S2C_MENU_NAME	"pieFX S2C (Swallow Hold: OFF/ON)"
+#define RM_S3_MENU_NAME		"pieFX S3A (Overlay Test, in-process)"
+#define RM_S3B_MENU_NAME	"pieFX S3B (Overlay Test, separate process)"
 
 //	Name of the throwaway .exe that draws the out-of-process ring. It is
 //	expected to sit next to the .aex.
-#define RM_S3B_EXE_NAME		"RadialMenu_S3B.exe"
+#define RM_S3B_EXE_NAME		"pieFX_S3B.exe"
 
-#define RM_S5A_MENU_NAME	"Radial Menu S5A (Dump Effects Catalogue)"
-#define RM_S5B_MENU_NAME	"Radial Menu S5B (Apply Gaussian Blur by Match Name)"
+#define RM_S5A_MENU_NAME	"pieFX S5A (Dump Effects Catalogue)"
+#define RM_S5B_MENU_NAME	"pieFX S5B (Apply Gaussian Blur by Match Name)"
 
 //	A stock effect present in every AE install, used to prove apply-by-match-name.
 #define RM_S5B_MATCH_NAME	"ADBE Gaussian Blur 2"

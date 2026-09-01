@@ -1,4 +1,4 @@
-# Radial Menu — macOS session checklist
+# pieFX — macOS session checklist
 
 Everything here was written on Windows and **has never been compiled or run**.
 Treat it as a starting point that is probably wrong in small ways, not as
@@ -13,11 +13,11 @@ testing, not remembering.
 
 | File | What it is |
 |---|---|
-| `RadialMenuMac.mm` | The whole Mac spike: S1, S3-Mac, S4, S5-Mac. Self-contained. |
-| `RadialMenuMac_PiPL.r` | PiPL declaring `CodeMacIntel64` / `CodeMacARM64`. |
-| `Mac/RadialMenuMac.plugin-Info.plist` | Bundle plist. `AEgx` package type, `FXTC` signature. |
+| `pieFXMac.mm` | The whole Mac spike: S1, S3-Mac, S4, S5-Mac. Self-contained. |
+| `pieFXMac_PiPL.r` | PiPL declaring `CodeMacIntel64` / `CodeMacARM64`. |
+| `Mac/pieFXMac.plugin-Info.plist` | Bundle plist. `AEgx` package type, `FXTC` signature. |
 
-It is a **separate plug-in** from the Windows `RadialMenu.aex`, with its own
+It is a **separate plug-in** from the Windows `pieFX.aex`, with its own
 menu names, so both can be installed without colliding. That is deliberate: the
 Windows spike is verified and working, and refactoring it into a shared core
 plus two platform layers would risk that for no gain while the Mac side is still
@@ -29,11 +29,11 @@ if ever.
 **The Xcode project.** Hand-writing a `project.pbxproj` blind is not worth it.
 Build it from the sample instead:
 
-1. Copy `Examples/AEGP/Persisto/Mac/Persisto.xcodeproj` next to `RadialMenuMac.mm`.
-2. Rename the project and the target to `RadialMenuMac`.
-3. Remove Persisto's sources; add `RadialMenuMac.mm`, plus
+1. Copy `Examples/AEGP/Persisto/Mac/Persisto.xcodeproj` next to `pieFXMac.mm`.
+2. Rename the project and the target to `pieFXMac`.
+3. Remove Persisto's sources; add `pieFXMac.mm`, plus
    `Examples/Util/AEGP_SuiteHandler.cpp` and `Examples/Util/MissingSuiteError.cpp`.
-4. Point Info.plist at `Mac/RadialMenuMac.plugin-Info.plist`.
+4. Point Info.plist at `Mac/pieFXMac.plugin-Info.plist`.
 5. Header search paths — same set the Windows project uses:
    `Examples/Headers`, `Headers/SP`, `Headers/Mac`, `Resources`, `Util`.
 6. Link `Cocoa.framework` and `CoreGraphics.framework`. **The Windows project
@@ -53,12 +53,12 @@ failure has too many possible causes.
 
 ### 1. S1-Mac — does anything load at all?
 
-Build, install, launch AE, and look for **Window → Radial Menu (Mac) S1**.
+Build, install, launch AE, and look for **Window → pieFX (Mac) S1**.
 
 Before blaming the code, check the export:
 
 ```
-nm -gU RadialMenuMac.plugin/Contents/MacOS/RadialMenuMac | grep EntryPoint
+nm -gU pieFXMac.plugin/Contents/MacOS/pieFXMac | grep EntryPoint
 ```
 
 It must show a bare `_EntryPointFunc`. A mangled `__Z...` symbol means the

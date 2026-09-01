@@ -1,5 +1,5 @@
 /*
-	RadialMenu.cpp - Phase 0 capability spikes.
+	pieFX.cpp - Phase 0 capability spikes.
 
 	S1  "AEGP hello world" - PASSED. One menu command that runs ExtendScript to
 	    snap the selected layers' anchor points to their source-rect centre.
@@ -17,7 +17,7 @@
 	needs a real id.
 */
 
-#include "RadialMenu.h"
+#include "pieFX.h"
 
 static AEGP_Command		S_anchor_cmd	= 0L;
 static AEGP_Command		S_probe_cmd		= 0L;
@@ -202,7 +202,7 @@ ProbeBegin(AEGP_SuiteHandler &suites)
 		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, "S2A: could not resolve a temp path.");
 		return;
 	}
-	strcat_s(S_probe_path, MAX_PATH, "RadialMenu_S2_probe.txt");
+	strcat_s(S_probe_path, MAX_PATH, "pieFX_S2_probe.txt");
 
 	S_seen_count		= 0;
 	S_probe_end_tick	= GetTickCount() + (RM_PROBE_SECONDS * 1000);
@@ -608,7 +608,7 @@ WatchToggle(AEGP_SuiteHandler &suites)
 		S_gesture_path[0] = 0;
 		return;
 	}
-	strcat_s(S_gesture_path, MAX_PATH, "RadialMenu_S2_gesture.txt");
+	strcat_s(S_gesture_path, MAX_PATH, "pieFX_S2_gesture.txt");
 
 	//	Thread-local: last argument is OUR thread, so this never leaves AE. The
 	//	module handle must be NULL for a thread-local hook.
@@ -844,7 +844,7 @@ CreateOverlayNow(void)
 		wc.lpfnWndProc		= OverlayWndProc;
 		wc.hInstance		= inst;
 		wc.hCursor			= LoadCursor(NULL, IDC_ARROW);
-		wc.lpszClassName	= "RadialMenuOverlay";
+		wc.lpszClassName	= "pieFXOverlay";
 
 		if (!RegisterClassEx(&wc)) {
 			char m[128];
@@ -868,7 +868,7 @@ CreateOverlayNow(void)
 	//	is to let it take focus and see whether selection survives.
 	S_overlay_hwnd = CreateWindowEx(
 		WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-		"RadialMenuOverlay", "", WS_POPUP,
+		"pieFXOverlay", "", WS_POPUP,
 		x, y, size, size,
 		NULL, NULL, inst, NULL);
 
@@ -983,7 +983,7 @@ RunOverlayOutOfProcess(void)
 
 	if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES) {
 		sprintf_s(msg, sizeof(msg),
-			"S3B: helper not found.\n\nCopy RadialMenu_S3B.exe to sit beside the .aex:\n%s", exe);
+			"S3B: helper not found.\n\nCopy pieFX_S3B.exe to sit beside the .aex:\n%s", exe);
 		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, msg);
 		return;
 	}
@@ -1177,7 +1177,7 @@ DumpEffectCatalogue(AEGP_SuiteHandler &suites)
 		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, "S5A: could not resolve a temp path.");
 		return;
 	}
-	strcat_s(path, MAX_PATH, "RadialMenu_S5_effects.txt");
+	strcat_s(path, MAX_PATH, "pieFX_S5_effects.txt");
 
 	ERR(suites.EffectSuite4()->AEGP_GetNumInstalledEffects(&claimed));
 

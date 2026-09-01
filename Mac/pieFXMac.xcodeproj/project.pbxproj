@@ -9,22 +9,22 @@
 /* Begin PBXBuildFile section */
 		DEADBEEF00000000000000E1 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DEADBEEF0000000000000011 /* Cocoa.framework */; };
 		DEADBEEF00000000000000E2 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DEADBEEF0000000000000012 /* CoreGraphics.framework */; };
-		DEADBEEF00000000000000E3 /* RadialMenuMac.mm in Sources */ = {isa = PBXBuildFile; fileRef = DEADBEEF0000000000000013 /* RadialMenuMac.mm */; };
+		DEADBEEF00000000000000E3 /* pieFXMac.mm in Sources */ = {isa = PBXBuildFile; fileRef = DEADBEEF0000000000000013 /* pieFXMac.mm */; };
 		DEADBEEF00000000000000E4 /* AEGP_SuiteHandler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEADBEEF0000000000000014 /* AEGP_SuiteHandler.cpp */; };
 		DEADBEEF00000000000000E5 /* MissingSuiteError.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEADBEEF0000000000000016 /* MissingSuiteError.cpp */; };
-		DEADBEEF00000000000000E6 /* RadialMenuMac_PiPL.r in Resources */ = {isa = PBXBuildFile; fileRef = DEADBEEF0000000000000017 /* RadialMenuMac_PiPL.r */; };
+		DEADBEEF00000000000000E6 /* pieFXMac_PiPL.r in Resources */ = {isa = PBXBuildFile; fileRef = DEADBEEF0000000000000017 /* pieFXMac_PiPL.r */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		DEADBEEF0000000000000011 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
 		DEADBEEF0000000000000012 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
-		DEADBEEF0000000000000013 /* RadialMenuMac.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = RadialMenuMac.mm; path = ../RadialMenuMac.mm; sourceTree = SOURCE_ROOT; };
+		DEADBEEF0000000000000013 /* pieFXMac.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = pieFXMac.mm; path = ../pieFXMac.mm; sourceTree = SOURCE_ROOT; };
 		DEADBEEF0000000000000014 /* AEGP_SuiteHandler.cpp */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.cpp.cpp; name = AEGP_SuiteHandler.cpp; path = ../../../Util/AEGP_SuiteHandler.cpp; sourceTree = SOURCE_ROOT; };
 		DEADBEEF0000000000000015 /* AEGP_SuiteHandler.h */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.c.h; name = AEGP_SuiteHandler.h; path = ../../../Util/AEGP_SuiteHandler.h; sourceTree = SOURCE_ROOT; };
 		DEADBEEF0000000000000016 /* MissingSuiteError.cpp */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.cpp.cpp; name = MissingSuiteError.cpp; path = ../../../Util/MissingSuiteError.cpp; sourceTree = SOURCE_ROOT; };
-		DEADBEEF0000000000000017 /* RadialMenuMac_PiPL.r */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.rez; name = RadialMenuMac_PiPL.r; path = ../RadialMenuMac_PiPL.r; sourceTree = SOURCE_ROOT; };
-		DEADBEEF0000000000000018 /* RadialMenuMac.plugin-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = "RadialMenuMac.plugin-Info.plist"; sourceTree = SOURCE_ROOT; };
-		DEADBEEF0000000000000019 /* RadialMenuMac.plugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RadialMenuMac.plugin; sourceTree = BUILT_PRODUCTS_DIR; };
+		DEADBEEF0000000000000017 /* pieFXMac_PiPL.r */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.rez; name = pieFXMac_PiPL.r; path = ../pieFXMac_PiPL.r; sourceTree = SOURCE_ROOT; };
+		DEADBEEF0000000000000018 /* pieFXMac.plugin-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = "pieFXMac.plugin-Info.plist"; sourceTree = SOURCE_ROOT; };
+		DEADBEEF0000000000000019 /* pieFXMac.plugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = pieFXMac.plugin; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -43,9 +43,9 @@
 		DEADBEEF0000000000000031 = {
 			isa = PBXGroup;
 			children = (
-				DEADBEEF0000000000000013 /* RadialMenuMac.mm */,
-				DEADBEEF0000000000000017 /* RadialMenuMac_PiPL.r */,
-				DEADBEEF0000000000000018 /* RadialMenuMac.plugin-Info.plist */,
+				DEADBEEF0000000000000013 /* pieFXMac.mm */,
+				DEADBEEF0000000000000017 /* pieFXMac_PiPL.r */,
+				DEADBEEF0000000000000018 /* pieFXMac.plugin-Info.plist */,
 				DEADBEEF0000000000000033 /* Supporting Code */,
 				DEADBEEF0000000000000011 /* Cocoa.framework */,
 				DEADBEEF0000000000000012 /* CoreGraphics.framework */,
@@ -56,7 +56,7 @@
 		DEADBEEF0000000000000032 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				DEADBEEF0000000000000019 /* RadialMenuMac.plugin */,
+				DEADBEEF0000000000000019 /* pieFXMac.plugin */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -74,9 +74,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		DEADBEEF0000000000000041 /* RadialMenuMac */ = {
+		DEADBEEF0000000000000041 /* pieFXMac */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = DEADBEEF0000000000000052 /* Build configuration list for PBXNativeTarget "RadialMenuMac" */;
+			buildConfigurationList = DEADBEEF0000000000000052 /* Build configuration list for PBXNativeTarget "pieFXMac" */;
 			buildPhases = (
 				DEADBEEF0000000000000022 /* Sources */,
 				DEADBEEF0000000000000021 /* Frameworks */,
@@ -86,9 +86,9 @@
 			);
 			dependencies = (
 			);
-			name = RadialMenuMac;
-			productName = RadialMenuMac.plugin;
-			productReference = DEADBEEF0000000000000019 /* RadialMenuMac.plugin */;
+			name = pieFXMac;
+			productName = pieFXMac.plugin;
+			productReference = DEADBEEF0000000000000019 /* pieFXMac.plugin */;
 			productType = "com.apple.product-type.bundle";
 		};
 /* End PBXNativeTarget section */
@@ -100,7 +100,7 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1620;
 			};
-			buildConfigurationList = DEADBEEF0000000000000051 /* Build configuration list for PBXProject "RadialMenuMac" */;
+			buildConfigurationList = DEADBEEF0000000000000051 /* Build configuration list for PBXProject "pieFXMac" */;
 			compatibilityVersion = "Xcode 3.2";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -113,7 +113,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				DEADBEEF0000000000000041 /* RadialMenuMac */,
+				DEADBEEF0000000000000041 /* pieFXMac */,
 			);
 		};
 /* End PBXProject section */
@@ -123,7 +123,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DEADBEEF00000000000000E6 /* RadialMenuMac_PiPL.r in Resources */,
+				DEADBEEF00000000000000E6 /* pieFXMac_PiPL.r in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -136,7 +136,7 @@
 			files = (
 				DEADBEEF00000000000000E4 /* AEGP_SuiteHandler.cpp in Sources */,
 				DEADBEEF00000000000000E5 /* MissingSuiteError.cpp in Sources */,
-				DEADBEEF00000000000000E3 /* RadialMenuMac.mm in Sources */,
+				DEADBEEF00000000000000E3 /* pieFXMac.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -262,10 +262,10 @@
 				DEAD_CODE_STRIPPING = YES;
 				GCC_MODEL_TUNING = G5;
 				GENERATE_PKGINFO_FILE = YES;
-				INFOPLIST_FILE = "RadialMenuMac.plugin-Info.plist";
+				INFOPLIST_FILE = "pieFXMac.plugin-Info.plist";
 				INSTALL_PATH = "$(HOME)/Library/Bundles";
-				PRODUCT_BUNDLE_IDENTIFIER = com.aldairgonzalez.AfterEffects.RadialMenuMac;
-				PRODUCT_NAME = RadialMenuMac;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aldairgonzalez.AfterEffects.pieFXMac;
+				PRODUCT_NAME = pieFXMac;
 				SDKROOT = macosx;
 				ZERO_LINK = NO;
 			};
@@ -282,10 +282,10 @@
 				DEAD_CODE_STRIPPING = YES;
 				GCC_MODEL_TUNING = G5;
 				GENERATE_PKGINFO_FILE = YES;
-				INFOPLIST_FILE = "RadialMenuMac.plugin-Info.plist";
+				INFOPLIST_FILE = "pieFXMac.plugin-Info.plist";
 				INSTALL_PATH = "$(HOME)/Library/Bundles";
-				PRODUCT_BUNDLE_IDENTIFIER = com.aldairgonzalez.AfterEffects.RadialMenuMac;
-				PRODUCT_NAME = RadialMenuMac;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aldairgonzalez.AfterEffects.pieFXMac;
+				PRODUCT_NAME = pieFXMac;
 				SDKROOT = macosx;
 				ZERO_LINK = NO;
 			};
@@ -294,7 +294,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		DEADBEEF0000000000000051 /* Build configuration list for PBXProject "RadialMenuMac" */ = {
+		DEADBEEF0000000000000051 /* Build configuration list for PBXProject "pieFXMac" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				DEADBEEF0000000000000061 /* Debug */,
@@ -303,7 +303,7 @@
 			defaultConfigurationIsVisible = 1;
 			defaultConfigurationName = Debug;
 		};
-		DEADBEEF0000000000000052 /* Build configuration list for PBXNativeTarget "RadialMenuMac" */ = {
+		DEADBEEF0000000000000052 /* Build configuration list for PBXNativeTarget "pieFXMac" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				DEADBEEF0000000000000071 /* Debug */,

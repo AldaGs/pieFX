@@ -1,4 +1,4 @@
-# Radial Menu — macOS Phase 0 results
+# pieFX — macOS Phase 0 results
 
 Everything in `MAC_SESSION.md` was written on Windows and had never been
 compiled or run. It has now been built and run on macOS. **All four stations
@@ -20,7 +20,7 @@ Machine: Apple silicon, macOS 26.1, Xcode 26.1, After Effects 2026 (Spanish).
 
 `MAC_SESSION.md` left this unwritten, on the grounds that hand-writing a
 `project.pbxproj` blind was not worth it. It is now written, at
-`Mac/RadialMenuMac.xcodeproj`, built from the Persisto sample exactly as that
+`Mac/pieFXMac.xcodeproj`, built from the Persisto sample exactly as that
 file described. It compiled on the first attempt.
 
 `Mac/build_and_install.sh` is one command per test cycle: build, verify the
@@ -67,7 +67,7 @@ Two consequences:
 
 ### The permission premise was half wrong
 
-The top of `RadialMenuMac.mm` justified choosing a local monitor over a
+The top of `pieFXMac.mm` justified choosing a local monitor over a
 `CGEventTap` partly on the grounds of "no Accessibility permission prompt."
 macOS raised that prompt the moment swallow was first armed.
 
@@ -202,6 +202,6 @@ Quit After Effects first; the script refuses to run while it is up, because AE
 only reads `Plug-ins` at launch. Then run the stations from the Window menu in
 the order `MAC_SESSION.md` gives: S1, S5, S4, S3.
 
-Logs are written to `$TMPDIR` — `RadialMenu_S4_gesture.txt` and
-`RadialMenu_S5_effects.txt`. Note that turning the watch off and on truncates
+Logs are written to `$TMPDIR` — `pieFX_S4_gesture.txt` and
+`pieFX_S5_effects.txt`. Note that turning the watch off and on truncates
 the S4 log, so a swallow test has to happen inside a single watch session.

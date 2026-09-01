@@ -1,5 +1,5 @@
 /*
-	S3B_Overlay.cpp - throwaway .exe for Phase 0, spike S3B.
+	S3B_Overlay.cpp (pieFX) - throwaway .exe for Phase 0, spike S3B.
 
 	The same layered ring as S3A, in a SEPARATE PROCESS. That difference is the
 	entire point: the planned architecture puts the overlay in Tauri, which is
@@ -17,9 +17,9 @@
 
 	Build (from this directory, any Developer prompt):
 	    cl /nologo /EHsc /DUNICODE /D_UNICODE S3B_Overlay.cpp /link /SUBSYSTEM:WINDOWS \
-	       user32.lib gdi32.lib /OUT:RadialMenu_S3B.exe
+	       user32.lib gdi32.lib /OUT:pieFX_S3B.exe
 
-	Usage: RadialMenu_S3B.exe <centre_x> <centre_y> <size> <milliseconds>
+	Usage: pieFX_S3B.exe <centre_x> <centre_y> <size> <milliseconds>
 */
 
 #include <windows.h>
@@ -84,7 +84,7 @@ WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	wc.lpfnWndProc		= WndProc;
 	wc.hInstance		= inst;
 	wc.hCursor			= LoadCursor(NULL, IDC_ARROW);
-	wc.lpszClassName	= TEXT("RadialMenuS3BOverlay");
+	wc.lpszClassName	= TEXT("pieFXS3BOverlay");
 	RegisterClassEx(&wc);
 
 	int	x = cx - size / 2;
@@ -92,7 +92,7 @@ WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
 	HWND hwnd = CreateWindowEx(
 		WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-		TEXT("RadialMenuS3BOverlay"), TEXT(""), WS_POPUP,
+		TEXT("pieFXS3BOverlay"), TEXT(""), WS_POPUP,
 		x, y, size, size,
 		NULL, NULL, inst, NULL);
 

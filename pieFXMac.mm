@@ -1,5 +1,5 @@
 /*
-	RadialMenuMac.mm - Phase 0 spikes S1, S3-Mac, S4 and S5 for After Effects on macOS.
+	pieFXMac.mm - Phase 0 spikes S1, S3-Mac, S4 and S5 for After Effects on macOS.
 
 	=====================================================================
 	  AUTHORED ON WINDOWS. NEVER COMPILED, NEVER RUN. Assume it is wrong
@@ -8,7 +8,7 @@
 	=====================================================================
 
 	This is a SEPARATE, SELF-CONTAINED plug-in rather than a port of
-	RadialMenu.cpp. That is deliberate: the Windows spike is verified and
+	pieFX.cpp. That is deliberate: the Windows spike is verified and
 	working, and refactoring it into a shared core plus two platform layers
 	would put that at risk for no gain while the Mac side is still unknown.
 	A spike is allowed to duplicate ~80 lines of AEGP glue. Merge them later,
@@ -99,11 +99,11 @@ extern "C" DllExport AEGP_PluginInitFuncPrototype EntryPointFunc;
 #define RM_OVERLAY_ARM_MS	4000
 #define RM_OVERLAY_SIZE		320
 
-#define RM_MENU_S1		"Radial Menu (Mac) S1: Anchor to Center"
-#define RM_MENU_S4		"Radial Menu (Mac) S4: Watch Right-Hold"
-#define RM_MENU_S4SWAL	"Radial Menu (Mac) S4: Swallow Hold OFF/ON"
-#define RM_MENU_S3		"Radial Menu (Mac) S3: Overlay Test"
-#define RM_MENU_S5		"Radial Menu (Mac) S5: Dump Effects Catalogue"
+#define RM_MENU_S1		"pieFX (Mac) S1: Anchor to Center"
+#define RM_MENU_S4		"pieFX (Mac) S4: Watch Right-Hold"
+#define RM_MENU_S4SWAL	"pieFX (Mac) S4: Swallow Hold OFF/ON"
+#define RM_MENU_S3		"pieFX (Mac) S3: Overlay Test"
+#define RM_MENU_S5		"pieFX (Mac) S5: Dump Effects Catalogue"
 
 static AEGP_PluginID	S_my_id			= 0L;
 static SPBasicSuite		*sP				= NULL;
@@ -490,11 +490,11 @@ WatchToggle(void)
 		return;
 	}
 
-	LogPathInit("RadialMenu_S4_gesture.txt");
+	LogPathInit("pieFX_S4_gesture.txt");
 
 	FILE *fp = fopen(S_log_path, "w");
 	if (fp) {
-		fprintf(fp, "Radial Menu (Mac) - S4 right-hold watch\n");
+		fprintf(fp, "pieFX (Mac) - S4 right-hold watch\n");
 		fprintf(fp, "Hold threshold: %dms. Local NSEvent monitor.\n\n", RM_HOLD_MS);
 		fclose(fp);
 	}
@@ -697,7 +697,7 @@ DumpEffectCatalogue(AEGP_SuiteHandler &suites)
 	A_Err	err		= A_Err_NONE;
 	A_long	claimed	= 0;
 
-	LogPathInit("RadialMenu_S5_effects.txt");
+	LogPathInit("pieFX_S5_effects.txt");
 
 	ERR(suites.EffectSuite4()->AEGP_GetNumInstalledEffects(&claimed));
 
@@ -707,7 +707,7 @@ DumpEffectCatalogue(AEGP_SuiteHandler &suites)
 		return;
 	}
 
-	fprintf(fp, "Radial Menu (Mac) - S5 installed effects catalogue\n");
+	fprintf(fp, "pieFX (Mac) - S5 installed effects catalogue\n");
 	fprintf(fp, "AEGP_GetNumInstalledEffects reports: %ld\n\n", (long)claimed);
 	fprintf(fp, "%-5s  %-28s  %-44s  %s\n", "#", "CATEGORY", "DISPLAY NAME", "MATCH NAME");
 
@@ -853,7 +853,7 @@ CommandHook(AEGP_GlobalRefcon plugin_refconPV, AEGP_CommandRefcon refconPV,
 //	"Couldn't find main entry point". That cost one launch on Windows. Verify
 //	after building with:
 //
-//	    nm -gU RadialMenuMac.plugin/Contents/MacOS/RadialMenuMac | grep EntryPoint
+//	    nm -gU pieFXMac.plugin/Contents/MacOS/pieFXMac | grep EntryPoint
 //
 //	It must show a bare _EntryPointFunc, not a mangled __Z... symbol.
 DllExport A_Err
@@ -899,7 +899,7 @@ EntryPointFunc(
 
 	if (err) {
 		ERR2(suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id,
-				"Radial Menu (Mac) failed to register."));
+				"pieFX (Mac) failed to register."));
 	}
 	return err;
 }

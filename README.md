@@ -34,14 +34,14 @@ The three findings that shaped everything:
 
 ## Layout
 
-    RadialMenu.cpp        Windows spikes: S1, S2 (hook + swallow), S3, S5
-    RadialMenu.h
-    RadialMenu_PiPL.r
+    pieFX.cpp        Windows spikes: S1, S2 (hook + swallow), S3, S5
+    pieFX.h
+    pieFX_PiPL.r
     Win/                  Visual Studio project
     S3B_Overlay.cpp       Throwaway .exe: the S3 overlay from a separate process
 
-    RadialMenuMac.mm      macOS spikes: S1, S3, S4, S5  (NEVER COMPILED)
-    RadialMenuMac_PiPL.r
+    pieFXMac.mm      macOS spikes: S1, S3, S4, S5  (NEVER COMPILED)
+    pieFXMac_PiPL.r
     Mac/                  Info.plist  (no Xcode project yet — see MAC_SESSION.md)
 
     SPIKES.md             The spike log. The actual deliverable of Phase 0.
@@ -54,7 +54,7 @@ Needs the After Effects SDK. Drop this directory into
 include paths and expect that depth.
 
 **Windows.** Set `AE_PLUGIN_BUILD_DIR` to a writable directory, then build
-`Win/RadialMenu.sln` (`Debug|x64`). Output lands in `$(AE_PLUGIN_BUILD_DIR)\AEGP\`.
+`Win/pieFX.sln` (`Debug|x64`). Output lands in `$(AE_PLUGIN_BUILD_DIR)\AEGP\`.
 Close After Effects first — it locks the loaded `.aex`.
 
 Install to After Effects' **own** `Support Files/Plug-ins/` directory, *not* the
@@ -63,7 +63,7 @@ which has no AEGP host.
 
 A clean build proves nothing about loading. Verify the export:
 
-    dumpbin /EXPORTS RadialMenu.aex
+    dumpbin /EXPORTS pieFX.aex
 
 It must show a bare `EntryPointFunc`. A mangled name means the entry point
 signature drifted — it takes five parameters, and the `Commando` SDK sample

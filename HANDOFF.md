@@ -77,18 +77,18 @@ is mandatory, not optional: without it you never observe the end of a press.
     MAC_SESSION.md       The pre-written macOS checklist (now executed)
     MAC_RESULTS.md       What the macOS bench actually found
 
-    RadialMenu.cpp/.h    Windows spikes S1,S2,S3,S5
-    RadialMenu_PiPL.r
+    pieFX.cpp/.h    Windows spikes S1,S2,S3,S5
+    pieFX_PiPL.r
     Win/                 Visual Studio project
     S3B_Overlay.cpp      Throwaway .exe: S3 overlay from a separate process
 
-    RadialMenuMac.mm     macOS spikes S1,S3,S4,S5 (built + passing)
-    RadialMenuMac_PiPL.r
+    pieFXMac.mm     macOS spikes S1,S3,S4,S5 (built + passing)
+    pieFXMac_PiPL.r
     Mac/                 Xcode project, Info.plist, build_and_install.sh
 
 ## Building (fast reminder — full detail in README)
 
-- **Windows:** set `AE_PLUGIN_BUILD_DIR`, build `Win/RadialMenu.sln` Debug|x64,
+- **Windows:** set `AE_PLUGIN_BUILD_DIR`, build `Win/pieFX.sln` Debug|x64,
   install to AE's own `Support Files/Plug-ins/` (NOT MediaCore). Verify with
   `dumpbin /EXPORTS` that `EntryPointFunc` is un-mangled.
 - **macOS:** `./Mac/build_and_install.sh` (quit AE first; needs sudo to copy).
@@ -98,9 +98,14 @@ is mandatory, not optional: without it you never observe the end of a press.
 
 ## What Phase 0 deliberately did NOT settle — the POC's opening questions
 
-- **Naming.** The product is "pieFX" but the code still says `RadialMenu`
-  everywhere (match names, menu strings, filenames). Renaming is cheapest now,
-  before the POC hardens any of it. **Decision pending.**
+- **Naming.** DONE (2026-09-01). The whole tree was renamed `RadialMenu`→`pieFX`
+  / `RadialMenuMac`→`pieFXMac`: source, projects, PiPL Name, menu strings, log
+  leaf names, window-class strings, and the S3B helper (`pieFX_S3B.exe`). The
+  Windows build was re-verified (outputs `pieFX.aex`, un-mangled export). The
+  macOS files were renamed by text substitution and the Xcode project references
+  are internally consistent, but it has **not been rebuilt on a Mac** — do that
+  first next Mac session. No AEGP *match names* were involved (menu commands are
+  runtime handles, not persisted), so no saved project can break.
 - **Architecture lock.** The roadmap wants two processes: the AEGP plugin (C++,
   owns input + catalogue + ExtendScript) and a Tauri overlay/settings app
   (Rust + webview), talking over a local socket / named pipe. S3B proved the

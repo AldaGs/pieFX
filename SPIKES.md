@@ -1,4 +1,4 @@
-# Radial Menu — Phase 0 spike log
+# pieFX — Phase 0 spike log
 
 One line per spike, written down *before* moving on. See the roadmap for the gate.
 
@@ -15,14 +15,14 @@ One line per spike, written down *before* moving on. See the roadmap for the gat
 Build (non-elevated shell is fine; output goes to a writable dir):
 
     $env:AE_PLUGIN_BUILD_DIR="C:\AE_SDK\_build_out"
-    MSBuild Win\RadialMenu.sln -p:Configuration=Debug -p:Platform=x64
+    MSBuild Win\pieFX.sln -p:Configuration=Debug -p:Platform=x64
 
 Deploy: close AE fully (it locks the .aex), then copy
-`C:\AE_SDK\_build_out\AEGP\RadialMenu.aex` into AE's own Plug-ins folder
+`C:\AE_SDK\_build_out\AEGP\pieFX.aex` into AE's own Plug-ins folder
 (*not* MediaCore — that path is shared with Premiere, which has no AEGP host).
 
 Test: open a comp, select a shape/solid layer, then
-**Window > Radial Menu S1 (Anchor to Center)**. Pass = the anchor moves to the
+**Window > pieFX S1 (Anchor to Center)**. Pass = the anchor moves to the
 layer's centre, an alert reports "moved N layer(s)", and one undo reverts it.
 
 Also check: the menu item is greyed out when no comp is frontmost (that is the
@@ -31,7 +31,7 @@ which is what proves the round trip rather than just the registration.
 
 ## S1 gotcha (cost one AE launch)
 
-`Couldn't find main entry point for RadialMenu.aex (48 :: 72)` means the PiPL's
+`Couldn't find main entry point for pieFX.aex (48 :: 72)` means the PiPL's
 export name isn't in the DLL. The cause here: **Commando's `EntryPointFunc`
 signature is stale.** It shows seven parameters (with `file_pathZ` / `res_pathZ`);
 the real `AEGP_PluginInitFuncPrototype` in `AE_GeneralPlug.h:4169` takes five.
@@ -80,12 +80,12 @@ S2 splits:
   it passes through with its full ancestor chain and screen rect.
 - **S2B:** write the resolver + subclass against that data, not against a guess.
 
-**Window > Radial Menu S2A (Probe Window Under Cursor)** arms an 8-second sample.
+**Window > pieFX S2A (Probe Window Under Cursor)** arms an 8-second sample.
 Dismiss the alert, then sweep the cursor over: the comp viewer, the timeline, the
 project panel, effect controls, a floating panel, and a second monitor if there
 is one. A second alert reports the count when it finishes.
 
-Log: `%TEMP%\RadialMenu_S2_probe.txt`.
+Log: `%TEMP%\pieFX_S2_probe.txt`.
 
 Sampling runs in the AEGP idle hook, which is itself a datum - if the hook does
 not fire while the mouse is moving, that constrains how S2B can work and is worth
@@ -616,7 +616,7 @@ Win32 (not). By call site: ~85 AEGP suite calls, ~86 Win32 calls, in 1592 lines.
 | S1 entry point, command/menu/update hooks, ExtendScript | pure AEGP |
 | S5 catalogue enumeration + apply-by-match-name | pure AEGP |
 
-`RadialMenu_PiPL.r` already declares `CodeMacIntel64` / `CodeMacARM64`, so the
+`pieFX_PiPL.r` already declares `CodeMacIntel64` / `CodeMacARM64`, so the
 PiPL needs nothing. What is missing is an Xcode project and an Info.plist - copy
 the pattern from `AEGP/Persisto/Mac/`, which is the same sample we modelled the
 Windows side on.
@@ -671,7 +671,7 @@ could eat the UP; and **swallow is not optional on macOS** - watching without
 swallowing can never observe the end of a press.
 
 **2. The permission premise was half wrong, and the half that was wrong was
-load-bearing.** `RadialMenuMac.mm` justified the local monitor partly on "no
+load-bearing.** `pieFXMac.mm` justified the local monitor partly on "no
 Accessibility prompt". Watching and swallowing are indeed free. But the
 `CGEventPost` *replay* tripped `AXIsProcessTrusted` - and that prompt names
 **After Effects**, not the plug-in, because a plug-in cannot hold its own TCC

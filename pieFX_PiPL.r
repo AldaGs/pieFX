@@ -12,7 +12,7 @@ resource 'PiPL' (16000) {
 		},
 		/* [2] */
 		Name {
-			"RadialMenuMac"
+			"pieFX"
 		},
 		/* [3] */
 		Category {
