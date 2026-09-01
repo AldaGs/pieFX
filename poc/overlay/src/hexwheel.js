@@ -134,13 +134,28 @@ const noise = (() => {
 })();
 
 // --- primitives -----------------------------------------------------------
-function hexPath(x, y, r) {
-  ctx.beginPath();
+// Rounded-corner hexagon. Each corner is an arc of radius CORNER, walked via
+// arcTo with the EDGE MIDPOINTS as the control targets — the midpoint is half a
+// side away (27px) while a 20px corner only consumes 20/tan(60) = 11.5px of it,
+// so the radius can never overrun the available edge and collapse a corner.
+const CORNER = 20;
+
+function hexPath(x, y, r, round) {
+  const rad = round === undefined ? CORNER : round;
+  const p = [];
   for (let k = 0; k < 6; k++) {
     const a = (k * 60 * Math.PI) / 180;
-    const vx = x + r * Math.cos(a);
-    const vy = y + r * Math.sin(a);
-    k === 0 ? ctx.moveTo(vx, vy) : ctx.lineTo(vx, vy);
+    p.push([x + r * Math.cos(a), y + r * Math.sin(a)]);
+  }
+  ctx.beginPath();
+  ctx.moveTo((p[5][0] + p[0][0]) / 2, (p[5][1] + p[0][1]) / 2);
+  for (let i = 0; i < 6; i++) {
+    const cur = p[i];
+    const nxt = p[(i + 1) % 6];
+    const mx = (cur[0] + nxt[0]) / 2;
+    const my = (cur[1] + nxt[1]) / 2;
+    ctx.arcTo(cur[0], cur[1], mx, my, rad);
+    ctx.lineTo(mx, my);
   }
   ctx.closePath();
 }
@@ -318,6 +333,9 @@ function drawHex(x, y, node, mode) {
 }
 
 // --- anchor widget --------------------------------------------------------
+// Corner radius kept in the same proportion as the hexagons' 20/54, so the two
+// level-2 surfaces read as the same material.
+const A_CORNER = 18;
 const A_CELL = 56;
 const A_GAP = 7;
 const A_SPAN = 3 * A_CELL + 2 * A_GAP;
@@ -353,7 +371,7 @@ function drawAnchorWidget() {
     ctx.shadowColor = hot ? "rgba(90,30,120,0.5)" : "rgba(0,0,0,0.45)";
     ctx.shadowBlur = hot ? 28 : 14;
     ctx.shadowOffsetY = 3;
-    roundRect(r.x, r.y, r.w, r.h, 12);
+    roundRect(r.x, r.y, r.w, r.h, A_CORNER);
     const g = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
     g.addColorStop(0, dead ? C.deadTop : hot ? C.hotTop : C.glassTop);
     g.addColorStop(1, dead ? C.deadBot : hot ? C.hotBot : C.glassBot);
@@ -362,7 +380,7 @@ function drawAnchorWidget() {
     ctx.restore();
 
     ctx.save();
-    roundRect(r.x, r.y, r.w, r.h, 12);
+    roundRect(r.x, r.y, r.w, r.h, A_CORNER);
     ctx.clip();
     ctx.globalAlpha = 0.06;
     ctx.fillStyle = noise;
@@ -370,7 +388,7 @@ function drawAnchorWidget() {
     ctx.restore();
 
     ctx.save();
-    roundRect(r.x, r.y, r.w, r.h, 12);
+    roundRect(r.x, r.y, r.w, r.h, A_CORNER);
     const rim = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
     rim.addColorStop(0, "rgba(255,255,255,0.8)");
     rim.addColorStop(1, "rgba(255,255,255,0.05)");
