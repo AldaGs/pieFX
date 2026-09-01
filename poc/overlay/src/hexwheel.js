@@ -32,57 +32,137 @@ const DIRS = [-90, -30, 30, 90, 150, 210]; // N, NE, SE, S, SW, NW
 // case and two only when you want a variant — the 80% case stays as fast as a
 // verb. Slots are positional (0..5 = N,NE,SE,S,SW,NW); null is a deliberate
 // hole so adding an item later does not move the others.
-const MENU = {
-  kind: "ring",
-  children: [
-    { label: "Effects", kind: "widget", widget: "search", def: "Effect search" },
-    {
-      // From ag_masterNull.jsx. Two orthogonal axes there — placement and
-      // parenting — both driven by modifier chords. A ring replaces the chord
-      // with a direction. Default = anchor average + parent roots (the 80%).
-      label: "Master Null",
-      kind: "ring",
-      def: "Master Null",
-      children: [
-        { label: "Comp Center", kind: "verb" }, // N   (was secondary-click)
-        { label: "Area Center", kind: "verb" }, // NE  (was Shift)
-        null, // SE
-        { label: "No Parenting", kind: "verb" }, // S   (was Alt)
-        { label: "Force Reparent", kind: "verb" }, // SW  (was Ctrl/Cmd)
-        null, // NW
-      ],
-    },
-    {
-      label: "Create",
-      kind: "ring",
-      children: [
-        { label: "Solid", kind: "verb" },
-        { label: "Null", kind: "verb" },
-        { label: "Adjustment Layer", kind: "verb" },
-        { label: "Text", kind: "verb" },
-        { label: "Light", kind: "verb" },
-        { label: "Camera", kind: "verb" },
-      ],
-    },
-    { label: "Queue Comp to Render", kind: "verb" },
-    {
-      // Was "More Actions" (a pager). Same content as a NAMED category, so
-      // positions stay stable — paging would break the muscle memory the whole
+// An `action` is one of six kinds — see SETTINGS.md. A slot with `slots` is a
+// ring; it may ALSO carry an action, which is its default (fired when you flick
+// to it and release without drilling in).
+//
+//   builtin        { name: "anchor-grid" | "effect-search" }
+//   ae-command     { id: 2359, name: "Precompose…" }   id is the key, not name
+//   script-snippet { code: "_mn.addMasterNull(false)" }
+//   script-file    { path: "D:/…/ag_masterNull.jsx" }
+//   effect         { matchName: "ADBE Gaussian Blur 2" }
+const DEFAULTS = {
+  version: 1,
+  gesture: { holdMs: 200, armMode: "center" },
+  wheel: {
+    slots: [
+      // N
+      {
+        label: "Effects",
+        action: { kind: "builtin", name: "effect-search" },
+        widget: "search",
+      },
+      // NE — from ag_masterNull.jsx. Its two orthogonal axes (placement and
+      // parenting) are modifier chords there; a ring replaces the chord with a
+      // direction. The script exposes `_mn`, so every variant is one snippet.
+      {
+        label: "Master Null",
+        action: { kind: "script-snippet", code: "_mn.addMasterNull(false)" },
+        slots: [
+          {
+            label: "Comp Center",
+            action: { kind: "script-snippet", code: "_mn.addMasterNull(true)" },
+          },
+          {
+            label: "Area Center",
+            action: {
+              kind: "script-snippet",
+              code: "_mn.addMasterNull(false,{useArea:true,skipParenting:false,forceReparent:false})",
+            },
+          },
+          null,
+          {
+            label: "No Parenting",
+            action: {
+              kind: "script-snippet",
+              code: "_mn.addMasterNull(false,{useArea:false,skipParenting:true,forceReparent:false})",
+            },
+          },
+          {
+            label: "Force Reparent",
+            action: {
+              kind: "script-snippet",
+              code: "_mn.addMasterNull(false,{useArea:false,skipParenting:false,forceReparent:true})",
+            },
+          },
+          null,
+        ],
+      },
+      // SE
+      {
+        label: "Create",
+        slots: [
+          { label: "Solid", action: { kind: "ae-command", id: 2038, name: "New Solid…" } },
+          { label: "Null", action: { kind: "ae-command", id: 2767, name: "New Null Object" } },
+          {
+            label: "Adjustment Layer",
+            action: { kind: "ae-command", id: 2279, name: "New Adjustment Layer" },
+          },
+          { label: "Text", action: { kind: "ae-command", id: 2836, name: "New Text Layer" } },
+          { label: "Light", action: { kind: "ae-command", id: 2563, name: "New Light…" } },
+          { label: "Camera", action: { kind: "ae-command", id: 2564, name: "New Camera…" } },
+        ],
+      },
+      // S
+      {
+        label: "Queue Comp to Render",
+        action: { kind: "ae-command", id: 2161, name: "Add to Render Queue" },
+      },
+      // SW — was "More Actions" (a pager). Same content as a NAMED category, so
+      // positions stay stable; paging would break the muscle memory the whole
       // design depends on.
-      label: "Layer",
-      kind: "ring",
-      children: [
-        { label: "Pre-comp", kind: "verb" },
-        { label: "Split + Dup", kind: "verb" },
-        { label: "Save Frame as PNG", kind: "verb" },
-        { label: "Center in Comp", kind: "verb" },
-        null,
-        null,
-      ],
-    },
-    { label: "Anchor Master", kind: "widget", widget: "anchor", def: "Anchor to center" },
-  ],
+      {
+        label: "Layer",
+        slots: [
+          { label: "Pre-comp", action: { kind: "ae-command", id: 2071, name: "Pre-compose…" } },
+          { label: "Split + Dup", action: { kind: "ae-command", id: 2158, name: "Split Layer" } },
+          {
+            label: "Save Frame as PNG",
+            action: { kind: "ae-command", id: 2104, name: "Save Frame As…" },
+          },
+          {
+            label: "Center in Comp",
+            action: { kind: "ae-command", id: 2400, name: "Center in View" },
+          },
+          null,
+          null,
+        ],
+      },
+      // NW
+      {
+        label: "Anchor Master",
+        action: { kind: "builtin", name: "anchor-grid", cell: 4 },
+        widget: "anchor",
+      },
+    ],
+  },
 };
+
+// The renderer wants `kind`/`children`; the settings file speaks
+// `action`/`slots`. Compile one into the other so the on-disk format stays the
+// document and the runtime shape stays convenient.
+function compile(slot) {
+  if (!slot) return null;
+  const node = {
+    label: slot.label,
+    action: slot.action || null,
+    widget: slot.widget || (slot.action && slot.action.kind === "builtin" ? slot.action.name : null),
+  };
+  if (slot.slots) {
+    node.kind = "ring";
+    node.children = slot.slots.map(compile);
+    node.def = slot.action ? slot.label : null;
+  } else if (slot.widget) {
+    node.kind = "widget";
+    node.def = slot.action ? slot.label : null;
+  } else {
+    node.kind = "verb";
+  }
+  return node;
+}
+
+let SETTINGS = DEFAULTS;
+let MENU = { kind: "ring", children: DEFAULTS.wheel.slots.map(compile) };
 
 // --- state ----------------------------------------------------------------
 const S = {
@@ -97,7 +177,11 @@ const S = {
   armed: true,
   entrySector: -1,
   hot: -1,
-  armMode: "center", // "center" | "exit"  — press M to switch
+  // "center" is the shipping default: level 2 stays inert until the cursor
+  // passes back through the middle, which doubles as the cancel gesture. "exit"
+  // is faster but needs a leave-and-return to pick the child lying in the
+  // parent's own direction. Exposed as a user setting, not a constant.
+  armMode: "center",
   lastFired: "",
   t0: 0,
 };
@@ -619,28 +703,76 @@ function move(x, y) {
   }
 }
 
+// Free text crosses the pipe base64-encoded: the native side hand-rolls its JSON
+// parsing, and a correct unescaper for arbitrary user script is exactly the kind
+// of thing that works until someone puts a quote in a string literal.
+function b64(s) {
+  return btoa(unescape(encodeURIComponent(s)));
+}
+
+function sendFire(action, cell) {
+  if (!action) return;
+  let m = null;
+  switch (action.kind) {
+    case "ae-command":
+      m = { type: "fire", kind: "ae-command", id: action.id };
+      break;
+    case "script-snippet":
+      m = { type: "fire", kind: "script-snippet", b64: b64(action.code) };
+      break;
+    case "script-file":
+      m = { type: "fire", kind: "script-file", b64: b64(action.path) };
+      break;
+    case "effect":
+      m = { type: "fire", kind: "effect", b64: b64(action.matchName) };
+      break;
+    case "builtin":
+      m = {
+        type: "fire",
+        kind: "builtin",
+        name: action.name,
+        cell: cell === undefined || cell === null ? (action.cell ?? -1) : cell,
+      };
+      break;
+    default:
+      return;
+  }
+  if (window.__PIEFX_LOCAL__) console.log("FIRE:", m);
+  if (window.__TAURI__ && window.__TAURI__.core)
+    window.__TAURI__.core.invoke("fire_action", { json: JSON.stringify(m) }).catch(() => {});
+}
+
 function release() {
   if (!S.visible) return;
-  let fired = null;
+  let action = null;
+  let cell = null;
+  let label = null;
 
   if (S.node.widget === "anchor") {
-    if (S.armed && S.hot >= 0) fired = `Anchor → cell ${S.hot}`;
-    else if (!S.armed && S.parent && S.parent.def) fired = S.parent.def;
+    if (S.armed && S.hot >= 0) {
+      action = S.parent && S.parent.action;
+      cell = S.hot;
+      label = `Anchor → cell ${S.hot}`;
+    } else if (!S.armed && S.parent && S.parent.action) {
+      action = S.parent.action;
+      label = S.parent.label;
+    }
   } else if (S.armed && S.hot >= 0) {
     const inertSlot = S.armMode === "exit" && S.hot === S.entrySector;
     const node = (S.node.children || [])[S.hot];
-    if (node && node.kind === "verb" && !inertSlot)
-      fired = (S.parent ? S.parent.label + " → " : "") + node.label;
-  } else if (!S.armed && S.parent && S.parent.def) {
+    if (node && node.kind === "verb" && !inertSlot) {
+      action = node.action;
+      label = (S.parent ? S.parent.label + " → " : "") + node.label;
+    }
+  } else if (!S.armed && S.parent && S.parent.action) {
     // Flicked to a category and let go without drilling: the common case.
-    fired = S.parent.def;
+    action = S.parent.action;
+    label = S.parent.label;
   }
 
-  if (fired) {
-    S.lastFired = fired;
-    if (window.__PIEFX_LOCAL__) console.log("FIRE:", fired);
-    if (window.__TAURI__ && window.__TAURI__.core)
-      window.__TAURI__.core.invoke("report_choice", { choice: fired }).catch(() => {});
+  if (action) {
+    S.lastFired = label;
+    sendFire(action, cell);
   }
   S.visible = false;
   S.hot = -1;

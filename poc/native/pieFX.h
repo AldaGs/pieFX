@@ -48,11 +48,20 @@
 //	Hold threshold (roadmap's 200ms; a setting at MVP).
 #define PIEFX_HOLD_MS		200
 
-//	Wheel geometry, in screen px. MUST match the constants in ../overlay/src/main.js
-//	(CELL, GAP) or the cell the native side fires will not be the one the overlay
-//	highlights. POC contract: keep these two in lockstep.
+//	Wheel geometry, in screen px. Used only by the legacy 3x3 POC path; the
+//	hexagon wheel does its hit-testing overlay-side (it owns the geometry it
+//	draws) and sends back a finished action, so this duplication ends there.
 #define PIEFX_CELL			76
 #define PIEFX_GAP			8
+
+//	Action plumbing. Free text (script source, paths, match names) crosses the
+//	pipe base64-encoded - see SETTINGS.md. The native side hand-rolls its JSON,
+//	and a correct unescaper for arbitrary user script is exactly the kind of
+//	thing that works until someone puts a quote in a string literal.
+#define PIEFX_LINE_MAX		8192
+#define PIEFX_TEXT_MAX		4096
+#define PIEFX_B64_MAX		6144
+#define PIEFX_QUEUE_LEN		8
 
 // Exported through the PiPL (.r file)
 extern "C" DllExport AEGP_PluginInitFuncPrototype EntryPointFunc;

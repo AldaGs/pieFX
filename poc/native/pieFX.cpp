@@ -55,6 +55,35 @@ static A_long			S_layer_count	= 0;
 static A_Boolean		S_action_pending = FALSE;
 static int				S_action_cell	= -1;
 
+// ---------------------------------------------------------------------------
+//	actions coming back from the overlay
+//
+//	The overlay owns the slot tree, so it sends a finished action rather than a
+//	slot index; the native side is a dumb executor with a switch on kind. See
+//	SETTINGS.md for the wire format and why free text is base64.
+// ---------------------------------------------------------------------------
+enum PieKind {
+	PK_NONE = 0,
+	PK_AE_CMD,		//	AEGP_DoCommand(id)
+	PK_SNIPPET,		//	ExtendScript source
+	PK_FILE,		//	path to a .jsx, run through $.evalFile
+	PK_EFFECT,		//	install-by-match-name (S5)
+	PK_ANCHOR		//	builtin: the 3x3 anchor grid
+};
+
+struct PieAction {
+	PieKind	kind;
+	long	id;
+	int		cell;
+	char	text[PIEFX_TEXT_MAX];
+};
+
+//	Ring buffer. Actions are user-initiated one at a time, so this only ever
+//	holds one - the depth is there so a burst can never overwrite a pending one.
+static PieAction		S_queue[PIEFX_QUEUE_LEN];
+static int				S_q_head		= 0;
+static int				S_q_tail		= 0;
+
 //	pipe (native = server). Writes happen on the UI thread; a background thread
 //	owns accept/re-accept. The critical section guards the handle + flags.
 static HANDLE			S_pipe			= INVALID_HANDLE_VALUE;
@@ -195,7 +224,196 @@ static void SendRelease(void) { PipeWrite("{\"type\":\"release\"}\n"); }
 static void SendCancel(void)  { PipeWrite("{\"type\":\"cancel\"}\n"); }
 
 // ---------------------------------------------------------------------------
-//	pipe: server thread (accept + re-accept)
+//	minimal JSON scanning + base64
+//
+//	Deliberately not a JSON parser. The producer is our own overlay and the wire
+//	format is fixed: keys are known, values are either numbers or tokens from a
+//	closed set, and anything free-form is base64. So a scanner that reads to the
+//	next quote is sufficient AND cannot be surprised by user input.
+// ---------------------------------------------------------------------------
+static A_Boolean
+JsonStr(const char *srcZ, const char *keyZ, char *outZ, size_t out_max)
+{
+	const char *p = strstr(srcZ, keyZ);
+
+	if (!p) {
+		return FALSE;
+	}
+	p += strlen(keyZ);
+
+	while (*p == ' ') {
+		p++;
+	}
+	if (*p != '"') {
+		return FALSE;
+	}
+	p++;
+
+	size_t i = 0;
+	while (*p && *p != '"' && i + 1 < out_max) {
+		outZ[i++] = *p++;
+	}
+	outZ[i] = 0;
+	return TRUE;
+}
+
+static A_Boolean
+JsonNum(const char *srcZ, const char *keyZ, long *outP)
+{
+	const char *p = strstr(srcZ, keyZ);
+
+	if (!p) {
+		return FALSE;
+	}
+	p += strlen(keyZ);
+
+	while (*p == ' ') {
+		p++;
+	}
+	*outP = strtol(p, NULL, 10);
+	return TRUE;
+}
+
+static int
+B64Val(char c)
+{
+	if (c >= 'A' && c <= 'Z') return c - 'A';
+	if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+	if (c >= '0' && c <= '9') return c - '0' + 52;
+	if (c == '+') return 62;
+	if (c == '/') return 63;
+	return -1;
+}
+
+static void
+B64Decode(const char *inZ, char *outZ, size_t out_max)
+{
+	size_t	o		= 0;
+	int		acc		= 0,
+			bits	= 0;
+
+	for (const char *p = inZ; *p; p++) {
+		int v = B64Val(*p);
+
+		if (v < 0) {
+			continue;			//	'=' and any stray whitespace
+		}
+		acc = (acc << 6) | v;
+		bits += 6;
+
+		if (bits >= 8) {
+			bits -= 8;
+			if (o + 1 < out_max) {
+				outZ[o++] = (char)((acc >> bits) & 0xFF);
+			}
+		}
+	}
+	outZ[o] = 0;
+}
+
+// ---------------------------------------------------------------------------
+//	action queue (written on the pipe thread, drained on AE's UI thread)
+// ---------------------------------------------------------------------------
+static void
+QueuePush(const PieAction *aP)
+{
+	if (!S_pipe_cs_ready) {
+		return;
+	}
+	EnterCriticalSection(&S_pipe_cs);
+
+	int next = (S_q_tail + 1) % PIEFX_QUEUE_LEN;
+
+	if (next != S_q_head) {			//	drop rather than overwrite a pending one
+		S_queue[S_q_tail] = *aP;
+		S_q_tail = next;
+	}
+	LeaveCriticalSection(&S_pipe_cs);
+}
+
+static A_Boolean
+QueuePop(PieAction *outP)
+{
+	A_Boolean got = FALSE;
+
+	if (!S_pipe_cs_ready) {
+		return FALSE;
+	}
+	EnterCriticalSection(&S_pipe_cs);
+
+	if (S_q_head != S_q_tail) {
+		*outP = S_queue[S_q_head];
+		S_q_head = (S_q_head + 1) % PIEFX_QUEUE_LEN;
+		got = TRUE;
+	}
+	LeaveCriticalSection(&S_pipe_cs);
+	return got;
+}
+
+//	One newline-delimited message from the overlay.
+static void
+HandleOverlayLine(const char *lineZ)
+{
+	char type[32] = { 0 };
+
+	if (!JsonStr(lineZ, "\"type\":", type, sizeof(type)) || strcmp(type, "fire")) {
+		return;
+	}
+
+	char kind[40] = { 0 };
+
+	if (!JsonStr(lineZ, "\"kind\":", kind, sizeof(kind))) {
+		return;
+	}
+
+	PieAction a;
+	ZeroMemory(&a, sizeof(a));
+	a.cell = -1;
+
+	if (!strcmp(kind, "ae-command")) {
+		if (!JsonNum(lineZ, "\"id\":", &a.id)) {
+			return;
+		}
+		a.kind = PK_AE_CMD;
+	} else if (!strcmp(kind, "script-snippet") ||
+			   !strcmp(kind, "script-file") ||
+			   !strcmp(kind, "effect")) {
+		char b64[PIEFX_B64_MAX] = { 0 };
+
+		if (!JsonStr(lineZ, "\"b64\":", b64, sizeof(b64))) {
+			return;
+		}
+		B64Decode(b64, a.text, sizeof(a.text));
+
+		a.kind = !strcmp(kind, "script-snippet") ? PK_SNIPPET
+			   : !strcmp(kind, "script-file")	? PK_FILE
+												: PK_EFFECT;
+	} else if (!strcmp(kind, "builtin")) {
+		char name[40] = { 0 };
+
+		if (!JsonStr(lineZ, "\"name\":", name, sizeof(name))) {
+			return;
+		}
+		if (strcmp(name, "anchor-grid")) {
+			Log("  overlay: builtin \"%s\" not implemented yet\n", name);
+			return;
+		}
+
+		long cell = -1;
+		JsonNum(lineZ, "\"cell\":", &cell);
+		a.kind = PK_ANCHOR;
+		a.cell = (int)cell;
+	} else {
+		return;
+	}
+
+	Log("  overlay -> fire kind=%s id=%ld cell=%d %s%s\n",
+		kind, a.id, a.cell, a.text[0] ? "text=" : "", a.text);
+	QueuePush(&a);
+}
+
+// ---------------------------------------------------------------------------
+//	pipe: server thread (accept + read + re-accept)
 // ---------------------------------------------------------------------------
 static DWORD WINAPI
 PipeServerThread(LPVOID)
@@ -238,9 +456,35 @@ PipeServerThread(LPVOID)
 		LeaveCriticalSection(&S_pipe_cs);
 		Log("  pipe: overlay connected\n");
 
-		//	Park until this connection dies or we're told to stop.
-		HANDLE evs[2] = { S_pipe_dead_evt, S_pipe_stop_evt };
-		DWORD w = WaitForMultipleObjects(2, evs, FALSE, INFINITE);
+		//	Read until the overlay goes away. Blocking on ReadFile is fine here -
+		//	this is not AE's UI thread - and StopPipeServer unblocks it by
+		//	disconnecting the instance underneath us.
+		{
+			char	buf[1024];
+			char	acc[PIEFX_LINE_MAX];
+			size_t	acc_len = 0;
+
+			for (;;) {
+				DWORD got = 0;
+
+				if (!ReadFile(inst, buf, sizeof(buf), &got, NULL) || got == 0) {
+					break;
+				}
+				for (DWORD i = 0; i < got; i++) {
+					char ch = buf[i];
+
+					if (ch == '\n') {
+						acc[acc_len] = 0;
+						if (acc_len) {
+							HandleOverlayLine(acc);
+						}
+						acc_len = 0;
+					} else if (ch != '\r' && acc_len + 1 < sizeof(acc)) {
+						acc[acc_len++] = ch;
+					}
+				}
+			}
+		}
 
 		EnterCriticalSection(&S_pipe_cs);
 		S_pipe_connected = FALSE;
@@ -250,7 +494,7 @@ PipeServerThread(LPVOID)
 		CloseHandle(inst);
 		Log("  pipe: overlay disconnected\n");
 
-		if (w == WAIT_OBJECT_0 + 1) {	// stop
+		if (WaitForSingleObject(S_pipe_stop_evt, 0) == WAIT_OBJECT_0) {
 			return 0;
 		}
 		// else: loop and re-accept (overlay restarted)
@@ -274,6 +518,18 @@ StopPipeServer(void)
 	if (S_pipe_stop_evt) {
 		SetEvent(S_pipe_stop_evt);
 	}
+
+	//	Unblock a ReadFile that is parked on a live connection. Disconnect only -
+	//	the reader owns the handle and closes it, so this cannot pull the handle
+	//	out from under it.
+	if (S_pipe_cs_ready) {
+		EnterCriticalSection(&S_pipe_cs);
+		if (S_pipe_connected && S_pipe != INVALID_HANDLE_VALUE) {
+			DisconnectNamedPipe(S_pipe);
+		}
+		LeaveCriticalSection(&S_pipe_cs);
+	}
+
 	//	Nudge a blocking ConnectNamedPipe to return by opening+closing the pipe.
 	HANDLE poke = CreateFileA(PIEFX_PIPE_NAME, GENERIC_READ | GENERIC_WRITE,
 							  0, NULL, OPEN_EXISTING, 0, NULL);
@@ -490,41 +746,175 @@ RefreshSelectionContext(AEGP_SuiteHandler &suites)
 	S_layer_count	= count;
 }
 
+//	Run ExtendScript and log both channels. Product behaviour: silent on success.
+//
+//	Deliberately opens NO undo group of its own. A user snippet may legitimately
+//	want to own several, and a group we opened could be left dangling by a throw
+//	we cannot see - which wedges AE's undo stack until some other script happens
+//	to close one. Scripts own their own undo, the way ag_masterNull.jsx does.
+static void
+RunScript(AEGP_SuiteHandler &suites, const char *codeZ, const char *whatZ)
+{
+	A_Boolean		avail	= FALSE;
+	AEGP_MemHandle	resultH	= NULL,
+					errorH	= NULL;
+	A_Err			err		= A_Err_NONE,
+					err2	= A_Err_NONE;
+
+	ERR(suites.UtilitySuite6()->AEGP_IsScriptingAvailable(&avail));
+
+	if (err || !avail) {
+		Log("  %s: scripting unavailable\n", whatZ);
+		return;
+	}
+
+	ERR(suites.UtilitySuite6()->AEGP_ExecuteScript(S_my_id, codeZ, FALSE, &resultH, &errorH));
+
+	if (errorH) {
+		A_char *t = NULL;
+		if (!suites.MemorySuite1()->AEGP_LockMemHandle(errorH, reinterpret_cast<void**>(&t)) && t && t[0]) {
+			Log("  %s ERROR: %s\n", whatZ, t);
+		}
+		ERR2(suites.MemorySuite1()->AEGP_UnlockMemHandle(errorH));
+		ERR2(suites.MemorySuite1()->AEGP_FreeMemHandle(errorH));
+	}
+	if (resultH) {
+		A_char *t = NULL;
+		if (!suites.MemorySuite1()->AEGP_LockMemHandle(resultH, reinterpret_cast<void**>(&t)) && t) {
+			Log("  %s: %s\n", whatZ, t);
+		}
+		ERR2(suites.MemorySuite1()->AEGP_UnlockMemHandle(resultH));
+		ERR2(suites.MemorySuite1()->AEGP_FreeMemHandle(resultH));
+	}
+}
+
 static void
 RunAnchorAction(AEGP_SuiteHandler &suites, int cell)
 {
-	int row = cell / 3, col = cell % 3;
-	double fx = col * 0.5;	// 0, 0.5, 1
-	double fy = row * 0.5;
+	int		row = cell / 3,
+			col = cell % 3;
+	double	fx	= col * 0.5,	// 0, 0.5, 1
+			fy	= row * 0.5;
+	char	script[2048];
+	char	what[64];
 
-	//	Assemble the script (fmt has two %f for cx/cy fractions).
-	char script[2048];
 	sprintf_s(script, sizeof(script), S_anchor_script_fmt, fx, fy);
+	sprintf_s(what, sizeof(what), "anchor cell %d (fx=%.1f fy=%.1f)", cell, fx, fy);
+	RunScript(suites, script, what);
+}
 
-	A_Boolean		avail = FALSE;
-	AEGP_MemHandle	resultH = NULL, errorH = NULL;
-	A_Err			err = A_Err_NONE, err2 = A_Err_NONE;
+//	S5's lookup: walk the installed catalogue for an exact match name.
+static A_Boolean
+FindEffectKeyByMatchName(
+	AEGP_SuiteHandler		&suites,
+	const char				*wantedZ,
+	AEGP_InstalledEffectKey	*keyP)
+{
+	A_Err					err = A_Err_NONE;
+	AEGP_InstalledEffectKey	key = AEGP_InstalledEffectKey_NONE;
+	A_char					match[AEGP_MAX_EFFECT_MATCH_NAME_SIZE];
 
-	ERR(suites.UtilitySuite6()->AEGP_IsScriptingAvailable(&avail));
-	if (!err && avail) {
-		ERR(suites.UtilitySuite6()->AEGP_ExecuteScript(S_my_id, script, FALSE, &resultH, &errorH));
-		//	Product: stay silent on success; only log. Errors go to the log too.
-		if (errorH) {
-			A_char *t = NULL;
-			if (!suites.MemorySuite1()->AEGP_LockMemHandle(errorH, reinterpret_cast<void**>(&t)) && t && t[0]) {
-				Log("  anchor script error: %s\n", t);
-			}
-			ERR2(suites.MemorySuite1()->AEGP_UnlockMemHandle(errorH));
-			ERR2(suites.MemorySuite1()->AEGP_FreeMemHandle(errorH));
+	while (!err) {
+		ERR(suites.EffectSuite4()->AEGP_GetNextInstalledEffect(key, &key));
+
+		if (err || AEGP_InstalledEffectKey_NONE == key) {
+			break;
 		}
-		if (resultH) {
-			A_char *t = NULL;
-			if (!suites.MemorySuite1()->AEGP_LockMemHandle(resultH, reinterpret_cast<void**>(&t)) && t) {
-				Log("  anchor cell %d (fx=%.1f fy=%.1f): %s\n", cell, fx, fy, t);
-			}
-			ERR2(suites.MemorySuite1()->AEGP_UnlockMemHandle(resultH));
-			ERR2(suites.MemorySuite1()->AEGP_FreeMemHandle(resultH));
+		match[0] = 0;
+		ERR(suites.EffectSuite4()->AEGP_GetEffectMatchName(key, match));
+
+		if (!err && 0 == strcmp(match, wantedZ)) {
+			*keyP = key;
+			return TRUE;
 		}
+	}
+	return FALSE;
+}
+
+static void
+ApplyEffectByMatchName(AEGP_SuiteHandler &suites, const char *matchZ)
+{
+	A_Err					err		= A_Err_NONE;
+	AEGP_LayerH				layerH	= NULL;
+	AEGP_InstalledEffectKey	key		= AEGP_InstalledEffectKey_NONE;
+	AEGP_EffectRefH			refH	= NULL;
+
+	//	Returns a layer only when exactly one is selected.
+	ERR(suites.LayerSuite9()->AEGP_GetActiveLayer(&layerH));
+
+	if (err || !layerH) {
+		Log("  effect \"%s\": no single selected layer\n", matchZ);
+		return;
+	}
+	if (!FindEffectKeyByMatchName(suites, matchZ, &key)) {
+		//	Match names truncate at 31 chars (PF_MAX_EFFECT_NAME_LEN), so a name
+		//	copied from documentation can legitimately fail to match what the
+		//	API returns. Always round-trip through the catalogue's own strings.
+		Log("  effect \"%s\": not installed (or the stored name was not round-tripped)\n", matchZ);
+		return;
+	}
+
+	suites.UtilitySuite3()->AEGP_StartUndoGroup("pieFX: Apply Effect");
+	ERR(suites.EffectSuite4()->AEGP_ApplyEffect(S_my_id, layerH, key, &refH));
+
+	if (refH) {
+		suites.EffectSuite4()->AEGP_DisposeEffect(refH);
+	}
+	suites.UtilitySuite3()->AEGP_EndUndoGroup();
+	Log("  effect \"%s\": applied\n", matchZ);
+}
+
+// ---------------------------------------------------------------------------
+//	the executor table
+// ---------------------------------------------------------------------------
+static void
+ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
+{
+	//	ERR2 assigns into BOTH err2 and err, so both must be in scope.
+	A_Err	err		= A_Err_NONE,
+			err2	= A_Err_NONE;
+
+	switch (aP->kind) {
+		case PK_AE_CMD:
+			//	The id is the key, never the menu name: there is no API to
+			//	enumerate commands, names are localised, and ids survive a
+			//	language change. Settings resolves the name once, at bind time.
+			Log("  exec ae-command %ld\n", aP->id);
+			ERR2(suites.CommandSuite1()->AEGP_DoCommand((AEGP_Command)aP->id));
+			break;
+
+		case PK_SNIPPET:
+			RunScript(suites, aP->text, "snippet");
+			break;
+
+		case PK_FILE: {
+			//	Forward slashes: ExtendScript accepts them, and it removes the
+			//	backslash-escaping question from the generated source entirely.
+			char path[PIEFX_TEXT_MAX];
+			char code[PIEFX_TEXT_MAX + 64];
+
+			strcpy_s(path, sizeof(path), aP->text);
+			for (char *p = path; *p; p++) {
+				if (*p == '\\') {
+					*p = '/';
+				}
+			}
+			sprintf_s(code, sizeof(code), "$.evalFile(\"%s\")", path);
+			RunScript(suites, code, "script-file");
+		} break;
+
+		case PK_EFFECT:
+			ApplyEffectByMatchName(suites, aP->text);
+			break;
+
+		case PK_ANCHOR:
+			if (aP->cell >= 0) {
+				RunAnchorAction(suites, aP->cell);
+			}
+			break;
+
+		default:
+			break;
 	}
 }
 
@@ -565,6 +955,17 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 		S_action_cell = -1;
 		if (cell >= 0) {
 			RunAnchorAction(suites, cell);
+		}
+	}
+
+	//	Drain actions the overlay sent back. They arrive on the pipe thread and
+	//	are executed HERE, on AE's UI thread, for the same reason the anchor move
+	//	is deferred: no AEGP call may run off the UI thread or inside the hook.
+	{
+		PieAction a;
+
+		while (QueuePop(&a)) {
+			ExecuteAction(suites, &a);
 		}
 	}
 
