@@ -205,9 +205,10 @@ the mouse hook or off the UI thread.
     }
 
     <slot> = {
-      "label":  "Master Null",
-      "action": { "kind": "script-snippet", "code": "_mn.addMasterNull(false)" },
-      "slots":  [ <slot>|null × 6 ]        // present only when it is a ring
+      "label":    "Master Null",
+      "requires": "selection",             // or "comp", or absent/null for none
+      "action":   { "kind": "script-snippet", "code": "_mn.addMasterNull(false)" },
+      "slots":    [ <slot>|null × 6 ]      // present only when it is a ring
     }
 
 Notes that are load-bearing rather than cosmetic:
@@ -220,6 +221,16 @@ Notes that are load-bearing rather than cosmetic:
   common case one flick.
 - **`armMode`** is a setting, defaulting to `"center"`. `"exit"` is faster but
   needs a leave-and-return to pick the child lying in the parent's own direction.
+- **`requires` is what makes the wheel honest.** `"selection"` needs one or more
+  selected layers, `"comp"` needs a comp as the active item; absent means the
+  action needs nothing. The plug-in sends both facts (`hasSelection`, `hasComp`)
+  with every summon, and the overlay draws a slot that cannot apply dead and
+  refuses to fire it — firing into nothing and reporting success is the failure
+  mode this exists to prevent. A child with no `requires` **inherits** its
+  category's, and an explicit `null` overrides that back to nothing: that is how
+  `Create > Comp` stays live with no comp open while its five siblings do not.
+  A category is drawn dead only when nothing inside it is live, so a ring whose
+  default cannot apply still opens to the children that can.
 - **Depth is capped at 2.** The format could nest forever; the UI must not let
   it. Marking-menu accuracy degrades badly past two levels.
 
@@ -236,7 +247,8 @@ Global settings (hold threshold, arm mode, theme) sit alongside it.
 
 - **Per-context wheels.** The plug-in reads selection state natively at summon,
   so the wheel's contents *can* vary by context. Doing so costs muscle memory,
-  so the rule should be: keep the skeleton stable and only grey or swap the slots
-  that genuinely cannot apply. Not implemented.
+  so the rule is: keep the skeleton stable and only grey the slots that genuinely
+  cannot apply. The greying half is now `requires` (above); *swapping* contents
+  by context remains deliberately undecided.
 - **Sharing / importing presets.** Obvious once the format is stable.
 - **macOS paths.** `~/Library/Application Support/pieFX/` when the port happens.

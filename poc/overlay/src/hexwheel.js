@@ -41,6 +41,12 @@ const DIRS = [-90, -30, 30, 90, 150, 210]; // N, NE, SE, S, SW, NW
 //   script-snippet { code: "_mn.addMasterNull(false)" }
 //   script-file    { path: "D:/…/ag_masterNull.jsx" }
 //   effect         { matchName: "ADBE Gaussian Blur 2" }
+//
+// `requires` says what a slot needs before it can fire: "selection" (one or
+// more layers selected) or "comp" (a comp is the active item). The plug-in
+// sends both facts with every summon, so a slot that cannot apply is drawn
+// dead and refuses to fire, instead of firing into nothing and reporting
+// success. Omit it for actions that need nothing at all.
 const DEFAULTS = {
   version: 1,
   gesture: { holdMs: 200, armMode: "center" },
@@ -49,6 +55,7 @@ const DEFAULTS = {
       // N
       {
         label: "Effects",
+        requires: "selection",
         action: { kind: "builtin", name: "effect-search" },
         widget: "search",
       },
@@ -57,6 +64,7 @@ const DEFAULTS = {
       // direction. The script exposes `_mn`, so every variant is one snippet.
       {
         label: "Master Null",
+        requires: "selection",
         action: { kind: "script-snippet", code: "_mn.addMasterNull(false)" },
         slots: [
           {
@@ -91,6 +99,7 @@ const DEFAULTS = {
       // SE
       {
         label: "Create",
+        requires: "comp",
         slots: [
           // Every name here was resolved by app.findMenuCommandId on AE 2026;
           // the ids are what it returned, kept only as a locale fallback.
@@ -107,7 +116,13 @@ const DEFAULTS = {
           // is a guess at AE's menu text and 2000 comes from the command map,
           // which has been wrong three times. The AE Commands probe carries
           // candidate spellings for it — confirm before trusting.
-          { label: "Comp", action: { kind: "ae-command", name: "New Composition...", id: 2000 } },
+          // The one Create item that needs nothing: it MAKES the comp. An
+          // explicit null overrides the category's inherited "comp".
+          {
+            label: "Comp",
+            requires: null,
+            action: { kind: "ae-command", name: "New Composition...", id: 2000 },
+          },
           { label: "Light", action: { kind: "ae-command", name: "Light...", id: 2563 } },
           { label: "Camera", action: { kind: "ae-command", name: "Camera...", id: 2564 } },
         ],
@@ -115,6 +130,7 @@ const DEFAULTS = {
       // S
       {
         label: "Queue Comp to Render",
+        requires: "comp",
         action: { kind: "ae-command", name: "Add to Render Queue", id: 2161 },
       },
       // SW — was "More Actions" (a pager). Same content as a NAMED category, so
@@ -122,6 +138,7 @@ const DEFAULTS = {
       // design depends on.
       {
         label: "Layer",
+        requires: "selection",
         slots: [
           { label: "Pre-comp", action: { kind: "ae-command", name: "Pre-compose...", id: 2071 } },
           // "Split + Dup" is back. The command map labels 2158
@@ -148,6 +165,7 @@ const DEFAULTS = {
       // NW
       {
         label: "Anchor Master",
+        requires: "selection",
         action: { kind: "builtin", name: "anchor-grid", cell: 4 },
         widget: "anchor",
       },
@@ -158,16 +176,20 @@ const DEFAULTS = {
 // The renderer wants `kind`/`children`; the settings file speaks
 // `action`/`slots`. Compile one into the other so the on-disk format stays the
 // document and the runtime shape stays convenient.
-function compile(slot) {
+// A child with no `requires` of its own inherits the category's — every item
+// under `Layer` needs a selection for the same reason the category does. An
+// explicit `requires: null` overrides that back to "needs nothing".
+function compile(slot, inherited) {
   if (!slot) return null;
   const node = {
     label: slot.label,
     action: slot.action || null,
+    requires: "requires" in slot ? slot.requires : inherited || null,
     widget: slot.widget || (slot.action && slot.action.kind === "builtin" ? slot.action.name : null),
   };
   if (slot.slots) {
     node.kind = "ring";
-    node.children = slot.slots.map(compile);
+    node.children = slot.slots.map((c) => compile(c, node.requires));
     node.def = slot.action ? slot.label : null;
   } else if (slot.widget) {
     node.kind = "widget";
@@ -179,7 +201,7 @@ function compile(slot) {
 }
 
 let SETTINGS = DEFAULTS;
-let MENU = { kind: "ring", children: DEFAULTS.wheel.slots.map(compile) };
+let MENU = { kind: "ring", children: DEFAULTS.wheel.slots.map((c) => compile(c, null)) };
 
 // --- AE command map -------------------------------------------------------
 // id -> name, for the settings picker. NAMING AID ONLY: the id stays the key
@@ -228,6 +250,36 @@ const S = {
   lastFired: "",
   t0: 0,
 };
+
+// --- context gating -------------------------------------------------------
+// What AE looked like at the moment of the summon, as reported by the plug-in.
+// Defaults are permissive: standalone in a browser there is no AE to ask, and
+// a wheel that greys everything teaches nothing.
+const CTX = { hasSelection: true, hasComp: true, layerCount: 0 };
+
+function ctxOk(requires) {
+  if (!requires) return true;
+  if (requires === "selection") return CTX.hasSelection;
+  if (requires === "comp") return CTX.hasComp;
+  return true; // unknown requirement: never silently disable a binding
+}
+
+// Can this node's OWN action fire? (For a category that is its default action,
+// the one fired by flicking to it and releasing without drilling in.)
+function canFire(node) {
+  return !!(node && node.action && ctxOk(node.requires));
+}
+
+// Is the hexagon live at all? A category stays live while anything inside it
+// is — greying a whole ring because its default cannot apply would hide the
+// children that still can.
+function isLive(node) {
+  if (!node) return false;
+  if (canFire(node)) return true;
+  if (node.kind === "ring") return (node.children || []).some(isLive);
+  if (node.kind === "widget") return false;
+  return false;
+}
 
 // --- palette --------------------------------------------------------------
 // Their mockup colours, with the label ink deepened for contrast over footage;
@@ -492,7 +544,7 @@ function drawAnchorWidget() {
   for (let i = 0; i < 9; i++) {
     const r = anchorCellRect(i);
     const hot = S.hot === i;
-    const dead = !S.armed;
+    const dead = !S.armed || !canFire(S.parent);
 
     ctx.save();
     ctx.shadowColor = hot ? "rgba(90,30,120,0.5)" : "rgba(0,0,0,0.45)";
@@ -669,8 +721,24 @@ function draw() {
         const node = kids[i];
         if (!node) continue;
         const [x, y] = slotPos(i);
-        const inert = !S.armed || (S.armMode === "exit" && i === S.entrySector);
+        const inert =
+          !S.armed || (S.armMode === "exit" && i === S.entrySector) || !isLive(node);
         drawHex(x, y, node, inert ? "dead" : S.hot === i ? "hot" : "idle");
+      }
+
+      // Why the greyed ones are greyed. One line, under the wheel, only when
+      // something is actually unavailable.
+      const missing = !CTX.hasComp
+        ? "no comp open"
+        : !CTX.hasSelection && kids.some((n) => n && !isLive(n))
+        ? "select a layer"
+        : "";
+      if (missing) {
+        ctx.font = "600 13px system-ui, 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "rgba(235,238,245,0.78)";
+        ctx.fillText(missing, S.cx, S.cy + SPACING + R + 14);
       }
     }
   }
@@ -744,6 +812,7 @@ function drawHud() {
   [
     "hexwheel — right-press and hold 200ms, flick, release",
     `arm mode: ${S.armMode}   (M to switch)`,
+    `ctx: selection=${CTX.hasSelection} comp=${CTX.hasComp}   (S / C to toggle)`,
     "release on a category without drilling = its default action",
     S.lastFired ? `fired: ${S.lastFired}` : "",
   ].forEach((l, i) => ctx.fillText(l, 16, 14 + i * 16));
@@ -751,7 +820,15 @@ function drawHud() {
 requestAnimationFrame(draw);
 
 // --- gesture state machine ------------------------------------------------
-function summon(x, y) {
+function summon(x, y, ctxMsg) {
+  if (ctxMsg) {
+    CTX.hasSelection = ctxMsg.hasSelection !== false;
+    // Older plug-in builds send no hasComp; a selection can only exist inside
+    // a comp, so infer rather than grey the whole wheel.
+    CTX.hasComp =
+      typeof ctxMsg.hasComp === "boolean" ? ctxMsg.hasComp : CTX.hasSelection;
+    CTX.layerCount = ctxMsg.layerCount || 0;
+  }
   S.cx = x;
   S.cy = y;
   S.px = x;
@@ -798,7 +875,10 @@ function move(x, y) {
   // Entering a category drills straight in, so the stroke never has to pause.
   if (S.level === 1 && sec >= 0) {
     const node = (S.node.children || [])[sec];
-    if (node && (node.kind === "ring" || node.kind === "widget")) drillInto(node, sec);
+    // A category with nothing live inside it is not worth drilling into: the
+    // level-2 ring would be six dead hexagons and the way out is the centre.
+    if (node && (node.kind === "ring" || node.kind === "widget") && isLive(node))
+      drillInto(node, sec);
   }
 }
 
@@ -854,27 +934,45 @@ function release() {
   let action = null;
   let cell = null;
   let label = null;
+  let unavailable = null;
 
+  // Every branch below is guarded by canFire(): the grey is a promise, and a
+  // slot that looks dead must not fire if the cursor happens to be over it.
   if (S.node.widget === "anchor") {
-    if (S.armed && S.hot >= 0) {
-      action = S.parent && S.parent.action;
+    if (S.armed && S.hot >= 0 && canFire(S.parent)) {
+      action = S.parent.action;
       cell = S.hot;
       label = `Anchor → cell ${S.hot}`;
-    } else if (!S.armed && S.parent && S.parent.action) {
+    } else if (!S.armed && canFire(S.parent)) {
       action = S.parent.action;
       label = S.parent.label;
     }
   } else if (S.armed && S.hot >= 0) {
     const inertSlot = S.armMode === "exit" && S.hot === S.entrySector;
     const node = (S.node.children || [])[S.hot];
-    if (node && node.kind === "verb" && !inertSlot) {
+    if (node && node.kind === "verb" && !inertSlot && canFire(node)) {
       action = node.action;
       label = (S.parent ? S.parent.label + " → " : "") + node.label;
+    } else if (node && node.kind === "verb" && !inertSlot && !isLive(node)) {
+      unavailable = node;
     }
-  } else if (!S.armed && S.parent && S.parent.action) {
+  } else if (!S.armed && S.parent) {
     // Flicked to a category and let go without drilling: the common case.
-    action = S.parent.action;
-    label = S.parent.label;
+    if (canFire(S.parent)) {
+      action = S.parent.action;
+      label = S.parent.label;
+    } else if (S.parent.action) {
+      unavailable = S.parent;
+    }
+  }
+
+  if (unavailable) {
+    toast(
+      "error",
+      `${unavailable.label} needs ${
+        unavailable.requires === "comp" ? "a comp open" : "a selected layer"
+      }`
+    );
   }
 
   if (action) {
@@ -927,8 +1025,11 @@ if (window.__TAURI__ && window.__TAURI__.event) {
       }
       if (m.type === "summon") {
         const l = toLocal(m.x, m.y);
-        say("summon screen=" + m.x + "," + m.y + " local=" + l[0] + "," + l[1]);
-        summon(l[0], l[1]);
+        say(
+          "summon screen=" + m.x + "," + m.y + " local=" + l[0] + "," + l[1] +
+            " hasSel=" + m.hasSelection + " hasComp=" + m.hasComp
+        );
+        summon(l[0], l[1], m);
       } else if (m.type === "cursor") {
         const l = toLocal(m.x, m.y);
         move(l[0], l[1]);
@@ -952,7 +1053,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     .catch((e) => say("listen FAILED " + e));
 } else {
   window.__PIEFX_LOCAL__ = true;
-  window.__PIEFX__ = { S, summon, move, release, toast, MENU };
+  window.__PIEFX__ = { S, CTX, summon, move, release, toast, MENU, isLive, canFire };
   let holdTimer = null;
   let downAt = null;
 
@@ -971,5 +1072,11 @@ if (window.__TAURI__ && window.__TAURI__.event) {
   addEventListener("keydown", (e) => {
     if (e.key === "m" || e.key === "M")
       S.armMode = S.armMode === "center" ? "exit" : "center";
+    // Fake the AE context so the `requires` greying is testable with no AE.
+    if (e.key === "s" || e.key === "S") CTX.hasSelection = !CTX.hasSelection;
+    if (e.key === "c" || e.key === "C") {
+      CTX.hasComp = !CTX.hasComp;
+      if (!CTX.hasComp) CTX.hasSelection = false;
+    }
   });
 }

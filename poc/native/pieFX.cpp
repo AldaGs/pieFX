@@ -55,6 +55,7 @@ static POINT			S_last_sent		= { 0, 0 };
 //	selection context, refreshed in IdleHook so the summon (which runs inside the
 //	mouse hook, where AEGP calls would be reentrant) can read a cached value.
 static A_Boolean		S_has_selection	= FALSE;
+static A_Boolean		S_has_comp		= FALSE;
 static A_long			S_layer_count	= 0;
 
 // ---------------------------------------------------------------------------
@@ -197,12 +198,12 @@ PipeWrite(const char *jsonZ)
 	LeaveCriticalSection(&S_pipe_cs);
 }
 
-static void SendSummon(LONG x, LONG y, A_Boolean hasSel, A_long layers)
+static void SendSummon(LONG x, LONG y, A_Boolean hasSel, A_Boolean hasComp, A_long layers)
 {
-	char m[192];
+	char m[224];
 	sprintf_s(m, sizeof(m),
-		"{\"type\":\"summon\",\"x\":%ld,\"y\":%ld,\"hasSelection\":%s,\"layerCount\":%ld}\n",
-		x, y, hasSel ? "true" : "false", layers);
+		"{\"type\":\"summon\",\"x\":%ld,\"y\":%ld,\"hasSelection\":%s,\"hasComp\":%s,\"layerCount\":%ld}\n",
+		x, y, hasSel ? "true" : "false", hasComp ? "true" : "false", layers);
 	PipeWrite(m);
 }
 //	Raw position only. The overlay owns the wheel geometry and hit-tests for
@@ -705,15 +706,12 @@ static void OnHoldDetected(void)
 	S_summon_cy = S_rdown_pt.y;
 	S_last_sent = S_rdown_pt;
 
-	if (S_has_selection) {
-		SendSummon(S_summon_cx, S_summon_cy, TRUE, S_layer_count);
-	} else {
-		//	Still show the wheel, greyed - it teaches the gesture even with
-		//	nothing selected. hasSelection=false makes the overlay grey it.
-		SendSummon(S_summon_cx, S_summon_cy, FALSE, 0);
-	}
-	Log("  HOLD -> summon at (%ld,%ld) hasSel=%d layers=%ld\n",
-		S_summon_cx, S_summon_cy, S_has_selection, S_layer_count);
+	//	Always summon, selection or not: the overlay greys only the slots whose
+	//	action declares what it needs (`requires`), so the wheel still teaches
+	//	the gesture and the commands that need nothing still fire.
+	SendSummon(S_summon_cx, S_summon_cy, S_has_selection, S_has_comp, S_layer_count);
+	Log("  HOLD -> summon at (%ld,%ld) hasSel=%d hasComp=%d layers=%ld\n",
+		S_summon_cx, S_summon_cy, S_has_selection, S_has_comp, S_layer_count);
 }
 
 static VOID CALLBACK
@@ -815,6 +813,7 @@ static void
 RefreshSelectionContext(AEGP_SuiteHandler &suites)
 {
 	A_Boolean	hasSel	= FALSE;
+	A_Boolean	hasComp	= FALSE;
 	A_long		count	= 0;
 	AEGP_ItemH	itemH	= NULL;
 	AEGP_ItemType type	= AEGP_ItemType_NONE;
@@ -825,6 +824,7 @@ RefreshSelectionContext(AEGP_SuiteHandler &suites)
 		ERR(suites.ItemSuite6()->AEGP_GetItemType(itemH, &type));
 	}
 	if (!err && itemH && type == AEGP_ItemType_COMP) {
+		hasComp = TRUE;
 		AEGP_CompH		compH = NULL;
 		AEGP_Collection2H collH = NULL;
 		ERR(suites.CompSuite11()->AEGP_GetCompFromItem(itemH, &compH));
@@ -840,6 +840,7 @@ RefreshSelectionContext(AEGP_SuiteHandler &suites)
 		}
 	}
 	S_has_selection = hasSel;
+	S_has_comp		= hasComp;
 	S_layer_count	= count;
 }
 

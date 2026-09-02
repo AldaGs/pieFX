@@ -65,9 +65,12 @@ were "code, not facts" for too long.
   `hexwheel.js`. `armMode` likewise defaults to `"center"` in code.
 - **The Effects search widget is a mock.** It draws and fires nothing. S5 found
   519 installed effects, so its real form is a filter field over the catalogue.
-- **No per-slot context gating.** Nothing greys out when an action cannot apply:
-  `Create > Solid` needs no selection, `Master Null` does, and the schema cannot
-  say so. Wants a `requires` field.
+- **Per-slot context gating is written but not watched in AE.** The schema now
+  has `requires: "selection" | "comp"`, the plug-in sends `hasComp` alongside
+  `hasSelection`, and the overlay draws un-appliable slots dead, refuses to fire
+  them and says why in a toast. Verified only by a headless harness over
+  `hexwheel.js`, plus the browser HUD (`S` and `C` fake the context). Not seen
+  live, and the native side has not been recompiled since.
 - **A `script-snippet` needs its script already loaded.** `_mn.addMasterNull(...)`
   works only once `ag_masterNull.jsx` has been run, because AE shares one
   ExtendScript namespace. Intended fix: an action declares the global it needs
@@ -172,10 +175,12 @@ is the real remaining feature work.
    `poc/overlay/src/hexwheel.js` — specifically `Save Frame As...`,
    `Center in View` and the new `Comp` slot. Delete candidates that never
    resolve.
-2. **Per-slot context gating (`requires`).** Add `requires: "selection" | "comp"`
-   to the action schema, have the summon grey slots that cannot apply, and use
-   the selection context the plug-in already sends (`hasSelection`,
-   `layerCount`). This is the last thing making the wheel feel dishonest.
+2. **Confirm the `requires` gating live.** The code is in and `SETTINGS.md`
+   carries the rule; what is missing is one AE session. Rebuild the native
+   plug-in first — `hasComp` is new in the summon message. With nothing
+   selected the wheel should still appear, with `Create` and `Queue Comp to
+   Render` live and the rest dead, and releasing on a dead slot should toast
+   what is missing rather than fire.
 3. **The settings UI**, as a large clickable wheel with an inspector: label,
    action kind, kind-specific fields, and a **test-fire button per binding** —
    which is the practical safety net for menu ids and names alike. Wire it to
