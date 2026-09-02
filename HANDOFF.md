@@ -97,8 +97,10 @@ were "code, not facts" for too long.
   long expired by the time anyone clicks the menu. A test that passes before
   and after the fix is worse than no test, so it was not kept. Confirming this
   one needs a real AE.
-- **The Effects search widget is a mock.** It draws and fires nothing. S5 found
-  519 installed effects, so its real form is a filter field over the catalogue.
+- **The Effects search widget is a mock.** Measured, not assumed: flicking to
+  `Effects` at any distance, in any arming mode, fires **nothing** — the panel
+  draws a fake query ("blur") and five hard-coded results and returns no action
+  at all. It is the next piece of work and it has its own briefing below.
 - Per-slot context gating is **done and watched live**: `requires` is in the
   schema, the plug-in sends `hasComp` alongside `hasSelection`, and the greying
   reads correctly with nothing selected.
@@ -256,6 +258,104 @@ that links silently and fails to load — model on `Persisto`). Install to AE's 
 automatically; otherwise `npm run tauri dev` works and the plug-in's launch
 no-ops.
 
+## The Effects search — a briefing for the next session
+
+This is the last known feature gap, and it is not a drawing job. Read this
+before opening `drawSearchWidget()`, because the hard part is not the panel.
+
+### What already exists, and where
+
+- **Applying an effect is DONE and proven live.** `ApplyEffectByMatchName` and
+  `FindEffectKeyByMatchName` are in the shipped plug-in
+  (`poc/native/pieFX.cpp`), the `effect` action kind crosses the pipe
+  base64-encoded, and Gaussian Blur has been watched appearing on a layer. Once
+  a match name is chosen, the firing path needs nothing.
+- **A user can already bind ONE named effect to a hexagon today**, through the
+  settings window's `effect` kind. What is missing is the *ad-hoc* case: reach
+  any of 519 without having bound it first.
+- **Enumeration is proven but lives in the FROZEN spike, not in the product.**
+  `pieFX.cpp` at the repo root (Phase 0, reference only) walks
+  `AEGP_GetNextInstalledEffect` and dumps category / display name / match name
+  to `%TEMP%\pieFX_S5_effects.txt`. 519 walked, 519 claimed, third-party
+  plug-ins all present. **The shipped plug-in cannot enumerate anything** — it
+  only looks up a match name it was given. Porting that walk is step one.
+- **`ae-commands-2025.json` is not a shortcut.** Its 296 negative ids are AE
+  2025 *display* names, not match names, and not this machine's installed set.
+
+### The hard part: there is no keyboard
+
+A filter field needs typing, and **nothing in pieFX can receive a keystroke.**
+Three facts, all verified in the source rather than assumed:
+
+- The overlay window is created click-through (`set_ignore_cursor_events(true)`)
+  and `focus: false`. It cannot take keyboard input, and giving it focus would
+  take focus away from After Effects mid-gesture.
+- The plug-in installs `WH_MOUSE` only. There is no keyboard hook anywhere in
+  the product.
+- The gesture is a **press-and-hold**. Even with a hook, the user would be
+  typing one-handed with the right mouse button held down.
+
+So "add a text field" is not a small change, and the design has to be chosen
+before any code. Three candidates, with what each really costs:
+
+1. **Release to open (recommended starting point).** Releasing on `Effects`
+   opens a real, focused window with a search field — exactly what the settings
+   window already is, including the `raise()` that makes a window come to the
+   front from a process that does not own the foreground. Enter applies to the
+   selected layers. It gives up the "one unbroken gesture" ideal, and it is the
+   only option whose machinery is already built and proven in AE.
+2. **Type during the hold.** A `WH_KEYBOARD` hook on AE's UI thread, swallowing
+   keys while the wheel is up and forwarding characters over the pipe. The
+   mouse hook proves the pattern works, but swallowing input is what made S2
+   hard, and a swallowed keystroke that escapes into a comp is worse than a
+   slow search. One-handed typing remains.
+3. **No typing at all.** Browse instead: the widget shows effect *categories*,
+   and the cursor picks one, then an effect. Keeps the gesture pure and needs
+   no new input path. Whether 519 effects across ~25 categories is navigable
+   this way is an honest open question, and the answer is probably "with a
+   recents list in front of it".
+
+A **recents/favourites list**, persisted in settings, makes the common case
+zero-typing under any of the three, and is worth building first whichever wins.
+
+### Three things the catalogue will do to you
+
+`SPIKES.md` records these in full; they are repeated here because they decide
+the data model, not just the UI:
+
+- **Match names are truncated at 31 characters** (`PF_MAX_EFFECT_NAME_LEN`), and
+  seven shipped effects sit exactly at the cap. A match name copied from
+  documentation will not equal what the API returns — always round-trip through
+  the API's own strings.
+- **50 entries are obsolete** and collide with live effects on display name
+  ("Levels", "Noise", "Box Blur" each appear twice). Filter on category or the
+  search will happily offer the dead one.
+- **107 entries have an empty category** — pseudo-effects and preset control
+  rigs, not things anyone picks from a menu. Empty category and the `Pseudo/`
+  match-name prefix are the two flags.
+
+Display name is therefore **not a unique key**. Search on it, carry the match
+name as identity, show the category to disambiguate.
+
+### How the catalogue reaches the overlay
+
+Undecided. The overlay owns the UI and the plug-in owns the AEGP calls, so the
+list has to cross. Either the plug-in writes it once at arm time (a JSON file
+beside the settings, which the overlay reads like any other) or it sends it
+down the events pipe on request. The file is simpler and survives a disarm; the
+pipe avoids a stale list when plug-ins change. Enumerating 519 entries is not
+free, so do it once per session, not per summon.
+
+### Suggested order
+
+1. Port the S5 walk from the frozen spike into the shipped plug-in and get the
+   catalogue out of AE in some form — that is the piece nothing else can be
+   built without, and it is the piece already known to work.
+2. Decide the input model from the three above, with the user, before drawing
+   anything.
+3. Build the recents list, which is useful under every model.
+4. Then the search UI itself.
+
 ## Next steps for a fresh session
 
 Roughly in order. The first two are cheap and close open measurements; the third
@@ -275,8 +375,8 @@ is the real remaining feature work.
 that opens a save dialog and calls `saveFrameToPng` at 1:1, restoring the comp's
 resolutionFactor afterwards. Unwatched in AE.
 
-After that: the real Effects search (filter over the S5 catalogue), then the
-macOS port. `ARCHITECTURE.md` is still accurate; the Mac side
+After that: the **Effects search** — see its briefing above; the input model
+has to be chosen before any of it is drawn — and then the macOS port. `ARCHITECTURE.md` is still accurate; the Mac side
 needs the two-pipe transport and the `ready` handshake replicated.
 
 **Before handing over any build, run `poc/pipe_test.ps1`.** It drives the real
