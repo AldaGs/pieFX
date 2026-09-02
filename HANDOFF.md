@@ -74,16 +74,22 @@ were "code, not facts" for too long.
   `hexwheel.js`. `armMode` likewise defaults to `"center"` in code.
 - **The Effects search widget is a mock.** It draws and fires nothing. S5 found
   519 installed effects, so its real form is a filter field over the catalogue.
-- **The overlay still outlived AE, twice.** The death hook is not the problem:
-  the log shows `=== death hook ===` and `overlay: terminating at death`, so it
-  ran and it terminated the process — and AE still would not finish quitting
-  until the overlay was killed by hand. The remaining suspect is the process
-  TREE: terminating the overlay leaves its WebView2 children behind. Third
-  attempt is a **job object** with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which
-  kills the tree and does it when the handle closes — so it does not depend on
-  the death hook running at all. Unwatched. **When testing, check Task Manager
-  for `msedgewebview2.exe` as well as `pieFX-overlay.exe`**: which one is still
-  standing is the measurement that names the cause.
+- **The overlay outlived AE three times, and the fourth attempt is the first
+  one aimed at the real cause.** What the measurements ruled out, in order: the
+  death hook not running (it runs — the log says so); the process not being
+  terminated (it is: `TerminateProcess` is called and returns); and the WebView2
+  children being what hangs on (the survivor in Task Manager was
+  `pieFX-overlay.exe` itself, not `msedgewebview2.exe`).
+  What is left is a process that **survives being terminated**, which on Windows
+  means a thread stuck in a kernel I/O that never completes — and the overlay
+  has exactly one candidate: a synchronous `ReadFile` on the events pipe, whose
+  server the death hook had already torn down two lines earlier. **The order was
+  the bug.** The hook now sends `{"type":"quit"}` FIRST, while the pipe is still
+  whole, and waits up to 2s for the overlay to leave under its own power. The
+  terminate and the job object stay as backstops, and both now log what they
+  actually achieved rather than that they were attempted.
+  Proven offline (`pipe_test.ps1` ends with the quit and the process goes);
+  unwatched in AE.
 - Per-slot context gating is **done and watched live**: `requires` is in the
   schema, the plug-in sends `hasComp` alongside `hasSelection`, and the greying
   reads correctly with nothing selected.

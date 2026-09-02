@@ -122,6 +122,17 @@ fn frontend_ready(state: tauri::State<Ready>) {
     dlog("  frontend ready; opening pipes");
 }
 
+// Asked to go by the plug-in, which does it BEFORE tearing the pipes down so
+// this process is not sitting in a read with no server on the other end. Exit
+// is immediate and deliberate: there is nothing here worth saving, and a tidy
+// unwind would have to wait on the very pipe thread we are trying not to be
+// stuck in.
+#[tauri::command]
+fn quit_overlay() {
+    dlog("  quit requested by the plug-in -> exiting");
+    std::process::exit(0);
+}
+
 #[tauri::command]
 fn dbg(msg: String) {
     dlog(&format!("  js: {}", msg));
@@ -243,7 +254,8 @@ pub fn run() {
             frontend_ready,
             dbg,
             load_settings,
-            save_settings
+            save_settings,
+            quit_overlay
         ])
         .setup(|app| {
             let win = app

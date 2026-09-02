@@ -1095,6 +1095,12 @@ if (window.__TAURI__ && window.__TAURI__.event) {
         say("release: armed=" + S.armed + " hot=" + S.hot);
         release();
       } else if (m.type === "cancel") S.visible = false;
+      else if (m.type === "quit") {
+        // AE is going. Leave now, while the pipe is still whole — see the
+        // plug-in's death hook for why the order matters.
+        say("quit received");
+        T.core.invoke("quit_overlay");
+      }
       else if (m.type === "toast") {
         say("toast " + m.level + ": " + m.text);
         toast(m.level, m.text);

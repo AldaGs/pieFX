@@ -72,6 +72,17 @@ $w.WriteLine('{"type":"toast","level":"error","text":"_mn is undefined"}')
 Write-Output "  toast sent (check overlay log for receipt)"
 Start-Sleep -Milliseconds 800
 
+# The quit message: the overlay must go on its own, while the pipe is still
+# whole. This is the path AE's death hook takes, and it is the one that has to
+# work — terminating a process that is blocked in a read on a half-dead pipe
+# leaves it un-dead, which is exactly what happened in AE.
+$w.WriteLine('{"type":"quit"}')
+if ($proc.WaitForExit(5000)) {
+    Write-Output "PASS: overlay quit on request"
+} else {
+    Write-Output "FAIL: overlay ignored quit; falling back to kill"
+}
+
 # Kill the TREE, not just the launcher. The overlay spawns WebView2 children,
 # and one of these runs left something alive that held the release binary and
 # made the next cargo build fail with "access denied" — the same leak the

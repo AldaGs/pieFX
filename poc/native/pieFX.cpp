@@ -263,6 +263,12 @@ static void SendCursor(LONG x, LONG y)
 }
 static void SendRelease(void) { PipeWrite("{\"type\":\"release\"}\n"); }
 static void SendCancel(void)  { PipeWrite("{\"type\":\"cancel\"}\n"); }
+//	Ask the overlay to quit ITSELF, while the pipes are still healthy. A
+//	process terminated with a read pending on a pipe whose server is already
+//	half torn down can sit there un-dead, which is what "TerminateProcess
+//	succeeded and the process was still in Task Manager" means. Letting it
+//	unwind its own read is the only exit that is actually clean.
+static void SendQuit(void)    { PipeWrite("{\"type\":\"quit\"}\n"); }
 
 //	Errors have to reach the user, but AEGP_ReportInfo is MODAL - throwing a
 //	dialog at someone mid-gesture is worse than the failure it reports. The
@@ -1507,9 +1513,13 @@ StopOverlay(void)
 {
 	if (S_overlay_proc) {
 		if (WaitForSingleObject(S_overlay_proc, 0) == WAIT_TIMEOUT) {
-			Log("  overlay: terminating at death\n");
-			TerminateProcess(S_overlay_proc, 0);
-			WaitForSingleObject(S_overlay_proc, 2000);
+			BOOL  ok = TerminateProcess(S_overlay_proc, 0);
+			DWORD w  = WaitForSingleObject(S_overlay_proc, 2000);
+			//	Both halves get reported. Last time the terminate was logged as
+			//	if it had worked, and the process was still in Task Manager -
+			//	which cost a round trip to find out.
+			Log("  overlay: terminate ok=%d, then %s\n", (int)ok,
+				w == WAIT_OBJECT_0 ? "gone" : "STILL UP (un-dead: a pending I/O)");
 		}
 		CloseHandle(S_overlay_proc);
 		S_overlay_proc = NULL;
@@ -1532,6 +1542,18 @@ DeathHook(AEGP_GlobalRefcon, AEGP_DeathRefcon)
 	CancelHoldTimer();
 	if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
 	S_active = FALSE;
+
+	//	ORDER IS THE FIX. Ask first, while the pipe it is reading is still
+	//	whole, and give it a moment to go. Tearing the pipes down first is
+	//	what left it blocked in a read that no longer had a server, and a
+	//	process in that state survives being terminated.
+	SendQuit();
+	if (S_overlay_proc) {
+		DWORD w = WaitForSingleObject(S_overlay_proc, 2000);
+		Log("  overlay: asked to quit -> %s\n",
+			w == WAIT_OBJECT_0 ? "gone" : "still up after 2s");
+	}
+
 	StopPipeServer();
 	StopOverlay();
 	return A_Err_NONE;
