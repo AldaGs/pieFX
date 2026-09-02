@@ -38,8 +38,17 @@
 //	The single POC menu command: arm/disarm the whole thing.
 #define PIEFX_MENU_NAME		"pieFX POC (Anchor Wheel: OFF/ON)"
 
-//	Named pipe the overlay connects to. Native is the server.
-#define PIEFX_PIPE_NAME		"\\\\.\\pipe\\pieFX"
+//	Named pipes the overlay connects to. Native is the server on both.
+//
+//	ONE PIPE PER DIRECTION, deliberately. A single duplex pipe opened WITHOUT
+//	FILE_FLAG_OVERLAPPED has its I/O serialised by Windows, so a reader thread
+//	parked in ReadFile blocks a WriteFile issued from another thread. With the
+//	write coming from AE's UI thread that is an instant freeze on the first
+//	summon - which is exactly what a single duplex pipe did here. Splitting the
+//	directions means no handle ever has both a read and a write outstanding, and
+//	it keeps both sides on plain synchronous I/O.
+#define PIEFX_PIPE_TX		"\\\\.\\pipe\\pieFX"		// native -> overlay (events)
+#define PIEFX_PIPE_RX		"\\\\.\\pipe\\pieFX-cmd"	// overlay -> native (actions)
 
 //	Overlay executable, looked for beside the .aex (best-effort launch; the
 //	overlay also retries connecting, so during dev it can be run by hand).

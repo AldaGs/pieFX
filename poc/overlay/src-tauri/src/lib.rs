@@ -20,18 +20,55 @@ use std::time::Duration;
 
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 
-const PIPE_NAME: &str = r"\\.\pipe\pieFX";
+// One pipe per direction. A single duplex pipe opened synchronously has its I/O
+// serialised by Windows, so a thread parked in read blocks any write issued from
+// another thread — and on the plug-in's side that write comes from AE's UI
+// thread, which froze AE on the first summon. Separate handles, separate
+// directions, no serialisation.
+const PIPE_RX: &str = r"\\.\pipe\pieFX"; // plug-in -> us (events)
+const PIPE_TX: &str = r"\\.\pipe\pieFX-cmd"; // us -> plug-in (actions)
 
 // Virtual-desktop origin in physical px; the frontend converts the plug-in's
 // screen coordinates to window-local with it.
 struct Origin(Mutex<(i32, i32)>);
 
-// Write half of the connected pipe. Cloned from the reader's handle on connect.
+// Write half of the connected pipe.
 struct Pipe(Mutex<Option<File>>);
+
+// Set once the webview has registered its event listener. The pipes are not
+// opened until then: the plug-in's ConnectNamedPipe completing is what tells it
+// the overlay can be driven, so connecting before the UI can receive would drop
+// any summon sent in that window.
+struct Ready(Mutex<bool>);
+
+// Diagnostics. The overlay is a windowed app with no console, so without this
+// there is no way to tell "the page never loaded" from "the page loaded but the
+// action never fired" — and guessing between those is what costs an AE session.
+fn dlog(s: &str) {
+    if let Some(t) = std::env::var_os("TEMP") {
+        let p = PathBuf::from(t).join("piefx_overlay.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+            let _ = writeln!(f, "{}", s);
+        }
+    }
+}
+
+#[tauri::command]
+fn frontend_ready(state: tauri::State<Ready>) {
+    *state.0.lock().unwrap() = true;
+    dlog("  frontend ready; opening pipes");
+}
+
+#[tauri::command]
+fn dbg(msg: String) {
+    dlog(&format!("  js: {}", msg));
+}
 
 #[tauri::command]
 fn overlay_origin(state: tauri::State<Origin>) -> (i32, i32) {
-    *state.0.lock().unwrap()
+    let o = *state.0.lock().unwrap();
+    dlog(&format!("  overlay_origin -> {:?}", o));
+    o
 }
 
 // Send one already-serialised message to the plug-in. The frontend builds the
@@ -39,6 +76,7 @@ fn overlay_origin(state: tauri::State<Origin>) -> (i32, i32) {
 #[tauri::command]
 fn fire_action(json: String, state: tauri::State<Pipe>) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    dlog(&format!("  fire_action <- {}", json));
     match guard.as_mut() {
         Some(f) => {
             let mut line = json;
@@ -46,7 +84,10 @@ fn fire_action(json: String, state: tauri::State<Pipe>) -> Result<(), String> {
             f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
             f.flush().map_err(|e| e.to_string())
         }
-        None => Err("not connected to the plug-in".into()),
+        None => {
+            dlog("  fire_action FAILED: no write handle");
+            Err("not connected to the plug-in".into())
+        }
     }
 }
 
@@ -74,13 +115,28 @@ fn save_settings(json: String) -> Result<(), String> {
 }
 
 fn pipe_client(app: tauri::AppHandle) {
+    // Wait for the webview before touching the pipes.
     loop {
-        match std::fs::OpenOptions::new().read(true).write(true).open(PIPE_NAME) {
+        if *app.state::<Ready>().0.lock().unwrap() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    loop {
+        // Open the inbound pipe first — the plug-in accepts them in this order.
+        match std::fs::OpenOptions::new().read(true).open(PIPE_RX) {
             Ok(file) => {
-                // Keep a write handle so fire_action can reply on the same pipe.
-                if let Ok(w) = file.try_clone() {
-                    *app.state::<Pipe>().0.lock().unwrap() = Some(w);
+                // Then the outbound one. A separate handle, so writes from the
+                // UI never queue behind the read parked below.
+                match std::fs::OpenOptions::new().write(true).open(PIPE_TX) {
+                    Ok(w) => *app.state::<Pipe>().0.lock().unwrap() = Some(w),
+                    Err(_) => {
+                        thread::sleep(Duration::from_millis(500));
+                        continue;
+                    }
                 }
+                dlog("  pipe: both handles open");
                 let _ = app.emit("piefx-link", "connected");
 
                 let mut reader = BufReader::new(file);
@@ -92,6 +148,7 @@ fn pipe_client(app: tauri::AppHandle) {
                         Ok(_) => {
                             let msg = line.trim();
                             if !msg.is_empty() {
+                                dlog(&format!("  emit -> {}", msg));
                                 let _ = app.emit("piefx", msg.to_string());
                             }
                         }
@@ -113,9 +170,12 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Origin(Mutex::new((0, 0))))
         .manage(Pipe(Mutex::new(None)))
+        .manage(Ready(Mutex::new(false)))
         .invoke_handler(tauri::generate_handler![
             overlay_origin,
             fire_action,
+            frontend_ready,
+            dbg,
             load_settings,
             save_settings
         ])
@@ -148,6 +208,7 @@ pub fn run() {
             // the right button is held. It is a pure renderer.
             let _ = win.set_ignore_cursor_events(true);
 
+            dlog("=== overlay started ===");
             let handle = app.handle().clone();
             thread::spawn(move || pipe_client(handle));
 

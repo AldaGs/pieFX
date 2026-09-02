@@ -768,7 +768,9 @@ function sendFire(action, cell) {
   }
   if (window.__PIEFX_LOCAL__) console.log("FIRE:", m);
   if (window.__TAURI__ && window.__TAURI__.core)
-    window.__TAURI__.core.invoke("fire_action", { json: JSON.stringify(m) }).catch(() => {});
+    window.__TAURI__.core
+      .invoke("fire_action", { json: JSON.stringify(m) })
+      .catch((e) => window.__PIEFX_SAY__ && window.__PIEFX_SAY__("fire FAILED " + e));
 }
 
 function release() {
@@ -817,26 +819,57 @@ function toLocal(x, y) {
 }
 
 if (window.__TAURI__ && window.__TAURI__.event) {
-  window.__TAURI__.core
+  const T = window.__TAURI__;
+  const say = (m) => {
+    try {
+      T.core.invoke("dbg", { msg: String(m) });
+    } catch (_) {}
+  };
+  window.__PIEFX_SAY__ = say;
+  // Anything thrown at module scope would silently kill the listener
+  // registration below, which looks identical to "the wheel is broken".
+  window.addEventListener("error", (e) => say("ERROR " + e.message));
+
+  say("module loaded, keys=" + Object.keys(T).join(","));
+
+  T.core
     .invoke("overlay_origin")
     .then((o) => {
       originX = o[0];
       originY = o[1];
+      say("origin " + originX + "," + originY + " dpr=" + window.devicePixelRatio);
     })
-    .catch(() => {});
+    .catch((e) => say("origin FAILED " + e));
 
-  window.__TAURI__.event.listen("piefx", (e) => {
-    let m;
-    try {
-      m = JSON.parse(e.payload);
-    } catch (_) {
-      return;
-    }
-    if (m.type === "summon") summon(...toLocal(m.x, m.y));
-    else if (m.type === "cursor") move(...toLocal(m.x, m.y));
-    else if (m.type === "release") release();
-    else if (m.type === "cancel") S.visible = false;
-  });
+  T.event
+    .listen("piefx", (e) => {
+      let m;
+      try {
+        m = JSON.parse(e.payload);
+      } catch (_) {
+        return;
+      }
+      if (m.type === "summon") {
+        const l = toLocal(m.x, m.y);
+        say("summon screen=" + m.x + "," + m.y + " local=" + l[0] + "," + l[1]);
+        summon(l[0], l[1]);
+      } else if (m.type === "cursor") {
+        const l = toLocal(m.x, m.y);
+        move(l[0], l[1]);
+        say("cursor local=" + l[0] + "," + l[1] + " hot=" + S.hot + " node=" + S.node.label);
+      } else if (m.type === "release") {
+        say("release: armed=" + S.armed + " hot=" + S.hot);
+        release();
+      } else if (m.type === "cancel") S.visible = false;
+    })
+    .then(() => {
+      say("listener registered");
+      // Only now may the pipes be opened: the plug-in treats a completed
+      // connect as "the overlay can be driven", so anything sent before this
+      // would be dropped on the floor.
+      T.core.invoke("frontend_ready");
+    })
+    .catch((e) => say("listen FAILED " + e));
 } else {
   window.__PIEFX_LOCAL__ = true;
   window.__PIEFX__ = { S, summon, move, release, MENU };

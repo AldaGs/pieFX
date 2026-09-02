@@ -86,7 +86,8 @@ static int				S_q_tail		= 0;
 
 //	pipe (native = server). Writes happen on the UI thread; a background thread
 //	owns accept/re-accept. The critical section guards the handle + flags.
-static HANDLE			S_pipe			= INVALID_HANDLE_VALUE;
+static HANDLE			S_pipe			= INVALID_HANDLE_VALUE;	// TX: UI thread writes
+static HANDLE			S_pipe_rx		= INVALID_HANDLE_VALUE;	// RX: pipe thread reads
 static HANDLE			S_pipe_thread	= NULL;
 static HANDLE			S_pipe_dead_evt	= NULL;	// UI -> bg: this connection broke
 static HANDLE			S_pipe_stop_evt	= NULL;	// UI -> bg: shut down
@@ -400,46 +401,55 @@ static DWORD WINAPI
 PipeServerThread(LPVOID)
 {
 	for (;;) {
-		HANDLE inst = CreateNamedPipeA(
-			PIEFX_PIPE_NAME,
-			PIPE_ACCESS_DUPLEX,
+		//	BOTH pipes are created before either is connected, so the overlay can
+		//	open them back to back. TX is outbound only and is the handle the UI
+		//	thread writes to; RX is inbound only and is the one this thread parks
+		//	on. Neither handle ever carries both directions - see PIEFX_PIPE_TX.
+		HANDLE tx = CreateNamedPipeA(
+			PIEFX_PIPE_TX,
+			PIPE_ACCESS_OUTBOUND,
 			PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-			1,				// one instance - one overlay
-			4096, 4096,
-			0, NULL);
+			1, 4096, 4096, 0, NULL);
 
-		if (inst == INVALID_HANDLE_VALUE) {
+		HANDLE rx = CreateNamedPipeA(
+			PIEFX_PIPE_RX,
+			PIPE_ACCESS_INBOUND,
+			PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+			1, 4096, 4096, 0, NULL);
+
+		if (tx == INVALID_HANDLE_VALUE || rx == INVALID_HANDLE_VALUE) {
 			Log("  pipe: CreateNamedPipe failed, err=%lu\n", (unsigned long)GetLastError());
+			if (tx != INVALID_HANDLE_VALUE) CloseHandle(tx);
+			if (rx != INVALID_HANDLE_VALUE) CloseHandle(rx);
 			return 1;
 		}
 
-		//	ConnectNamedPipe blocks until the overlay connects. We poll the stop
-		//	event around it by overlapping would be cleaner, but for the POC a
-		//	blocking accept plus a CancelSynchronousIo-free shutdown (close the
-		//	handle from stop path) is enough: on stop we just exit the process.
-		BOOL connected = ConnectNamedPipe(inst, NULL)
-			? TRUE
-			: (GetLastError() == ERROR_PIPE_CONNECTED);
+		BOOL tx_ok = ConnectNamedPipe(tx, NULL)
+			? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+		BOOL rx_ok = tx_ok && (ConnectNamedPipe(rx, NULL)
+			? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED));
 
 		if (WaitForSingleObject(S_pipe_stop_evt, 0) == WAIT_OBJECT_0) {
-			CloseHandle(inst);
+			CloseHandle(tx);
+			CloseHandle(rx);
 			return 0;
 		}
-
-		if (!connected) {
-			CloseHandle(inst);
+		if (!tx_ok || !rx_ok) {
+			CloseHandle(tx);
+			CloseHandle(rx);
 			continue;
 		}
 
 		EnterCriticalSection(&S_pipe_cs);
-		S_pipe = inst;
+		S_pipe		= tx;
+		S_pipe_rx	= rx;
 		S_pipe_connected = TRUE;
 		LeaveCriticalSection(&S_pipe_cs);
-		Log("  pipe: overlay connected\n");
+		Log("  pipe: overlay connected (tx+rx)\n");
 
-		//	Read until the overlay goes away. Blocking on ReadFile is fine here -
-		//	this is not AE's UI thread - and StopPipeServer unblocks it by
-		//	disconnecting the instance underneath us.
+		//	Park on RX only. This thread is not AE's UI thread, and because the
+		//	UI thread writes to a DIFFERENT handle its writes can never queue
+		//	behind this read.
 		{
 			char	buf[1024];
 			char	acc[PIEFX_LINE_MAX];
@@ -448,7 +458,7 @@ PipeServerThread(LPVOID)
 			for (;;) {
 				DWORD got = 0;
 
-				if (!ReadFile(inst, buf, sizeof(buf), &got, NULL) || got == 0) {
+				if (!ReadFile(rx, buf, sizeof(buf), &got, NULL) || got == 0) {
 					break;
 				}
 				for (DWORD i = 0; i < got; i++) {
@@ -469,10 +479,14 @@ PipeServerThread(LPVOID)
 
 		EnterCriticalSection(&S_pipe_cs);
 		S_pipe_connected = FALSE;
-		S_pipe = INVALID_HANDLE_VALUE;
+		S_pipe		= INVALID_HANDLE_VALUE;
+		S_pipe_rx	= INVALID_HANDLE_VALUE;
 		LeaveCriticalSection(&S_pipe_cs);
-		DisconnectNamedPipe(inst);
-		CloseHandle(inst);
+
+		DisconnectNamedPipe(tx);
+		DisconnectNamedPipe(rx);
+		CloseHandle(tx);
+		CloseHandle(rx);
 		Log("  pipe: overlay disconnected\n");
 
 		if (WaitForSingleObject(S_pipe_stop_evt, 0) == WAIT_OBJECT_0) {
@@ -500,22 +514,24 @@ StopPipeServer(void)
 		SetEvent(S_pipe_stop_evt);
 	}
 
-	//	Unblock a ReadFile that is parked on a live connection. Disconnect only -
-	//	the reader owns the handle and closes it, so this cannot pull the handle
-	//	out from under it.
+	//	Unblock the ReadFile parked on RX. Disconnect only - the reader owns the
+	//	handle and closes it, so this cannot pull the handle out from under it.
 	if (S_pipe_cs_ready) {
 		EnterCriticalSection(&S_pipe_cs);
-		if (S_pipe_connected && S_pipe != INVALID_HANDLE_VALUE) {
-			DisconnectNamedPipe(S_pipe);
+		if (S_pipe_connected && S_pipe_rx != INVALID_HANDLE_VALUE) {
+			DisconnectNamedPipe(S_pipe_rx);
 		}
 		LeaveCriticalSection(&S_pipe_cs);
 	}
 
-	//	Nudge a blocking ConnectNamedPipe to return by opening+closing the pipe.
-	HANDLE poke = CreateFileA(PIEFX_PIPE_NAME, GENERIC_READ | GENERIC_WRITE,
-							  0, NULL, OPEN_EXISTING, 0, NULL);
-	if (poke != INVALID_HANDLE_VALUE) {
-		CloseHandle(poke);
+	//	Nudge a blocking ConnectNamedPipe to return by opening+closing the pipes.
+	HANDLE poke_tx = CreateFileA(PIEFX_PIPE_TX, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+	if (poke_tx != INVALID_HANDLE_VALUE) {
+		CloseHandle(poke_tx);
+	}
+	HANDLE poke_rx = CreateFileA(PIEFX_PIPE_RX, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+	if (poke_rx != INVALID_HANDLE_VALUE) {
+		CloseHandle(poke_rx);
 	}
 	if (S_pipe_thread) {
 		WaitForSingleObject(S_pipe_thread, 2000);
@@ -525,7 +541,8 @@ StopPipeServer(void)
 	if (S_pipe_dead_evt) { CloseHandle(S_pipe_dead_evt); S_pipe_dead_evt = NULL; }
 	if (S_pipe_stop_evt) { CloseHandle(S_pipe_stop_evt); S_pipe_stop_evt = NULL; }
 	S_pipe_connected = FALSE;
-	S_pipe = INVALID_HANDLE_VALUE;
+	S_pipe		= INVALID_HANDLE_VALUE;
+	S_pipe_rx	= INVALID_HANDLE_VALUE;
 }
 
 // ---------------------------------------------------------------------------
