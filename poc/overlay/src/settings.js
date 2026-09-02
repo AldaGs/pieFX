@@ -25,9 +25,24 @@ const ctx = canvas.getContext("2d");
 const D = bindDraw(ctx);
 
 // Bigger than the live wheel — this one is clicked, not flicked, and it is the
-// subject of the window rather than an overlay on someone's footage.
-const BIG = R * 1.55;
-const BIG_SPACING = Math.sqrt(3) * BIG + 14;
+// subject of the window rather than an overlay on someone's footage. It also
+// tracks the user's Size setting, so the editor is a real preview of it rather
+// than a fixed drawing of a wheel that will appear at some other size.
+//
+// Clamped to the stage: at 2.5x a faithful preview would run off the panel, and
+// a preview you cannot see all of is not one.
+const BIG_BASE = R * 1.55;
+const RING_GAP = 14;
+
+function geom() {
+  const sc = (state.settings.appearance && state.settings.appearance.scale) || 1;
+  const want = BIG_BASE * sc;
+  const avail = Math.min(canvas.clientWidth, canvas.clientHeight) / 2 - 24;
+  // ring extent = spacing + r = (sqrt(3) + 1) * r + RING_GAP
+  const max = (avail - RING_GAP) / (Math.sqrt(3) + 1);
+  const r = Math.max(26, Math.min(want, max));
+  return { BIG: r, SP: Math.sqrt(3) * r + RING_GAP };
+}
 
 // --- state ----------------------------------------------------------------
 const state = {
@@ -94,21 +109,22 @@ function centre() {
 // A hexagon's inradius is r·√3/2; that is the honest hit shape, and close
 // enough to the drawn one that a click never lands on the wrong hexagon.
 function hitSlot(mx, my, g) {
+  const { BIG, SP } = geom();
   for (let i = 0; i < 6; i++) {
-    const [x, y] = slotPosAt(g.cx, g.cy, i, BIG_SPACING);
+    const [x, y] = slotPosAt(g.cx, g.cy, i, SP);
     if (Math.hypot(mx - x, my - y) <= BIG * 0.866) return i;
   }
   return -1;
 }
 
 function hitCentre(mx, my, g) {
-  return Math.hypot(mx - g.cx, my - g.cy) <= BIG * 0.72;
+  return Math.hypot(mx - g.cx, my - g.cy) <= geom().BIG * 0.72;
 }
 
 // The empty position. Drawn, not omitted: a hole is part of the layout, and
 // seeing it is what makes "slots are positional" obvious rather than a rule in
 // a document.
-function drawHole(x, y, hot) {
+function drawHole(x, y, hot, BIG) {
   ctx.save();
   ctx.globalAlpha = hot ? 0.55 : 0.3;
   D.glassHex(x, y, BIG, "dead");
@@ -119,7 +135,7 @@ function drawHole(x, y, hot) {
   ctx.strokeStyle = "rgba(235,238,245,0.8)";
   ctx.lineCap = "round";
   ctx.lineWidth = 2;
-  const k = 12;
+  const k = 12 * (BIG / BIG_BASE);
   ctx.beginPath();
   ctx.moveTo(x - k, y);
   ctx.lineTo(x + k, y);
@@ -129,7 +145,7 @@ function drawHole(x, y, hot) {
   ctx.restore();
 }
 
-function selectionRing(x, y) {
+function selectionRing(x, y, BIG) {
   ctx.save();
   D.hexPath(x, y, BIG + 7, 26 * (BIG / R));
   ctx.strokeStyle = wheelAccent();
@@ -143,6 +159,7 @@ function draw() {
   const g = layout();
   ctx.clearRect(0, 0, g.w, g.h);
 
+  const { BIG, SP } = geom();
   const slots = ring();
   const parent = parentSlot();
 
@@ -155,7 +172,7 @@ function draw() {
     ctx.globalAlpha = 0.5;
     D.glassHex(g.cx, g.cy, BIG * 0.82, "dead");
     ctx.restore();
-    ctx.font = "600 13px system-ui, 'Segoe UI', sans-serif";
+    ctx.font = `600 ${(13 * (BIG / BIG_BASE)).toFixed(1)}px system-ui, 'Segoe UI', sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = "rgba(228,232,240,0.45)";
@@ -163,16 +180,16 @@ function draw() {
   }
 
   for (let i = 0; i < 6; i++) {
-    const [x, y] = slotPosAt(g.cx, g.cy, i, BIG_SPACING);
+    const [x, y] = slotPosAt(g.cx, g.cy, i, SP);
     const slot = slots[i];
     if (!slot) {
-      drawHole(x, y, state.hover === i || state.sel === i);
+      drawHole(x, y, state.hover === i || state.sel === i, BIG);
     } else {
       const node = compile(slot, parent ? parent.requires || null : null);
       const mode = state.sel === i || state.hover === i ? "hot" : "idle";
       D.drawHex(x, y, node, mode, BIG, wheelAccent());
     }
-    if (state.sel === i) selectionRing(x, y);
+    if (state.sel === i) selectionRing(x, y, BIG);
   }
 
   requestAnimationFrame(draw);
@@ -539,6 +556,14 @@ el("g_armmode").addEventListener("change", (e) => {
   state.settings.gesture.armMode = e.target.value;
   el("dirty").hidden = !dirty();
 });
+el("g_scale").addEventListener("input", (e) => {
+  const v = parseFloat(e.target.value);
+  if (!isFinite(v)) return;
+  if (!state.settings.appearance) state.settings.appearance = {};
+  state.settings.appearance.scale = v;
+  el("g_scaleval").textContent = Math.round(v * 100) + "%";
+  el("dirty").hidden = !dirty();
+});
 el("g_accent").addEventListener("input", (e) => {
   if (!state.settings.appearance) state.settings.appearance = {};
   state.settings.appearance.accent = e.target.value;
@@ -554,6 +579,9 @@ function syncGlobals() {
   el("g_hold").value = g.holdMs === undefined ? 200 : g.holdMs;
   el("g_armmode").value = g.armMode || "distance";
   el("g_accent").value = wheelAccent();
+  const sc = (state.settings.appearance && state.settings.appearance.scale) || 1;
+  el("g_scale").value = sc;
+  el("g_scaleval").textContent = Math.round(sc * 100) + "%";
   el("g_autoarm").checked = g.armOnLaunch !== false;
 }
 

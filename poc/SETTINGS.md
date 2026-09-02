@@ -237,7 +237,7 @@ the mouse hook or off the UI thread.
     {
       "version": 1,
       "gesture": { "holdMs": 200, "armMode": "distance", "armOnLaunch": true },
-      "appearance": { "accent": "#C74FD6" },
+      "appearance": { "accent": "#C74FD6", "scale": 1 },
       "wheel": {
         "slots": [ <slot>|null × 6 ]
       }
@@ -261,11 +261,23 @@ Notes that are load-bearing rather than cosmetic:
   common case one flick.
 - **`armMode`** is a setting, and the default is now `"distance"`. The three:
 
-  - **`distance`** — a child is live once the stroke passes the category
-    hexagon (`SPACING` plus the apothem, so literally its far edge). The radius
-    IS the depth: inside it you are holding the category's default, outside it
-    you are holding one of its children, and moving back in returns you to the
-    default. Reversible, which is what makes it readable without instructions.
+  - **`distance`** — a child is live once the stroke is clear of the **centre
+    hexagon** (`ARM_DIST = R`). Once a category is open, the six hexagons on
+    screen are its children and the parent has moved to the middle, so the
+    moment you are out of the middle you are on a child.
+
+    It was first written as the far edge of the *child* hexagon, 147px, which
+    meant overshooting the very thing you were aiming at before it lit up. It
+    felt as wrong as that sounds and lasted one session.
+
+    **The cost, stated plainly: a category's DEFAULT action is not reachable
+    under this rule.** The band that would fire it is `DEAD` (49.7px) to
+    `ARM_DIST` (54px) — about four pixels — so in practice a flick into a
+    category lands on the child in that direction. Defaults still work under
+    `center` and `exit`. Anything that must stay reachable therefore needs to be
+    a child slot as well as a default: in the shipped tree that is
+    **`Master Null`'s plain variant**, which exists only as the category default
+    and so is currently unreachable under `distance`.
   - **`center`** — level 2 stays inert until the cursor passes back through the
     middle. Was the default.
   - **`exit`** — armed at once, but the child lying in the direction you arrived
@@ -278,6 +290,16 @@ Notes that are load-bearing rather than cosmetic:
   holds that specific child inert on purpose. Distance also leaves the one-flick
   default intact, because releasing anywhere ON the category hexagon is still
   inside the radius.
+
+- **`appearance.scale`** multiplies the whole wheel — hexagons, spacing, the
+  anchor grid, the search panel, and every distance the gesture measures.
+  Clamped to 0.5–2.5. It is applied as a canvas transform at draw time and as a
+  division on the incoming cursor, NOT by scaling `R` and the dozen constants
+  derived from it: that geometry is load-bearing and thoroughly measured, and
+  one multiply at each boundary cannot get any of it subtly wrong. Everything
+  inside lives in one unscaled design space and stays there. The toast is
+  deliberately outside it — a message about a failure is not part of the wheel
+  and has to stay legible at the smallest setting.
 
 - **The highlight colour is a setting**, `appearance.accent`, and a slot may
   override it with its own `accent`. The shipped purple's hot gradient and hot

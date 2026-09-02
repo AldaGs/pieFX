@@ -24,21 +24,40 @@ const {
   C, hotPalette, noise, roundRect, glassHex, drawHex, glassPanel,
 } = D;
 
-// How far out a level-2 child arms, for armMode "distance": PAST the hexagon
-// you flicked through. The apothem is the hexagon's half-width along a slot
-// direction, so centre-to-slot plus apothem is exactly its far edge.
+// How far out a level-2 child arms, for armMode "distance": just outside the
+// CENTRE hexagon. Once a category is open the six hexagons on screen are its
+// children, and the parent has moved to the middle - so the moment you are
+// clear of the middle you are on a child, and the wheel should say so.
 //
-// This is what makes `Create > Adjustment Layer` one unbroken outward stroke.
-// The other two modes cannot do it: "center" holds every child inert until the
-// cursor returns to the middle, and "exit" specifically holds inert the child
-// lying in the direction you arrived from - which is that very item. Distance
-// also keeps the one-flick default intact, because releasing anywhere ON the
-// category hexagon is still inside this radius.
-const ARM_DIST = SPACING + (R * Math.sqrt(3)) / 2;
+// It was originally the far edge of the child hexagon instead, which measured
+// out at 147px: you had to overshoot the very thing you were aiming at before
+// it lit up, and it felt exactly as wrong as that sounds.
+//
+// The price is stated where it is paid, in `release()`: this leaves about four
+// pixels between the dead zone and the arming radius, so a category's DEFAULT
+// action is no longer reachable by flicking to it and letting go. Under
+// "distance" a flick into a category lands on the child in that direction.
+// "center" and "exit" still reach defaults the old way.
+const ARM_DIST = R;
 
 // The wheel's highlight colour. A slot may override it; see `accent` in
 // SETTINGS.md.
 let ACCENT = DEFAULT_ACCENT;
+
+// Overall size. Applied as a canvas TRANSFORM at draw time and as a division on
+// the incoming cursor, rather than by scaling R and every constant derived from
+// it: the geometry here is load-bearing and thoroughly measured, and one
+// multiply at each boundary cannot get any of it subtly wrong. Everything
+// inside - hexagons, the anchor grid, the search panel, the dead zone, the
+// arming radius - is in one unscaled design space and stays there.
+let SCALE = 1;
+
+// Screen point -> design space. The summon centre is the fixed point, so the
+// wheel grows and shrinks around the cursor that called it.
+function unscale(x, y) {
+  if (SCALE === 1) return [x, y];
+  return [S.cx + (x - S.cx) / SCALE, S.cy + (y - S.cy) / SCALE];
+}
 
 // The settings file is the source of truth; DEFAULTS is only the fallback for a
 // machine that has never opened the settings window. Loaded asynchronously at
@@ -59,6 +78,10 @@ function applySettings(text) {
   MENU = compileMenu(SETTINGS);
   if (SETTINGS.gesture && SETTINGS.gesture.armMode) S.armMode = SETTINGS.gesture.armMode;
   ACCENT = (SETTINGS.appearance && SETTINGS.appearance.accent) || DEFAULT_ACCENT;
+  const sc = SETTINGS.appearance && SETTINGS.appearance.scale;
+  // Clamped, because a zero or a negative would divide the gesture into
+  // nonsense and a huge one would put the hexagons off every monitor.
+  SCALE = typeof sc === "number" && isFinite(sc) ? Math.max(0.5, Math.min(2.5, sc)) : 1;
   // A summon in flight keeps the tree it started with: swapping the menu out
   // from under a press would move hexagons while the cursor is travelling.
   if (!S.visible) S.node = MENU;
@@ -309,6 +332,15 @@ function draw() {
   ctx.clearRect(0, 0, w, h);
 
   if (S.visible) {
+    // Everything below is drawn in design space; the transform does the sizing.
+    // It is scaled about the summon centre so the wheel grows around the cursor
+    // rather than drifting away from it.
+    ctx.save();
+    if (SCALE !== 1) {
+      ctx.translate(S.cx, S.cy);
+      ctx.scale(SCALE, SCALE);
+      ctx.translate(-S.cx, -S.cy);
+    }
     if (S.node.widget === "anchor") {
       drawAnchorWidget();
     } else if (S.node.widget === "search") {
@@ -376,6 +408,9 @@ function draw() {
         ctx.fillText(missing, S.cx, S.cy + SPACING + R + 14);
       }
     }
+    // The toast is NOT scaled: it is a message about a failure, not part of the
+    // wheel, and it has to stay legible at the smallest setting.
+    ctx.restore();
   }
 
   // A throw anywhere above used to abort before the next frame was scheduled,
@@ -415,7 +450,7 @@ function drawToast() {
   const ax = S.cx || w / 2;
   const ay = S.cy || h / 2;
   const x = Math.max(12, Math.min(w - bw - 12, ax - bw / 2));
-  const y = Math.max(12, Math.min(h - bh - 12, ay + SPACING + R + 26));
+  const y = Math.max(12, Math.min(h - bh - 12, ay + (SPACING + R + 26) * SCALE));
 
   // fade the last 400ms so it leaves rather than blinks out
   ctx.save();
@@ -487,8 +522,9 @@ function drillInto(node, fromSector) {
   S.hot = -1;
 }
 
-function move(x, y) {
+function move(sx, sy) {
   if (!S.visible) return;
+  const [x, y] = unscale(sx, sy);
   S.px = x;
   S.py = y;
 
@@ -690,7 +726,14 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     .catch((e) => say("listen FAILED " + e));
 } else {
   window.__PIEFX_LOCAL__ = true;
-  window.__PIEFX__ = { S, CTX, summon, move, release, toast, MENU, isLive, canFire };
+  // applySettings is exported so the browser preview can drive the WHOLE
+  // settings path - accent, scale, arm mode, the slot tree - and not just the
+  // state machine. Everything a real settings.json can change is reachable
+  // here without an After Effects.
+  window.__PIEFX__ = {
+    S, CTX, summon, move, release, toast, MENU, isLive, canFire, applySettings,
+    scale: () => SCALE,
+  };
   let holdTimer = null;
   let downAt = null;
 

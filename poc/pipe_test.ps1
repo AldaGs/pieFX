@@ -36,24 +36,28 @@ function Fire($label, $steps) {
 $summon = '{"type":"summon","x":800,"y":500,"hasSelection":true,"layerCount":1}'
 
 # DISTANCE MATTERS NOW. Under the shipped `distance` arming rule the radius is
-# the depth: inside ~147px of the summon you are holding the category's own
-# default, past it you are holding one of its children. Every stroke below says
-# which it means, because two of them used to be 300px out and labelled
-# "default" - they passed anyway, one because Comp's default and its S child
-# happen to be the same command and the other because nothing checked WHICH
-# snippet came back. A test that passes for the wrong reason is the thing this
-# script exists to prevent.
+# the depth, and the threshold is the CENTRE hexagon's edge (54px): clear the
+# middle and you are on a child. So every stroke here that leaves the dead zone
+# selects a child, and the labels say so.
 #
-#   ~100px = on the category hexagon      (default)
-#    300px = well past it                 (child)
+# WHAT IS NOT COVERED, deliberately: a category's DEFAULT action. The band that
+# reaches it is now DEAD(49.7px) to ARM_DIST(54px) - about four pixels - so
+# under this rule a default is not reachable by hand and there is nothing
+# honest to assert about it. It is still reachable under `center` and `exit`,
+# neither of which this script exercises; see HANDOFF.md.
+#
+# These two used to be labelled "default" at 300px out. They passed anyway, one
+# because Comp's default and its S child happen to be the same command and the
+# other because nothing checked WHICH snippet came back. A test that passes for
+# the wrong reason is the thing this script exists to prevent, and it has now
+# caught itself doing it twice.
 
 # Comp's default and its S child are the SAME command, so a straight-out S
-# stroke prints the same line whatever the arming rule decided - it cannot tell
-# the two apart and must not be asked to. The child leg turns to N instead, to
-# `Comp Settings`, which nothing else can produce.
-Fire "S default (inside)  " @($summon, '{"type":"cursor","x":800,"y":600}')
+# stroke cannot tell those two apart and must not be asked to. The second leg
+# turns to N instead, to `Comp Settings`, which nothing else can produce.
+Fire "S > Queue to Render " @($summon, '{"type":"cursor","x":800,"y":600}')
 Fire "S > Comp Settings   " @($summon, '{"type":"cursor","x":800,"y":800}', '{"type":"cursor","x":800,"y":200}')
-Fire "NE default (inside) " @($summon, '{"type":"cursor","x":887,"y":450}')
+Fire "NE > Area Center    " @($summon, '{"type":"cursor","x":887,"y":450}')
 Fire "NE drill -> N     " @($summon, '{"type":"cursor","x":1060,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')
 Fire "NW anchor c0      " @($summon, '{"type":"cursor","x":540,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":760,"y":460}')
 Fire "SW layer -> N     " @($summon, '{"type":"cursor","x":540,"y":650}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')

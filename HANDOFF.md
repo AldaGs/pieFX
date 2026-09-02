@@ -192,12 +192,19 @@ Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
   adding an item moves the ones already in the user's hands.
 - **A category may carry a default action**, fired when you flick to it and
   release without drilling. That is what keeps the common case one flick.
-- **Arming rule `distance`** — the radius is the depth: inside the category
-  hexagon you hold its default, past it you hold one of its children. It
-  replaced `center` (still available, along with `exit`) because neither of the
-  other two can reach the child lying in its parent's own direction in a single
-  stroke, which is how the rule came to be reported as a bug. The centre still
-  cancels.
+- **Arming rule `distance`** — a child is live once the stroke is clear of the
+  CENTRE hexagon, because once a category is open the six hexagons on screen
+  are its children and the parent has moved to the middle. It replaced `center`
+  (still available, along with `exit`) because neither of the other two can
+  reach the child lying in its parent's own direction in a single stroke, which
+  is how the rule came to be reported as a bug. The centre still cancels.
+- **Category defaults are unreachable under `distance`**, and that is a
+  consequence, not an oversight: the band that fires one is the four pixels
+  between the dead zone and the arming radius. A default that must stay
+  reachable has to exist as a child slot too. **`Master Null`'s plain variant
+  is the one case in the shipped tree that does not**, and it has two empty
+  slots (SE, NW) waiting for it — an open decision, because filling a hole
+  moves nothing but is still the user's menu.
 - **The overlay owns geometry and hit-testing; native is a dumb executor.** The
   native side has no opinion about which slot is under the cursor; having both
   decide is what made every gesture fire twice, once.
@@ -275,6 +282,13 @@ needs the two-pipe transport and the `ready` handshake replicated.
 **Before handing over any build, run `poc/pipe_test.ps1`.** It drives the real
 overlay binary with no AE involved and has caught every transport bug in this
 project — the freeze, the startup race, and the swapped launch flags.
+
+It does not exercise category defaults at all: under the shipped `distance`
+rule there is no reachable band to aim at, and the two rules that do reach them
+(`center`, `exit`) are never selected here. That is a real coverage gap and the
+cheapest way to close it is a second overlay started with `--settings <a file
+pinning armMode>`, which would also be the first test of the `--settings <path>`
+branch.
 
 It passes the overlay `--settings none`, which pins it to the built-in
 `DEFAULTS`. That flag was added the moment the wheel started reading a settings

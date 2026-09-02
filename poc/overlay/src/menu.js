@@ -53,7 +53,11 @@ const DEFAULTS = {
   // ships on, so an install is "restart AE and flick" rather than "remember to
   // arm it first" — Window > pieFX is still the manual toggle and the way out.
   gesture: { holdMs: 200, armMode: "distance", armOnLaunch: true },
-  appearance: { accent: "#C74FD6" },
+  // `scale` multiplies the whole wheel - hexagons, spacing, the anchor grid,
+  // the search panel and every distance the gesture measures - so a 4K user
+  // and a laptop user can both have it the size of their hand rather than the
+  // size of their pixels.
+  appearance: { accent: "#C74FD6", scale: 1 },
   wheel: {
     slots: [
       // N
