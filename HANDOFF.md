@@ -3,7 +3,7 @@
 If you are picking this up cold, read this file, then `poc/README.md`,
 `poc/SETTINGS.md` and `ARCHITECTURE.md`. `SPIKES.md` is the Phase 0 record and
 is still the reason several obvious-looking approaches are known to fail.
-Everything below is true as of 2026-09-01.
+Everything below is true as of 2026-09-02.
 
 ## One-paragraph state
 
@@ -45,6 +45,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | Dark-glass palette | **live**, and the user's call |
 | `Create` (Solid/Null/Adjustment/Light/Camera), `Layer > Center in Comp` | **live** |
 | Anchor grid on an ANIMATED layer: keyframes rewritten, no jump | **live** |
+| Script bootstrap: Master Null fires on the FIRST flick, no palette | **live** |
 | Per-slot `requires` greying | **live** — greys correctly with nothing selected |
 | Overlay dies with AE, and AE quits clean | **live** — quit message first, then the backstops |
 
@@ -78,7 +79,7 @@ were "code, not facts" for too long.
 - Per-slot context gating is **done and watched live**: `requires` is in the
   schema, the plug-in sends `hasComp` alongside `hasSelection`, and the greying
   reads correctly with nothing selected.
-- **Script bootstrap is built, unwatched.** An action declares
+- **Script bootstrap is done and watched live.** An action declares
   `needs: { global, file }` and the overlay wraps the snippet in a loader that
   runs the file only when the global is missing. `ag_masterNull.jsx` now **ships
   with the product** in `poc/scripts/`, carrying the guard
