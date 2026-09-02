@@ -971,23 +971,45 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 			err2	= A_Err_NONE;
 
 	switch (aP->kind) {
-		case PK_AE_CMD:
-			//	The id is the key, never the menu name: there is no API to
-			//	enumerate commands, names are localised, and ids survive a
-			//	language change. Settings resolves the name once, at bind time.
-			Log("  exec ae-command %ld\n", aP->id);
-			ERR2(suites.CommandSuite1()->AEGP_DoCommand((AEGP_Command)aP->id));
-			if (err2) {
-				//	The id map was hand-tested by someone else against another
-				//	AE version, so a stale id is a real case, not a theoretical
-				//	one - and a silent no-op is the worst way to present it.
-				char t[160];
-				sprintf_s(t, sizeof(t), "AE command %ld failed (error %d)",
-						  aP->id, (int)err2);
-				Log("  %s\n", t);
-				SendToast("error", t);
-			}
-			break;
+		case PK_AE_CMD: {
+			//	app.executeCommand, NOT AEGP_DoCommand.
+			//
+			//	Measured: every id fired through AEGP_DoCommand from a MENU
+			//	command worked (2767, 2279, 3819 all did their thing), and every
+			//	id fired through it from HERE - the idle hook, where the gesture
+			//	lands - silently did nothing while still returning A_Err_NONE.
+			//	The ids were never wrong.
+			//
+			//	That matches the S2B finding: UpdateMenuHook fires when AE
+			//	REBUILDS ITS MENUS, so command enable-state is only current just
+			//	after a menu interaction. During idle AE treats the command as
+			//	not-enabled and drops it. There is no API to force a rebuild.
+			//
+			//	ExtendScript is a different dispatch path and is already proven to
+			//	work from idle - that is how Master Null fires.
+			//
+			//	The snippet measures itself. A command that returns cleanly and
+			//	changes nothing is exactly the failure that cost two sessions, so
+			//	the layer and render-queue counts bracket the call and land in the
+			//	log whether it worked or not.
+			char code[640];
+			char what[64];
+
+			sprintf_s(code, sizeof(code),
+				"(function(){"
+				"  var c = app.project.activeItem;"
+				"  var isC = (c && c instanceof CompItem);"
+				"  var L0 = isC ? c.numLayers : -1;"
+				"  var R0 = app.project.renderQueue.numItems;"
+				"  app.executeCommand(%ld);"
+				"  var L1 = isC ? c.numLayers : -1;"
+				"  var R1 = app.project.renderQueue.numItems;"
+				"  return 'layers ' + L0 + '->' + L1 + ', rq ' + R0 + '->' + R1;"
+				"})()", aP->id);
+
+			sprintf_s(what, sizeof(what), "ae-command %ld", aP->id);
+			RunScript(suites, code, what);
+		} break;
 
 		case PK_SNIPPET:
 			RunScript(suites, aP->text, "snippet");
@@ -1178,27 +1200,36 @@ CountCompLayers(AEGP_SuiteHandler &suites)
 	return err ? -1 : n;
 }
 
+//	useScript picks the dispatch path, because THAT is the variable that turned
+//	out to matter - not the id. AEGP_DoCommand works from a menu command and
+//	silently does nothing from the idle hook, where the gesture lands.
 static void
 ProbeCommand(AEGP_SuiteHandler &suites, long id, const char *nameZ,
-			 char *summaryZ, size_t summary_max)
+			 A_Boolean useScript, char *summaryZ, size_t summary_max)
 {
 	A_Err	err2	= A_Err_NONE, err = A_Err_NONE;
 	A_long	before	= CountCompLayers(suites);
 
-	ERR2(suites.CommandSuite1()->AEGP_DoCommand((AEGP_Command)id));
+	if (useScript) {
+		char code[160];
+		sprintf_s(code, sizeof(code), "app.executeCommand(%ld)", id);
+		RunScript(suites, code, "probe");
+	} else {
+		ERR2(suites.CommandSuite1()->AEGP_DoCommand((AEGP_Command)id));
+	}
 
-	A_long	after	= CountCompLayers(suites);
-	char	line[200];
+	A_long		after	= CountCompLayers(suites);
+	const char	*howZ	= useScript ? "executeCommand" : "DoCommand    ";
+	char		line[220];
 
 	if (before < 0 || after < 0) {
-		sprintf_s(line, sizeof(line), "  %-18s id %4ld : NO ACTIVE COMP\n", nameZ, id);
+		sprintf_s(line, sizeof(line), "  %-15s %4ld %s : NO ACTIVE COMP\n", nameZ, id, howZ);
 	} else if (after > before) {
-		sprintf_s(line, sizeof(line), "  %-18s id %4ld : WORKS (%ld -> %ld layers)\n",
-				  nameZ, id, before, after);
+		sprintf_s(line, sizeof(line), "  %-15s %4ld %s : WORKS (%ld -> %ld)\n",
+				  nameZ, id, howZ, before, after);
 	} else {
-		sprintf_s(line, sizeof(line),
-				  "  %-18s id %4ld : DID NOTHING (%ld layers, err %d)\n",
-				  nameZ, id, before, (int)err2);
+		sprintf_s(line, sizeof(line), "  %-15s %4ld %s : DID NOTHING (%ld, err %d)\n",
+				  nameZ, id, howZ, before, (int)err2);
 	}
 	Log("%s", line);
 	strcat_s(summaryZ, summary_max, line);
@@ -1211,14 +1242,16 @@ RunCommandProbe(AEGP_SuiteHandler &suites)
 
 	Log("\n=== ae-command probe ===\n");
 	strcat_s(summary, sizeof(summary),
-		"Fired from a MENU command, counting the comp's layers around each one.\n"
-		"WORKS here but not from the wheel = an invocation-context problem.\n"
-		"DID NOTHING here too = the id is simply wrong for this AE.\n");
+		"Each id fired BOTH ways from a menu command, counting the comp's\n"
+		"layers around each call. The wheel itself now uses executeCommand,\n"
+		"because DoCommand works here and does nothing from the idle hook.\n\n");
 
 
-	ProbeCommand(suites, PIEFX_PROBE_NULL,  "Null Object",      summary, sizeof(summary));
-	ProbeCommand(suites, PIEFX_PROBE_ADJ_A, "Adjustment (A)",   summary, sizeof(summary));
-	ProbeCommand(suites, PIEFX_PROBE_ADJ_B, "Adjustment (B)",   summary, sizeof(summary));
+	ProbeCommand(suites, PIEFX_PROBE_NULL,  "Null Object",   FALSE, summary, sizeof(summary));
+	ProbeCommand(suites, PIEFX_PROBE_NULL,  "Null Object",   TRUE,  summary, sizeof(summary));
+	ProbeCommand(suites, PIEFX_PROBE_ADJ_A, "Adjustment(A)", FALSE, summary, sizeof(summary));
+	ProbeCommand(suites, PIEFX_PROBE_ADJ_A, "Adjustment(A)", TRUE,  summary, sizeof(summary));
+	ProbeCommand(suites, PIEFX_PROBE_ADJ_B, "Adjustment(B)", TRUE,  summary, sizeof(summary));
 
 	strcat_s(summary, sizeof(summary), "\nUndo three times to clean up.");
 	Log("=== ae-command probe done ===\n");

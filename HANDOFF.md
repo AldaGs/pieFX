@@ -31,7 +31,7 @@ the offline harness.
 | `script-file` executor | **live** — self-test writes a .jsx and confirms it ran |
 | `effect` executor | **live** — Gaussian Blur appeared |
 | `anchor-grid` executor via the overlay path | **live** — anchor recentred |
-| `ae-command` **3819** (Center in View) | **live** — the layer really centred |
+| `ae-command` via **menu** dispatch (2767, 2279, 3819) | **live** — Null, Adjustment Layer and centring all happened |
 | Second AE instance gets its own pipes | harness, custom names on the command line |
 | Errors reach the user as a non-modal toast | harness |
 
@@ -42,16 +42,18 @@ the five must be judged by eye. That command exists because those paths were
 
 ## What is NOT proven, and what is missing
 
-- **Two AE command ids report success and do nothing.** `2767` (Null Object) and
-  `2279` (Adjustment Layer) fired from the wheel with no error and produced no
-  layer, while `3819` worked. That is the silent-wrong-id case, and it has two
-  possible causes needing different fixes: the ids are wrong for 2026, or they
-  are right but a `Layer > New` command will not run in the state the gesture
-  leaves AE in (3819 was fired from a *menu* command, those two from the
-  *gesture* path). **`Window > pieFX Self-Test (AE Commands)`** settles it — it
-  fires 2767, 2279 and the map's other AdjustmentLayer id 2263 from a menu
-  command and **counts the comp's layers** around each, because the DoCommand
-  return value is exactly what lied. `2161` is still unconfirmed either way.
+- **AE menu commands must go through ExtendScript, not `AEGP_DoCommand`.**
+  Measured both ways: every id fired through `AEGP_DoCommand` from a **menu
+  command** worked (2767 made a Null, 2279 an Adjustment Layer, 3819 centred the
+  layer), and every id fired through it from the **idle hook** — where the
+  gesture lands — silently did nothing while still returning `A_Err_NONE`. The
+  ids were never wrong; the dispatch path was. This is the S2B finding again:
+  `UpdateMenuHook` fires when AE **rebuilds its menus**, so command enable-state
+  is only current just after a menu interaction, and there is no API to force a
+  rebuild. The executor now runs `app.executeCommand(id)`, a path already proven
+  to work from idle. The snippet brackets the call with layer and render-queue
+  counts, so a command that returns cleanly and changes nothing says so in the
+  log.
 - **The AE command ids are the biggest unknown.** `poc/overlay/src/ae-commands-2025.json`
   was hand-tested by another developer against AE 2025; we run 2026. Checking the
   first draft of the defaults against it already caught three wrong guesses. A
