@@ -25,10 +25,10 @@ use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 // another thread — and on the plug-in's side that write comes from AE's UI
 // thread, which froze AE on the first summon. Separate handles, separate
 // directions, no serialisation.
-const PIPE_RX: &str = r"\\.\pipe\pieFX"; // plug-in -> us (events)
-const PIPE_TX: &str = r"\\.\pipe\pieFX-cmd"; // us -> plug-in (actions)
+const PIPE_EVENTS: &str = r"\\.\pipe\pieFX"; // plug-in -> us (summon/cursor/release)
+const PIPE_ACTIONS: &str = r"\\.\pipe\pieFX-cmd"; // us -> plug-in (fire)
 
-// The plug-in passes the names it actually managed to create (`--rx` / `--tx`),
+// The plug-in passes the names it actually managed to create (`--events` / `--actions`),
 // because a second AE instance finds the base names taken and falls back to a
 // pid-suffixed pair. Defaults are kept so an overlay started by hand — the dev
 // flow — still connects to the first instance.
@@ -41,7 +41,9 @@ fn pipe_names() -> (String, String) {
             .cloned()
             .unwrap_or_else(|| fallback.to_string())
     };
-    (find("--rx", PIPE_RX), find("--tx", PIPE_TX))
+    // Named after what FLOWS, not after whose end it is: tx/rx invert
+    // between the two processes, and they duly disagreed.
+    (find("--events", PIPE_EVENTS), find("--actions", PIPE_ACTIONS))
 }
 
 // Virtual-desktop origin in physical px; the frontend converts the plug-in's
@@ -139,16 +141,16 @@ fn pipe_client(app: tauri::AppHandle) {
         thread::sleep(Duration::from_millis(25));
     }
 
-    let (rx_name, tx_name) = pipe_names();
-    dlog(&format!("  pipes: rx={} tx={}", rx_name, tx_name));
+    let (events_name, actions_name) = pipe_names();
+    dlog(&format!("  pipes: events={} actions={}", events_name, actions_name));
 
     loop {
         // Open the inbound pipe first — the plug-in accepts them in this order.
-        match std::fs::OpenOptions::new().read(true).open(&rx_name) {
+        match std::fs::OpenOptions::new().read(true).open(&events_name) {
             Ok(file) => {
                 // Then the outbound one. A separate handle, so writes from the
                 // UI never queue behind the read parked below.
-                match std::fs::OpenOptions::new().write(true).open(&tx_name) {
+                match std::fs::OpenOptions::new().write(true).open(&actions_name) {
                     Ok(w) => *app.state::<Pipe>().0.lock().unwrap() = Some(w),
                     Err(_) => {
                         thread::sleep(Duration::from_millis(500));

@@ -670,7 +670,13 @@ LaunchOverlay(void)
 	//	Tell it which pipes to use, so a second AE instance's overlay finds its
 	//	own pair rather than the first instance's.
 	char cmd[MAX_PATH + 320];
-	sprintf_s(cmd, sizeof(cmd), "\"%s\" --tx %s --rx %s", exe, S_tx_name, S_rx_name);
+	//	DIRECTION-EXPLICIT flags, not tx/rx. "tx" from this side is "rx" from the
+	//	overlay's, so the two agreed on the words and disagreed on the meaning:
+	//	the launched overlay opened the wrong pipe for reading and never
+	//	connected, while a hand-started one used the defaults and worked. Naming
+	//	a channel after what flows through it removes the perspective entirely.
+	sprintf_s(cmd, sizeof(cmd), "\"%s\" --events %s --actions %s",
+			  exe, S_tx_name, S_rx_name);
 
 	STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
 	PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));

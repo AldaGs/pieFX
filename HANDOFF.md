@@ -28,6 +28,8 @@ the offline harness.
 | Two-way pipe, one per direction, with a ready handshake | harness + live |
 | Hexagon wheel: drill-down, arming, category defaults | harness, 5 gestures |
 | `script-snippet` executor (Master Null) | **live in AE** |
+| `ae-command` via `app.executeCommand` **from the gesture** | **live** — Null and Adjustment Layer appeared |
+| Menu names resolved by `findMenuCommandId` | **live** — corrected 3 ids the map got wrong |
 | `script-file` executor | **live** — self-test writes a .jsx and confirms it ran |
 | `effect` executor | **live** — Gaussian Blur appeared |
 | `anchor-grid` executor via the overlay path | **live** — anchor recentred |
@@ -90,7 +92,14 @@ Worth reading before changing the transport or the launch path.
 2. **The first summon after arming was lost.** The pipes connected before the
    webview had registered its listener. Fixed with the `ready` handshake the
    architecture specified but the code never had.
-3. **Both were found by an offline harness, not by AE.** `scratchpad/pipe_test*.ps1`
+3. **The auto-launched overlay never connected, while a hand-started one did.**
+   The plug-in passed `--tx`/`--rx`, and *tx from the plug-in's side is rx from
+   the overlay's*: both agreed on the words and disagreed on the meaning, so the
+   launched overlay opened the write-only pipe for reading. A hand-started one
+   used the defaults and worked, which hid it. Channels are now named for what
+   flows through them — `--events` and `--actions` — which has no perspective to
+   get backwards.
+4. **All were found by an offline harness, not by AE.** `scratchpad/pipe_test*.ps1`
    mimics the plug-in with .NET named pipes and drives the real overlay binary.
    It should have existed before the first build was handed over. Prefer it to
    burning an AE session.
