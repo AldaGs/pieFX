@@ -320,6 +320,11 @@ function syncInspector() {
   el("f_match").value = a.matchName || "";
   el("f_builtin").value = kind === "builtin" ? a.name || "anchor-grid" : "anchor-grid";
   el("f_cell").value = a.cell === undefined ? "" : a.cell;
+  // A cell is a position in the anchor GRID. The effect search has no grid, so
+  // offering the field there invites a value that means nothing.
+  const gridded = kind === "builtin" && el("f_builtin").value === "anchor-grid";
+  el("cellfield").hidden = !gridded;
+  el("cellnote").hidden = !gridded;
 
   const isRing = !!(slot && slot.slots);
   const canRing = state.path.length === 0; // depth is capped at 2
@@ -421,7 +426,13 @@ bindAction("f_cell", (a, v) => {
 el("f_builtin").addEventListener("change", (e) => {
   const v = e.target.value;
   edit((s) => {
-    if (s.action) s.action.name = v;
+    if (!s.action) return;
+    s.action.name = v;
+    if (v === "anchor-grid") {
+      if (s.action.cell === undefined) s.action.cell = 4;
+    } else {
+      delete s.action.cell;
+    }
   });
 });
 
