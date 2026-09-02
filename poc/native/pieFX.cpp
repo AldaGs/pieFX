@@ -124,6 +124,49 @@ Log(const char *fmtZ, ...)
 	fclose(fp);
 }
 
+//	Append that TRUNCATES instead of throwing the buffer away. strcat_s on
+//	overflow empties the destination, so one line too many silently discarded
+//	the whole report - which is one of the two ways the probe's output went
+//	missing. The other was the dialog itself: AEGP_ReportInfo will not show a
+//	long message, and there is no way to ask it how much it kept.
+static void
+Append(char *dstZ, size_t max, const char *srcZ)
+{
+	strncat_s(dstZ, max, srcZ, _TRUNCATE);
+}
+
+//	Put a long report where it can actually be read: a .txt beside the log,
+//	opened in whatever handles text on this machine. The dialog then carries
+//	only the path, which always fits.
+static void
+WriteReport(AEGP_SuiteHandler &suites, const char *fileZ, const char *bodyZ, const char *headZ)
+{
+	char path[MAX_PATH] = { 0 };
+	DWORD len = GetTempPathA(MAX_PATH, path);
+	if (!len || len > MAX_PATH - 32) {
+		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, bodyZ);
+		return;
+	}
+	strcat_s(path, MAX_PATH, fileZ);
+
+	FILE *fp = NULL;
+	if (fopen_s(&fp, path, "w") || !fp) {
+		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, bodyZ);
+		return;
+	}
+	fputs(bodyZ, fp);
+	fclose(fp);
+
+	ShellExecuteA(NULL, "open", path, NULL, NULL, SW_SHOWNORMAL);
+
+	char msg[MAX_PATH + 256] = { 0 };
+	Append(msg, sizeof(msg), headZ);
+	Append(msg, sizeof(msg), "\n\nThe full report is in:\n");
+	Append(msg, sizeof(msg), path);
+	Append(msg, sizeof(msg), "\n\n(opened for you; it is rewritten each run)");
+	suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, msg);
+}
+
 // ---------------------------------------------------------------------------
 //	the generalised anchor script (S1, from centre to any grid fraction)
 //
@@ -899,7 +942,9 @@ RunScript(AEGP_SuiteHandler &suites, const char *codeZ, const char *whatZ)
 			} else {
 				Log("  %s: %s\n", whatZ, t);
 			}
-			strcpy_s(S_last_result, sizeof(S_last_result), t);
+			//	Truncate rather than lose it: strcpy_s empties the destination on
+			//	overflow, so a long return value would read as no result at all.
+			strncpy_s(S_last_result, sizeof(S_last_result), t, _TRUNCATE);
 		}
 		ERR2(suites.MemorySuite1()->AEGP_UnlockMemHandle(resultH));
 		ERR2(suites.MemorySuite1()->AEGP_FreeMemHandle(resultH));
@@ -1132,7 +1177,7 @@ RunSelfTest(AEGP_SuiteHandler &suites)
 	Log("\n=== self-test ===\n");
 	suites.LayerSuite9()->AEGP_GetActiveLayer(&layerH);
 
-	strcat_s(summary, sizeof(summary),
+	Append(summary, sizeof(summary),
 		layerH ? "One layer selected - all five probes can run.\n\n"
 			   : "NO single layer selected: the ae-command, effect and anchor\n"
 				 "probes will report failure for that reason alone.\n\n");
@@ -1146,7 +1191,7 @@ RunSelfTest(AEGP_SuiteHandler &suites)
 	a.kind = PK_SNIPPET;
 	strcpy_s(a.text, sizeof(a.text), "(function(){ return 'snippet ok'; })()");
 	ExecuteAction(suites, &a);
-	strcat_s(summary, sizeof(summary), "1. script-snippet  -> see log ('snippet ok')\n");
+	Append(summary, sizeof(summary), "1. script-snippet  -> see log ('snippet ok')\n");
 
 	//	2. script-file - never run before.
 	ZeroMemory(&a, sizeof(a));
@@ -1163,9 +1208,9 @@ RunSelfTest(AEGP_SuiteHandler &suites)
 			"(function(){ return $.global.__piefx_selftest_ran ? "
 			"'script-file ok' : 'script-file DID NOT RUN'; })()");
 		ExecuteAction(suites, &check);
-		strcat_s(summary, sizeof(summary), "2. script-file     -> see log ('script-file ok')\n");
+		Append(summary, sizeof(summary), "2. script-file     -> see log ('script-file ok')\n");
 	} else {
-		strcat_s(summary, sizeof(summary), "2. script-file     -> SKIPPED (no temp path)\n");
+		Append(summary, sizeof(summary), "2. script-file     -> SKIPPED (no temp path)\n");
 	}
 
 	//	3. ae-command - the biggest unknown, because the id map was hand-tested
@@ -1176,14 +1221,14 @@ RunSelfTest(AEGP_SuiteHandler &suites)
 	ExecuteAction(suites, &a);
 	sprintf_s(line, sizeof(line),
 		"3. ae-command %d  -> did the layer CENTRE IN VIEW?\n", PIEFX_TEST_COMMAND);
-	strcat_s(summary, sizeof(summary), line);
+	Append(summary, sizeof(summary), line);
 
 	//	4. effect by match name - proven in the S5 spike, never in the product.
 	ZeroMemory(&a, sizeof(a));
 	a.kind = PK_EFFECT;
 	strcpy_s(a.text, sizeof(a.text), PIEFX_TEST_EFFECT);
 	ExecuteAction(suites, &a);
-	strcat_s(summary, sizeof(summary), "4. effect          -> is there a Gaussian Blur on the layer?\n");
+	Append(summary, sizeof(summary), "4. effect          -> is there a Gaussian Blur on the layer?\n");
 
 	//	5. builtin anchor - worked through the OLD native hit-test path, never
 	//	   through the overlay's action path this now shares.
@@ -1191,15 +1236,16 @@ RunSelfTest(AEGP_SuiteHandler &suites)
 	a.kind = PK_ANCHOR;
 	a.cell = 4;						// centre
 	ExecuteAction(suites, &a);
-	strcat_s(summary, sizeof(summary), "5. anchor-grid     -> did the anchor snap to the layer centre?\n");
+	Append(summary, sizeof(summary), "5. anchor-grid     -> did the anchor snap to the layer centre?\n");
 
-	strcat_s(summary, sizeof(summary),
+	Append(summary, sizeof(summary),
 		"\nJudge 3, 4 and 5 BY EYE - the log records what was attempted, not\n"
 		"what you saw. Undo a few times to put everything back.\n\nLog: ");
-	strcat_s(summary, sizeof(summary), S_log_path);
+	Append(summary, sizeof(summary), S_log_path);
 
 	Log("=== self-test done ===\n");
-	suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, summary);
+	WriteReport(suites, "pieFX_selftest.txt", summary,
+		"pieFX: executor self-test done. Judge 3, 4 and 5 by eye, then undo.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1275,7 +1321,7 @@ ProbeCommand(AEGP_SuiteHandler &suites, long id, const char *nameZ,
 				  nameZ, id, howZ, before, (int)err2);
 	}
 	Log("%s", line);
-	strcat_s(summaryZ, summary_max, line);
+	Append(summaryZ, summary_max, line);
 }
 
 static void
@@ -1333,23 +1379,23 @@ ResolveMenuNames(AEGP_SuiteHandler &suites, char *summaryZ, size_t summary_max)
 
 	S_last_result[0] = 0;
 	RunScript(suites, codeZ, "menu-name lookup");
-	strcat_s(summaryZ, summary_max, S_last_result);
+	Append(summaryZ, summary_max, S_last_result);
 }
 static void
 RunCommandProbe(AEGP_SuiteHandler &suites)
 {
-	char summary[4096] = { 0 };
+	char summary[32768] = { 0 };
 
 	Log("\n=== ae-command probe ===\n");
-	strcat_s(summary, sizeof(summary),
+	Append(summary, sizeof(summary),
 		"Each id fired BOTH ways from a menu command, counting the comp's\n"
 		"layers around each call. The wheel itself now uses executeCommand,\n"
 		"because DoCommand works here and does nothing from the idle hook.\n\n");
 
 
-	strcat_s(summary, sizeof(summary), "Menu names AE resolves on THIS install:\n");
+	Append(summary, sizeof(summary), "Menu names AE resolves on THIS install:\n");
 	ResolveMenuNames(suites, summary, sizeof(summary));
-	strcat_s(summary, sizeof(summary), "\n\nId dispatch comparison:\n");
+	Append(summary, sizeof(summary), "\n\nId dispatch comparison:\n");
 
 	ProbeCommand(suites, PIEFX_PROBE_NULL,  "Null Object",   FALSE, summary, sizeof(summary));
 	ProbeCommand(suites, PIEFX_PROBE_NULL,  "Null Object",   TRUE,  summary, sizeof(summary));
@@ -1357,9 +1403,10 @@ RunCommandProbe(AEGP_SuiteHandler &suites)
 	ProbeCommand(suites, PIEFX_PROBE_ADJ_A, "Adjustment(A)", TRUE,  summary, sizeof(summary));
 	ProbeCommand(suites, PIEFX_PROBE_ADJ_B, "Adjustment(B)", TRUE,  summary, sizeof(summary));
 
-	strcat_s(summary, sizeof(summary), "\nUndo three times to clean up.");
+	Append(summary, sizeof(summary), "\nUndo three times to clean up.");
 	Log("=== ae-command probe done ===\n");
-	suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, summary);
+	WriteReport(suites, "pieFX_probe.txt", summary,
+		"pieFX: AE Commands probe done. Undo three times to clean up.");
 }
 
 // ---------------------------------------------------------------------------
