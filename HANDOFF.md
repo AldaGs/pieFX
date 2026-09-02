@@ -48,12 +48,10 @@ were "code, not facts" for too long.
 
 ## What is NOT proven, and what is missing
 
-- **The `Comp` slot is still unmeasured.** `Create > Comp` (swapped in for
-  `Text`, which does resolve at 7034) carries `New Composition...` with id 2000
-  from the command map — neither confirmed. The probe carries four spellings for
-  it, but the resolution list came back **cut off before them**. Re-run
-  `Window > pieFX Self-Test (AE Commands)` and read the last four lines.
-- The other two open names are closed. `Save Frame As` resolves at 2233 without
+- **The menu-name table is closed.** `New Composition...` resolves at 2000 and
+  fires (watched live); the bare `New Composition` does not resolve.
+  `Composition Settings...` is 2007 and `Composition...` is 3203, both unused so
+  far except the first, which is now `Comp > Comp Settings`. `Save Frame As` resolves at 2233 without
   the ellipsis the menu shows, and `Center In View` at 3819 — **the capital I is
   the whole difference**; `Center in View` returns 0. AE's menu strings are not
   case-normalised and `findMenuCommandId` does not forgive. Also resolved and
@@ -174,17 +172,13 @@ no-ops.
 Roughly in order. The first two are cheap and close open measurements; the third
 is the real remaining feature work.
 
-1. **Close the last menu name.** Re-run `Window > pieFX Self-Test (AE Commands)`
-   for the four `Composition` spellings the truncated list never showed, and
-   fold the winner into `Create > Comp` in `poc/overlay/src/hexwheel.js`. Every
-   other name in `DEFAULTS` is now measured.
-2. **Confirm the `requires` gating live.** The code is in and `SETTINGS.md`
+1. **Confirm the `requires` gating live.** The code is in and `SETTINGS.md`
    carries the rule; what is missing is one AE session. Rebuild the native
    plug-in first — `hasComp` is new in the summon message. With nothing
    selected the wheel should still appear, with `Create` and `Queue Comp to
    Render` live and the rest dead, and releasing on a dead slot should toast
    what is missing rather than fire.
-3. **The settings UI**, as a large clickable wheel with an inspector: label,
+2. **The settings UI**, as a large clickable wheel with an inspector: label,
    action kind, kind-specific fields, and a **test-fire button per binding** —
    which is the practical safety net for menu ids and names alike. Wire it to
    `load_settings` / `save_settings`, which already exist and are unused.

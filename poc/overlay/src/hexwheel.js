@@ -115,11 +115,8 @@ const DEFAULTS = {
           // Replaced Text (7034, which does resolve if it is ever wanted
           // back). The one Create item that needs nothing: it MAKES the comp,
           // so an explicit null overrides the category's inherited "comp".
-          //
-          // STILL UNMEASURED. The probe carries four spellings for this and
-          // the resolution list came back cut off before them, so both the
-          // name and the id 2000 are unconfirmed — and the command map has
-          // been wrong three times already.
+          // Measured: "New Composition..." resolves at 2000, and the bare
+          // "New Composition" does not.
           {
             label: "Comp",
             requires: null,
@@ -129,25 +126,24 @@ const DEFAULTS = {
           { label: "Camera", action: { kind: "ae-command", name: "Camera...", id: 2564 } },
         ],
       },
-      // S
+      // S — a ring now, but its DEFAULT is still Add to Render Queue, so the
+      // flick that has always meant "queue this" still means it. That is the
+      // whole point of a category carrying a default: new items can arrive
+      // without moving what is already in the hands.
+      //
+      // Comp Settings does not belong under `Layer` — it acts on the comp,
+      // not on what is selected inside it. Save Frame as PNG moved here for
+      // the same reason.
       {
-        label: "Queue Comp to Render",
+        label: "Comp",
         requires: "comp",
         action: { kind: "ae-command", name: "Add to Render Queue", id: 2161 },
-      },
-      // SW — was "More Actions" (a pager). Same content as a NAMED category, so
-      // positions stay stable; paging would break the muscle memory the whole
-      // design depends on.
-      {
-        label: "Layer",
-        requires: "selection",
         slots: [
-          { label: "Pre-comp", action: { kind: "ae-command", name: "Pre-compose...", id: 2071 } },
-          // "Split + Dup" is back. The command map labels 2158
-          // "DuplicatePreserveFile", which is why it was written off as having
-          // no menu id — but findMenuCommandId("Split Layer") returns 2158.
-          // The map's names are not to be trusted; AE's own lookup is.
-          { label: "Split + Dup", action: { kind: "ae-command", name: "Split Layer", id: 2158 } },
+          {
+            label: "Comp Settings",
+            action: { kind: "ae-command", name: "Composition Settings...", id: 2007 },
+          },
+          null,
           {
             // NOT the menu command. "Save Frame As" (2233, and the spelling
             // really does drop the ellipsis the menu shows) only queues the
@@ -159,7 +155,6 @@ const DEFAULTS = {
             // you happened to be previewing is a silent wrong answer, and the
             // slot says "full res".
             label: "Save Frame as PNG",
-            requires: "comp",
             action: {
               kind: "script-snippet",
               code:
@@ -177,6 +172,35 @@ const DEFAULTS = {
                 "})()",
             },
           },
+          // The default, spelled out in the direction you already flicked: S
+          // then S is the same command as S alone. Discoverable without
+          // costing the one-flick case anything.
+          {
+            label: "Queue to Render",
+            action: { kind: "ae-command", name: "Add to Render Queue", id: 2161 },
+          },
+          null,
+          null,
+        ],
+      },
+      // SW — was "More Actions" (a pager). Same content as a NAMED category, so
+      // positions stay stable; paging would break the muscle memory the whole
+      // design depends on.
+      {
+        label: "Layer",
+        requires: "selection",
+        slots: [
+          { label: "Pre-comp", action: { kind: "ae-command", name: "Pre-compose...", id: 2071 } },
+          // "Split + Dup" is back. The command map labels 2158
+          // "DuplicatePreserveFile", which is why it was written off as having
+          // no menu id — but findMenuCommandId("Split Layer") returns 2158.
+          // The map's names are not to be trusted; AE's own lookup is.
+          { label: "Split + Dup", action: { kind: "ae-command", name: "Split Layer", id: 2158 } },
+          // A hole where Save Frame as PNG was: it moved to `Comp`, by the
+          // same argument that kept Comp Settings out of here. It acts on the
+          // comp, and it was the only thing in this ring that survived with
+          // nothing selected — which made `Layer` look live when it was not.
+          null,
           {
             // Resolved, and the capital I is the whole story: "Center in View"
             // returns 0, "Center In View" returns 3819. AE's menu strings are
@@ -308,18 +332,25 @@ function isLive(node) {
 }
 
 // --- palette --------------------------------------------------------------
-// Their mockup colours, with the label ink deepened for contrast over footage;
-// the bright magenta is kept as the ACCENT for the active slot.
+// Dark smoked glass, with the accent doing all the colour work. The earlier
+// light-blue glass was the mockup's, and over a comp it read as a dialog from
+// an older Windows: pale, high-value, competing with the footage it sits on.
+// A dark surface recedes instead, which is what an overlay should do — and it
+// gives the accent somewhere to be bright.
+//
+// Values, not just hues: the idle hexagon sits near the bottom of the range so
+// footage never has to fight it, the hot one lifts a step and gains an accent
+// rim, and dead drops toward the ground with its ink at a quarter strength.
 const C = {
-  glassTop: "rgba(198,216,240,0.90)",
-  glassBot: "rgba(150,176,212,0.86)",
-  hotTop: "rgba(232,244,255,0.97)",
-  hotBot: "rgba(186,214,248,0.95)",
-  deadTop: "rgba(150,158,172,0.42)",
-  deadBot: "rgba(120,128,142,0.38)",
-  ink: "#4A2A6B",
-  inkHot: "#8E1FA8",
-  inkDead: "rgba(80,80,95,0.55)",
+  glassTop: "rgba(48,52,60,0.90)",
+  glassBot: "rgba(28,30,36,0.88)",
+  hotTop: "rgba(86,74,104,0.95)",
+  hotBot: "rgba(52,44,66,0.94)",
+  deadTop: "rgba(34,36,42,0.62)",
+  deadBot: "rgba(24,26,30,0.58)",
+  ink: "rgba(228,232,240,0.92)",
+  inkHot: "#F2C8FA",
+  inkDead: "rgba(210,216,228,0.26)",
   accent: "#C74FD6",
 };
 
@@ -413,8 +444,8 @@ function glassHex(x, y, r, mode) {
   const dead = mode === "dead";
 
   ctx.save();
-  ctx.shadowColor = hot ? "rgba(90,30,120,0.50)" : "rgba(0,0,0,0.45)";
-  ctx.shadowBlur = hot ? 34 : 18;
+  ctx.shadowColor = hot ? "rgba(199,79,214,0.45)" : "rgba(0,0,0,0.55)";
+  ctx.shadowBlur = hot ? 30 : 16;
   ctx.shadowOffsetY = hot ? 5 : 3;
   hexPath(x, y, r);
   const g = ctx.createLinearGradient(x, y - r, x, y + r);
@@ -428,7 +459,7 @@ function glassHex(x, y, r, mode) {
   ctx.save();
   hexPath(x, y, r);
   ctx.clip();
-  ctx.globalAlpha = dead ? 0.03 : 0.07;
+  ctx.globalAlpha = dead ? 0.02 : 0.045;
   ctx.fillStyle = noise;
   ctx.fillRect(x - r, y - r, r * 2, r * 2);
   ctx.restore();
@@ -437,9 +468,9 @@ function glassHex(x, y, r, mode) {
   ctx.save();
   hexPath(x, y, r);
   const rim = ctx.createLinearGradient(x, y - r, x, y + r);
-  rim.addColorStop(0, dead ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.85)");
-  rim.addColorStop(0.45, "rgba(255,255,255,0.16)");
-  rim.addColorStop(1, "rgba(255,255,255,0.04)");
+  rim.addColorStop(0, dead ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.42)");
+  rim.addColorStop(0.45, "rgba(255,255,255,0.08)");
+  rim.addColorStop(1, "rgba(255,255,255,0.03)");
   ctx.strokeStyle = rim;
   ctx.lineWidth = 1.4;
   ctx.stroke();
@@ -573,7 +604,7 @@ function drawAnchorWidget() {
     const dead = !S.armed || !canFire(S.parent);
 
     ctx.save();
-    ctx.shadowColor = hot ? "rgba(90,30,120,0.5)" : "rgba(0,0,0,0.45)";
+    ctx.shadowColor = hot ? "rgba(199,79,214,0.45)" : "rgba(0,0,0,0.55)";
     ctx.shadowBlur = hot ? 28 : 14;
     ctx.shadowOffsetY = 3;
     roundRect(r.x, r.y, r.w, r.h, A_CORNER);
@@ -595,8 +626,8 @@ function drawAnchorWidget() {
     ctx.save();
     roundRect(r.x, r.y, r.w, r.h, A_CORNER);
     const rim = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
-    rim.addColorStop(0, "rgba(255,255,255,0.8)");
-    rim.addColorStop(1, "rgba(255,255,255,0.05)");
+    rim.addColorStop(0, "rgba(255,255,255,0.38)");
+    rim.addColorStop(1, "rgba(255,255,255,0.04)");
     ctx.strokeStyle = hot ? C.accent : rim;
     ctx.lineWidth = hot ? 2 : 1.3;
     ctx.stroke();
@@ -649,8 +680,8 @@ function glassPanel(x, y, w, h, r) {
   ctx.save();
   roundRect(x, y, w, h, r);
   const rim = ctx.createLinearGradient(x, y, x, y + h);
-  rim.addColorStop(0, "rgba(255,255,255,0.85)");
-  rim.addColorStop(1, "rgba(255,255,255,0.05)");
+  rim.addColorStop(0, "rgba(255,255,255,0.38)");
+  rim.addColorStop(1, "rgba(255,255,255,0.04)");
   ctx.strokeStyle = rim;
   ctx.lineWidth = 1.4;
   ctx.stroke();
@@ -665,9 +696,9 @@ function drawSearchWidget() {
   // filter field
   ctx.save();
   roundRect(x + 14, y + 14, W_W - 28, 34, 9);
-  ctx.fillStyle = "rgba(255,255,255,0.35)";
+  ctx.fillStyle = "rgba(12,13,16,0.45)";
   ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.strokeStyle = "rgba(255,255,255,0.16)";
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.restore();
@@ -685,7 +716,7 @@ function drawSearchWidget() {
     if (i === 0) {
       ctx.save();
       roundRect(x + 14, ry, W_W - 28, 29, 8);
-      ctx.fillStyle = "rgba(255,255,255,0.42)";
+      ctx.fillStyle = "rgba(199,79,214,0.16)";
       ctx.fill();
       ctx.strokeStyle = C.accent;
       ctx.lineWidth = 1.4;
@@ -729,7 +760,7 @@ function draw() {
         glassHex(S.cx, S.cy, R, "dead");
         ctx.save();
         ctx.globalAlpha = 0.42;
-        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.strokeStyle = "rgba(235,238,245,0.85)";
         ctx.lineCap = "round";
         ctx.lineWidth = 2;
         const k = 9;
@@ -813,7 +844,7 @@ function drawToast() {
   ctx.globalAlpha = Math.min(1, left / 400);
   glassPanel(x, y, bw, bh, 12);
 
-  ctx.fillStyle = TOAST.level === "error" ? "#B3261E" : C.ink;
+  ctx.fillStyle = TOAST.level === "error" ? "#FF6B5E" : C.accent;
   ctx.fillRect(x + 1, y + 10, 3, bh - 20);
 
   ctx.fillStyle = C.ink;
