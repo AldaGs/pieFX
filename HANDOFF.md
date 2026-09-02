@@ -80,17 +80,20 @@ were "code, not facts" for too long.
 - **Script bootstrap is built, unwatched.** An action declares
   `needs: { global, file }` and the overlay wraps the snippet in a loader that
   runs the file only when the global is missing. `file` may be a bare filename,
-  which is searched in AE's script folders — `ag_masterNull.jsx` is not on this
-  machine under the usual paths, so the FIRST live test of this is also the test
-  of whether the search finds it. If it does not, the toast says
-  `script not found`, and an absolute path in the action fixes it.
-- **Two fixes are in and unwatched.** The anchor tool now rewrites animated
+  which is searched in AE's script folders — but `ag_masterNull.jsx` lives in
+  Dropbox, outside them, so `MN.file` in `hexwheel.js` is an absolute path and is
+  the first thing the settings UI should let a user change.
+  **`ag_masterNull.jsx` calls `showUI(thisObj)` unconditionally at load**, so the
+  bootstrap pops its palette the first time each session until the script carries
+  the guard the design assumes:
+  `if (!$.global.__pieFXHeadless) showUI(thisObj);`
+- **The anchor tool is rewritten and still unwatched.** It rewrites animated
   Position per keyframe (eases, tangents and roving preserved, separated
   dimensions handled) instead of calling `setValue`, which throws on an animated
-  layer. And `Create > Solid` is bound to id **2038** with no name, because
-  `"Solid..."` resolves to 3000 and 3000 makes a project solid, not a layer.
-  2038 is the remaining candidate and is unconfirmed; if it is wrong, the
-  fallback is a snippet calling `comp.layers.addSolid`.
+  layer. Its first live run crashed AE — in the plug-in, not the script: the
+  generated script had outgrown the fixed buffer it was formatted into. Fixed;
+  the behaviour itself has therefore still never been seen work.
+- `Create > Solid` at id **2038** is confirmed live: the solid lands in the comp.
 - **macOS is untouched since the rename.** The Mac tree has not been rebuilt.
 - **The gesture is always armed once toggled on.** No per-panel gating, and
   right-DRAG inside AE is still untested (S2D left that open).
