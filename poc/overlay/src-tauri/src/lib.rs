@@ -46,6 +46,51 @@ fn pipe_names() -> (String, String) {
     (find("--events", PIPE_EVENTS), find("--actions", PIPE_ACTIONS))
 }
 
+// The pid the plug-in passes with `--owner-pid`: the After Effects that
+// launched us.
+fn owner_pid() -> Option<u32> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|a| a == "--owner-pid")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse::<u32>().ok())
+}
+
+// Outlive nothing. The overlay is a windowed process with no UI of its own, so
+// an orphan is invisible except as a name in Task Manager holding a pipe open —
+// and AE would not finish quitting until it was killed by hand.
+//
+// The pipes cannot be the signal: they close on every DISARM, and surviving
+// arm/disarm/arm is the whole reason the plug-in refuses to launch a second
+// overlay. What the lifetime is actually tied to is the process that launched
+// us, so that is what this waits on. It also covers an AE that crashes without
+// ever reaching its death hook.
+#[cfg(windows)]
+fn watch_owner(pid: u32) {
+    use std::os::windows::io::RawHandle;
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const INFINITE: u32 = 0xFFFF_FFFF;
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> RawHandle;
+        fn WaitForSingleObject(h: RawHandle, ms: u32) -> u32;
+        fn CloseHandle(h: RawHandle) -> i32;
+    }
+    thread::spawn(move || unsafe {
+        let h = OpenProcess(SYNCHRONIZE, 0, pid);
+        if h.is_null() {
+            dlog(&format!("  owner {} not open-able; no watchdog", pid));
+            return;
+        }
+        WaitForSingleObject(h, INFINITE);
+        CloseHandle(h);
+        dlog(&format!("  owner {} exited -> quitting", pid));
+        std::process::exit(0);
+    });
+}
+
+#[cfg(not(windows))]
+fn watch_owner(_pid: u32) {}
+
 // Virtual-desktop origin in physical px; the frontend converts the plug-in's
 // screen coordinates to window-local with it.
 struct Origin(Mutex<(i32, i32)>);
@@ -230,6 +275,15 @@ pub fn run() {
             let _ = win.set_ignore_cursor_events(true);
 
             dlog("=== overlay started ===");
+            match owner_pid() {
+                Some(pid) => {
+                    dlog(&format!("  owner pid {}", pid));
+                    watch_owner(pid);
+                }
+                // Hand-started for development: nothing to outlive, so nothing
+                // to watch. Closing it is the developer's job.
+                None => dlog("  no --owner-pid; running unowned (dev)"),
+            }
             let handle = app.handle().clone();
             thread::spawn(move || pipe_client(handle));
 

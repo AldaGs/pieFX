@@ -676,8 +676,11 @@ LaunchOverlay(void)
 	//	the launched overlay opened the wrong pipe for reading and never
 	//	connected, while a hand-started one used the defaults and worked. Naming
 	//	a channel after what flows through it removes the perspective entirely.
-	sprintf_s(cmd, sizeof(cmd), "\"%s\" --events %s --actions %s",
-			  exe, S_tx_name, S_rx_name);
+	//	--owner-pid is the overlay's lifetime. The pipes cannot be: they close on
+	//	every disarm, and the overlay is meant to survive that. Without it an
+	//	orphan overlay outlives AE, invisible except in Task Manager.
+	sprintf_s(cmd, sizeof(cmd), "\"%s\" --events %s --actions %s --owner-pid %lu",
+			  exe, S_tx_name, S_rx_name, (unsigned long)GetCurrentProcessId());
 
 	STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
 	PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));
@@ -1405,6 +1408,27 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 	return A_Err_NONE;
 }
 
+//	Take the overlay down with us. The overlay also watches our pid and quits on
+//	its own, but that watchdog cannot be the primary route here: it waits for THIS
+//	process to exit, and the symptom being fixed is an AE that will not finish
+//	exiting while the overlay is up. Waiting on each other is not a plan. So the
+//	death hook insists, and the watchdog stays as the cover for a crash that never
+//	reaches this code.
+static void
+StopOverlay(void)
+{
+	if (!S_overlay_proc) {
+		return;
+	}
+	if (WaitForSingleObject(S_overlay_proc, 0) == WAIT_TIMEOUT) {
+		Log("  overlay: terminating at death\n");
+		TerminateProcess(S_overlay_proc, 0);
+		WaitForSingleObject(S_overlay_proc, 2000);
+	}
+	CloseHandle(S_overlay_proc);
+	S_overlay_proc = NULL;
+}
+
 static A_Err
 DeathHook(AEGP_GlobalRefcon, AEGP_DeathRefcon)
 {
@@ -1412,6 +1436,7 @@ DeathHook(AEGP_GlobalRefcon, AEGP_DeathRefcon)
 	if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
 	S_active = FALSE;
 	StopPipeServer();
+	StopOverlay();
 	return A_Err_NONE;
 }
 

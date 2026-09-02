@@ -147,16 +147,19 @@ const DEFAULTS = {
           // The map's names are not to be trusted; AE's own lookup is.
           { label: "Split + Dup", action: { kind: "ae-command", name: "Split Layer", id: 2158 } },
           {
-            // Name still unresolved — "Save Frame As..." returns 0. Likely a
-            // submenu whose leaf carries the command. Runs by id meanwhile.
+            // Resolved: the spelling carries NO ellipsis, though the menu shows
+            // one — "Save Frame As..." returns 0 and "Save Frame As" returns
+            // 2233. This opens the Render Queue route; a full-res PNG straight
+            // to disk is a separate action, still to be built.
             label: "Save Frame as PNG",
-            action: { kind: "ae-command", id: 2233 },
+            action: { kind: "ae-command", name: "Save Frame As", id: 2233 },
           },
           {
-            // Name unresolved too, but 3819 is PROVEN: the self-test really did
-            // centre the layer. Runs by id until the spelling is found.
+            // Resolved, and the capital I is the whole story: "Center in View"
+            // returns 0, "Center In View" returns 3819. AE's menu strings are
+            // not case-normalised and findMenuCommandId does not forgive.
             label: "Center in Comp",
-            action: { kind: "ae-command", id: 3819 },
+            action: { kind: "ae-command", name: "Center In View", id: 3819 },
           },
           null,
           null,

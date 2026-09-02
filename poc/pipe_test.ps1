@@ -35,6 +35,38 @@ Fire "NE drill -> N " @($summon, '{"type":"cursor","x":1060,"y":350}', '{"type":
 Fire "NW anchor c0  " @($summon, '{"type":"cursor","x":540,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":760,"y":460}')
 Fire "SW layer -> N " @($summon, '{"type":"cursor","x":540,"y":650}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')
 
+# --- context gating (`requires`) ------------------------------------------
+# Same strokes, summoned with nothing selected. A slot that needs a selection
+# must stay silent; one that needs nothing must still fire. Silence is the PASS
+# here, so it gets its own runner rather than reading as a failure.
+# A read that times out stays pending on the stream — starting a second one
+# throws "the stream is currently in use". So the pending task is kept and
+# reused: it is the same stream in the same order, so whatever arrives next is
+# exactly what the next release produced.
+$script:pending = $null
+function Expect($label, $steps, $want) {
+    foreach ($s in $steps) { $w.WriteLine($s); Start-Sleep -Milliseconds 220 }
+    $w.WriteLine('{"type":"release"}')
+    if (-not $script:pending) { $script:pending = $r.ReadLineAsync() }
+    $got = ""
+    if ($script:pending.Wait(3000)) {
+        $got = $script:pending.Result
+        $script:pending = $null
+    }
+    $ok = if ($want -eq "silence") { $got -eq "" } else { $got -ne "" }
+    Write-Output "  $label -> $(if ($ok) { 'PASS' } else { 'FAIL' })  $got"
+}
+
+$noSel = '{"type":"summon","x":800,"y":500,"hasSelection":false,"hasComp":true,"layerCount":0}'
+$noComp = '{"type":"summon","x":800,"y":500,"hasSelection":false,"hasComp":false,"layerCount":0}'
+
+Write-Output "context gating:"
+Expect "no-sel NE (Master Null, dead) " @($noSel, '{"type":"cursor","x":1060,"y":350}') "silence"
+Expect "no-sel S  (Render Queue, live)" @($noSel, '{"type":"cursor","x":800,"y":800}') "fire"
+Expect "no-sel SE>S (Comp, live)      " @($noSel, '{"type":"cursor","x":1060,"y":650}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":800}') "fire"
+Expect "no-comp SE>N (Solid, dead)    " @($noComp, '{"type":"cursor","x":1060,"y":650}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}') "silence"
+Expect "no-comp S (Render Queue, dead)" @($noComp, '{"type":"cursor","x":800,"y":800}') "silence"
+
 # toast channel: nothing comes back, it is one-way to the user
 $w.WriteLine('{"type":"toast","level":"error","text":"_mn is undefined"}')
 Write-Output "  toast sent (check overlay log for receipt)"
