@@ -77,12 +77,20 @@ were "code, not facts" for too long.
 - Per-slot context gating is **done and watched live**: `requires` is in the
   schema, the plug-in sends `hasComp` alongside `hasSelection`, and the greying
   reads correctly with nothing selected.
-- **A `script-snippet` needs its script already loaded.** `_mn.addMasterNull(...)`
-  works only once `ag_masterNull.jsx` has been run, because AE shares one
-  ExtendScript namespace. Intended fix: an action declares the global it needs
-  and the file to load, plus a one-line guard in the user's script
-  (`if (!$.global.__pieFXHeadless) showUI(thisObj);`) so a headless load does not
-  pop its palette.
+- **Script bootstrap is built, unwatched.** An action declares
+  `needs: { global, file }` and the overlay wraps the snippet in a loader that
+  runs the file only when the global is missing. `file` may be a bare filename,
+  which is searched in AE's script folders — `ag_masterNull.jsx` is not on this
+  machine under the usual paths, so the FIRST live test of this is also the test
+  of whether the search finds it. If it does not, the toast says
+  `script not found`, and an absolute path in the action fixes it.
+- **Two fixes are in and unwatched.** The anchor tool now rewrites animated
+  Position per keyframe (eases, tangents and roving preserved, separated
+  dimensions handled) instead of calling `setValue`, which throws on an animated
+  layer. And `Create > Solid` is bound to id **2038** with no name, because
+  `"Solid..."` resolves to 3000 and 3000 makes a project solid, not a layer.
+  2038 is the remaining candidate and is unconfirmed; if it is wrong, the
+  fallback is a snippet calling `comp.layers.addSolid`.
 - **macOS is untouched since the rename.** The Mac tree has not been rebuilt.
 - **The gesture is always armed once toggled on.** No per-panel gating, and
   right-DRAG inside AE is still untested (S2D left that open).

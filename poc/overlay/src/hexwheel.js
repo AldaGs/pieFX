@@ -47,6 +47,12 @@ const DIRS = [-90, -30, 30, 90, 150, 210]; // N, NE, SE, S, SW, NW
 // sends both facts with every summon, so a slot that cannot apply is drawn
 // dead and refuses to fire, instead of firing into nothing and reporting
 // success. Omit it for actions that need nothing at all.
+// Every Master Null variant is a call into the same script, so the load
+// declaration is written once. A bare filename is SEARCHED in AE's script
+// folders (ScriptUI Panels first) rather than hardcoded to one machine's
+// layout; give an absolute path here to point somewhere else.
+const MN = { global: "_mn", file: "ag_masterNull.jsx" };
+
 const DEFAULTS = {
   version: 1,
   gesture: { holdMs: 200, armMode: "center" },
@@ -65,17 +71,18 @@ const DEFAULTS = {
       {
         label: "Master Null",
         requires: "selection",
-        action: { kind: "script-snippet", code: "_mn.addMasterNull(false)" },
+        action: { kind: "script-snippet", code: "_mn.addMasterNull(false)", needs: MN },
         slots: [
           {
             label: "Comp Center",
-            action: { kind: "script-snippet", code: "_mn.addMasterNull(true)" },
+            action: { kind: "script-snippet", code: "_mn.addMasterNull(true)", needs: MN },
           },
           {
             label: "Area Center",
             action: {
               kind: "script-snippet",
               code: "_mn.addMasterNull(false,{useArea:true,skipParenting:false,forceReparent:false})",
+              needs: MN,
             },
           },
           null,
@@ -84,6 +91,7 @@ const DEFAULTS = {
             action: {
               kind: "script-snippet",
               code: "_mn.addMasterNull(false,{useArea:false,skipParenting:true,forceReparent:false})",
+              needs: MN,
             },
           },
           {
@@ -91,6 +99,7 @@ const DEFAULTS = {
             action: {
               kind: "script-snippet",
               code: "_mn.addMasterNull(false,{useArea:false,skipParenting:false,forceReparent:true})",
+              needs: MN,
             },
           },
           null,
@@ -103,10 +112,20 @@ const DEFAULTS = {
         slots: [
           // Every name here was resolved by app.findMenuCommandId on AE 2026;
           // the ids are what it returned, kept only as a locale fallback.
-          // Two of them corrected a guess taken from the command map: Solid is
-          // 3000 ("Solid...") not 2038 ("Solid"), and Text is 7034, which the
-          // map does not contain at all.
-          { label: "Solid", action: { kind: "ae-command", name: "Solid...", id: 3000 } },
+          //
+          // SOLID IS THE EXCEPTION, and it is the counter-example to the
+          // resolve-by-name rule this file argues for. "Solid..." resolves —
+          // to 3000 — and 3000 makes a solid in the PROJECT and never puts it
+          // in the comp. Resolution is not correctness: it proves a menu item
+          // by that name exists, not that it is the one you meant, and AE has
+          // more than one. So this binding carries NO name, because the name
+          // that resolves is the wrong command; the id has to win.
+          //
+          // 2038 is the command map's "Solid" and is the remaining candidate
+          // for Layer > New > Solid. Unconfirmed. If it is wrong too, the
+          // dialog-free fallback is a snippet:
+          //   comp.layers.addSolid([1,1,1], 'Solid', comp.width, comp.height, 1)
+          { label: "Solid", action: { kind: "ae-command", id: 2038 } },
           { label: "Null", action: { kind: "ae-command", name: "Null Object", id: 2767 } },
           {
             label: "Adjustment Layer",
@@ -946,6 +965,68 @@ function b64(s) {
   return btoa(unescape(encodeURIComponent(s)));
 }
 
+// --- script bootstrap -----------------------------------------------------
+// A snippet needs its script already loaded: `_mn.addMasterNull(...)` only
+// works once ag_masterNull.jsx has been run, because AE shares one ExtendScript
+// namespace and pieFX is not the thing that populated it. Before this, the
+// first Master Null of every session toasted "_mn is undefined" and the second
+// one worked — which reads as a flaky wheel rather than as a missing load.
+//
+// So an action may declare what it needs:
+//
+//   needs: { global: "_mn", file: "C:/…/ag_masterNull.jsx" }
+//
+// and the snippet is wrapped in a loader that runs the file ONLY when the
+// global is absent. The wrapping happens here, in the overlay, because the
+// whole thing crosses the pipe base64-encoded either way and the native side
+// stays a dumb executor that knows nothing about scripts.
+//
+// $.global.__pieFXHeadless is set for the duration. That is the flag a script
+// author guards their UI with —
+//
+//   if (!$.global.__pieFXHeadless) showUI(thisObj);
+//
+// — so that loading a panel script to reach its functions does not also pop its
+// palette in the middle of a gesture. Scripts without the guard still work;
+// they just show their window the first time.
+function bootstrapped(action) {
+  const n = action.needs;
+  if (!n || !n.global || !n.file) return action.code;
+  const g = JSON.stringify(n.global);
+  const f = JSON.stringify(n.file);
+  return (
+    "$.global.__pieFXHeadless = true;" +
+    "try {" +
+    "  if ($.global[" + g + "] === undefined) {" +
+    "    var __p = " + f + ", __f = new File(__p);" +
+    // A bare filename is searched in AE's own script folders instead of being
+    // a broken absolute path in someone else's settings file. The version
+    // directory is whatever is there, so this works across AE versions and
+    // across machines — which a hardcoded path never does.
+        "    if (!__f.exists && __p.indexOf('/') < 0 && __p.indexOf(String.fromCharCode(92)) < 0) {" +
+    "      var __ud = new Folder(Folder.userData.absoluteURI + '/Adobe/After Effects');" +
+    "      var __vs = __ud.exists ? __ud.getFiles() : [];" +
+    "      for (var __i = 0; __i < __vs.length && !__f.exists; __i++) {" +
+    "        if (!(__vs[__i] instanceof Folder)) { continue; }" +
+    "        var __c = [__vs[__i].absoluteURI + '/Scripts/ScriptUI Panels/' + __p," +
+    "                   __vs[__i].absoluteURI + '/Scripts/' + __p];" +
+    "        for (var __j = 0; __j < __c.length; __j++) {" +
+    "          var __t = new File(__c[__j]);" +
+    "          if (__t.exists) { __f = __t; break; }" +
+    "        }" +
+    "      }" +
+    "    }" +
+    "    if (!__f.exists) { throw new Error('pieFX: script not found: ' + __p); }" +
+    "    $.evalFile(__f);" +
+    "  }" +
+    "  if ($.global[" + g + "] === undefined) {" +
+    "    throw new Error('pieFX: loaded ' + " + f + " + ' but ' + " + g + " + ' is still undefined');" +
+    "  }" +
+    "  " + action.code + ";" +
+    "} finally { $.global.__pieFXHeadless = false; }"
+  );
+}
+
 function sendFire(action, cell) {
   if (!action) return;
   let m = null;
@@ -960,7 +1041,7 @@ function sendFire(action, cell) {
       if (action.id) m.id = action.id;
       break;
     case "script-snippet":
-      m = { type: "fire", kind: "script-snippet", b64: b64(action.code) };
+      m = { type: "fire", kind: "script-snippet", b64: b64(bootstrapped(action)) };
       break;
     case "script-file":
       m = { type: "fire", kind: "script-file", b64: b64(action.path) };

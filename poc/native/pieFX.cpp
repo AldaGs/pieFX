@@ -175,8 +175,24 @@ WriteReport(AEGP_SuiteHandler &suites, const char *fileZ, const char *bodyZ, con
 //	the generalised anchor script (S1, from centre to any grid fraction)
 //
 //	fx, fy in {0, 0.5, 1} pick the anchor's position on the layer's source rect.
-//	The position compensation (delta pushed through Scale and Z-Rotation so the
-//	pixels stay put) is exactly the S1 spike's; only cx/cy are parameterised.
+//	The position compensation - the delta pushed through Scale and Z-Rotation so
+//	the pixels stay put - is the S1 spike's; fx/fy are what got parameterised.
+//
+//	ANIMATION. The spike only ever called setValue, which is wrong twice over on
+//	an animated layer: it throws on a property that has keyframes, and even where
+//	it did not, one static offset is the wrong answer whenever Scale or Rotation
+//	are themselves animated, because the layer-space delta maps to a DIFFERENT
+//	parent-space offset at every time. So the compensation is sampled per
+//	keyframe: each Position key is rewritten at its own time with the delta
+//	computed from Scale and Rotation as they are at that time. The keys do not
+//	move in time, and their interpolation, temporal eases, spatial tangents and
+//	roving are captured and put back, because setValueAtTime does not preserve
+//	them. Separated dimensions are handled through their followers, and an
+//	animated Anchor Point is shifted wholesale by the same layer-space delta so
+//	its own animation survives.
+//
+//	Match names, not English property names: 'Anchor Point' does not exist on a
+//	localised After Effects.
 // ---------------------------------------------------------------------------
 static const char *S_anchor_script_fmt =
 	"(function(){"
@@ -184,40 +200,79 @@ static const char *S_anchor_script_fmt =
 	"  if (!(c instanceof CompItem)) { return 'no active comp'; }"
 	"  var sel = c.selectedLayers;"
 	"  if (sel.length === 0) { return 'no layer selected'; }"
+	"  var T = c.time;"
+	"  function snap(p, k) {"
+	"    return { ii: p.keyInInterpolationType(k), oi: p.keyOutInterpolationType(k),"
+	"             ie: p.keyInTemporalEase(k), oe: p.keyOutTemporalEase(k),"
+	"             is: p.isSpatial ? p.keyInSpatialTangent(k) : null,"
+	"             os: p.isSpatial ? p.keyOutSpatialTangent(k) : null,"
+	"             rv: p.isSpatial ? p.keyRoving(k) : false };"
+	"  }"
+	"  function restore(p, k, s) {"
+	"    if (p.isSpatial) {"
+	"      p.setSpatialTangentsAtKey(k, s.is, s.os);"
+	"      try { p.setRovingAtKey(k, s.rv); } catch (e) {}"
+	"    }"
+	"    p.setInterpolationTypeAtKey(k, s.ii, s.oi);"
+	"    if (s.ii === KeyframeInterpolationType.BEZIER || s.oi === KeyframeInterpolationType.BEZIER) {"
+	"      try { p.setTemporalEaseAtKey(k, s.ie, s.oe); } catch (e) {}"
+	"    }"
+	"  }"
+	"  function add(v, d) {"
+	"    if (v instanceof Array) {"
+	"      var o = [];"
+	"      for (var i = 0; i < v.length; i++) { o[i] = v[i] + (d[i] || 0); }"
+	"      return o;"
+	"    }"
+	"    return v + (d[0] || 0);"
+	"  }"
+	"  function shift(p, dfn) {"
+	"    if (p.numKeys > 0) {"
+	"      var n = p.numKeys, ts = [], sn = [], k;"
+	"      for (k = 1; k <= n; k++) { ts.push(p.keyTime(k)); sn.push(snap(p, k)); }"
+	"      for (k = 0; k < n; k++) { p.setValueAtTime(ts[k], add(p.valueAtTime(ts[k], false), dfn(ts[k]))); }"
+	"      for (k = 1; k <= n; k++) { restore(p, k, sn[k - 1]); }"
+	"      return n;"
+	"    }"
+	"    p.setValue(add(p.value, dfn(T)));"
+	"    return 0;"
+	"  }"
 	"  app.beginUndoGroup('pieFX: Anchor');"
-	"  var moved = 0;"
+	"  var moved = 0, animated = 0, skipped = 0;"
 	"  for (var i = 0; i < sel.length; i++) {"
 	"    var L = sel[i];"
-	"    var ap = L.property('Anchor Point');"
-	"    if (!ap) { continue; }"
-	"    var r;"
-	"    try { r = L.sourceRectAtTime(c.time, false); } catch (e) { continue; }"
-	"    var oldA = ap.value;"
-	"    var cx = r.left + r.width * (%f);"
-	"    var cy = r.top + r.height * (%f);"
-	"    var dx = cx - oldA[0];"
-	"    var dy = cy - oldA[1];"
-	"    var s = L.property('Scale').value;"
-	"    var sx = dx * s[0] / 100;"
-	"    var sy = dy * s[1] / 100;"
-	"    var rot = L.threeDLayer ? L.property('Z Rotation').value : L.property('Rotation').value;"
-	"    var th = rot * Math.PI / 180;"
-	"    var ct = Math.cos(th), st = Math.sin(th);"
-	"    var pdx = sx * ct - sy * st;"
-	"    var pdy = sx * st + sy * ct;"
-	"    var pos = L.property('Position');"
-	"    var p = pos.value;"
-	"    if (L.threeDLayer) {"
-	"      ap.setValue([cx, cy, oldA[2]]);"
-	"      pos.setValue([p[0] + pdx, p[1] + pdy, p[2]]);"
-	"    } else {"
-	"      ap.setValue([cx, cy]);"
-	"      pos.setValue([p[0] + pdx, p[1] + pdy]);"
-	"    }"
-	"    moved++;"
+	"    try {"
+	"      var tg = L.property('ADBE Transform Group');"
+	"      var ap = tg.property('ADBE Anchor Point');"
+	"      var pos = tg.property('ADBE Position');"
+	"      var scl = tg.property('ADBE Scale');"
+	"      var rot = tg.property('ADBE Rotate Z');"
+	"      var r = L.sourceRectAtTime(T, false);"
+	"      var oldA = ap.valueAtTime(T, false);"
+	"      var dx = r.left + r.width * (%f) - oldA[0];"
+	"      var dy = r.top + r.height * (%f) - oldA[1];"
+	"      var dfn = (function (dx, dy, scl, rot) { return function (t) {"
+	"        var s = scl.valueAtTime(t, false);"
+	"        var th = rot.valueAtTime(t, false) * Math.PI / 180;"
+	"        var sx = dx * s[0] / 100, sy = dy * s[1] / 100;"
+	"        return [sx * Math.cos(th) - sy * Math.sin(th), sx * Math.sin(th) + sy * Math.cos(th), 0];"
+	"      }; })(dx, dy, scl, rot);"
+	"      var keys = 0;"
+	"      if (pos.dimensionsSeparated) {"
+	"        keys += shift(pos.getSeparationFollower(0), function (t) { return [dfn(t)[0]]; });"
+	"        keys += shift(pos.getSeparationFollower(1), function (t) { return [dfn(t)[1]]; });"
+	"      } else {"
+	"        keys += shift(pos, dfn);"
+	"      }"
+	"      shift(ap, (function (dx, dy) { return function () { return [dx, dy, 0]; }; })(dx, dy));"
+	"      if (keys > 0) { animated++; }"
+	"      moved++;"
+	"    } catch (e) { skipped++; }"
 	"  }"
 	"  app.endUndoGroup();"
-	"  return 'moved ' + moved + ' layer(s)';"
+	"  return 'moved ' + moved + ' layer(s)'"
+	"       + (animated ? ', ' + animated + ' animated' : '')"
+	"       + (skipped ? ', ' + skipped + ' skipped' : '');"
 	"})()";
 
 // ---------------------------------------------------------------------------
@@ -360,7 +415,10 @@ B64Val(char c)
 	return -1;
 }
 
-static void
+//	Returns FALSE when the payload did not fit. Silent truncation would hand
+//	ExtendScript half a script, which fails as a syntax error a long way from
+//	its cause - and the script bootstrap made long payloads ordinary.
+static A_Boolean
 B64Decode(const char *inZ, char *outZ, size_t out_max)
 {
 	size_t	o		= 0;
@@ -384,6 +442,7 @@ B64Decode(const char *inZ, char *outZ, size_t out_max)
 		}
 	}
 	outZ[o] = 0;
+	return (o + 1 < out_max) ? TRUE : FALSE;
 }
 
 // ---------------------------------------------------------------------------
@@ -453,7 +512,10 @@ HandleOverlayLine(const char *lineZ)
 		char b64[PIEFX_B64_MAX] = { 0 };
 
 		if (JsonStr(lineZ, "\"b64\":", b64, sizeof(b64))) {
-			B64Decode(b64, a.text, sizeof(a.text));
+			if (!B64Decode(b64, a.text, sizeof(a.text))) {
+				SendToast("error", "pieFX: menu name too long");
+				return;
+			}
 		}
 		JsonNum(lineZ, "\"id\":", &a.id);
 
@@ -469,7 +531,10 @@ HandleOverlayLine(const char *lineZ)
 		if (!JsonStr(lineZ, "\"b64\":", b64, sizeof(b64))) {
 			return;
 		}
-		B64Decode(b64, a.text, sizeof(a.text));
+		if (!B64Decode(b64, a.text, sizeof(a.text))) {
+			SendToast("error", "pieFX: script too long for one action");
+			return;
+		}
 
 		a.kind = !strcmp(kind, "script-snippet") ? PK_SNIPPET
 			   : !strcmp(kind, "script-file")	? PK_FILE

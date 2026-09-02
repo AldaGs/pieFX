@@ -144,8 +144,38 @@ and the whole variant space of that script is reachable without pieFX knowing
 anything about it. `addMasterNull` already defaults its `mods` argument when
 there is no click behind it, which is precisely the call shape a wheel makes.
 
-The settings UI should therefore offer both and steer script authors toward
-snippets, with the note that a snippet needs its script loaded first.
+**The bootstrap.** "A snippet needs its script loaded first" was true and
+unhelpful: the first Master Null of every session toasted `_mn is undefined` and
+the second worked, which reads as a flaky wheel. So an action may declare what
+it needs:
+
+    "action": {
+      "kind":  "script-snippet",
+      "code":  "_mn.addMasterNull(false)",
+      "needs": { "global": "_mn", "file": "ag_masterNull.jsx" }
+    }
+
+The overlay wraps the snippet in a loader that runs the file **only when the
+global is absent**, and the whole thing crosses the pipe base64-encoded as
+before — the native side stays a dumb executor that knows nothing about scripts.
+
+`file` may be an absolute path, or a **bare filename**, which is searched in
+AE's own script folders (`Scripts/ScriptUI Panels` first, then `Scripts`, under
+every version directory in the user data folder). A bare name is preferred in
+anything shared: an absolute path is one machine's layout.
+
+`$.global.__pieFXHeadless` is set for the duration of the call. That is the flag
+a script author guards their UI with —
+
+    if (!$.global.__pieFXHeadless) showUI(thisObj);
+
+— so that loading a panel script to reach its functions does not also pop its
+palette in the middle of a gesture. Scripts without the guard still work; they
+just show their window the first time.
+
+The settings UI should offer both kinds and steer script authors toward
+snippets, with `needs` presented as part of the snippet form rather than as an
+advanced option — a snippet without it is the flaky case.
 
 **Undo discipline.** A snippet that throws inside an open undo group wedges AE's
 undo stack until some other script happens to close one. `ag_masterNull.jsx`
@@ -221,6 +251,12 @@ Notes that are load-bearing rather than cosmetic:
   common case one flick.
 - **`armMode`** is a setting, defaulting to `"center"`. `"exit"` is faster but
   needs a leave-and-return to pick the child lying in the parent's own direction.
+- **A resolved name is not a correct name.** `Create > Solid` carries an id and
+  no name, alone among the menu bindings, because `"Solid..."` resolves — to
+  3000, which makes a solid in the **project** and never puts it in the comp.
+  `findMenuCommandId` proves an item by that name exists, not that it is the one
+  you meant, and After Effects has more than one. Prefer the name; drop it the
+  moment behaviour disagrees with it.
 - **`requires` is what makes the wheel honest.** `"selection"` needs one or more
   selected layers, `"comp"` needs a comp as the active item; absent means the
   action needs nothing. The plug-in sends both facts (`hasSelection`, `hasComp`)
