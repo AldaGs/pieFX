@@ -30,6 +30,7 @@
 // ---------------------------------------------------------------------------
 static AEGP_Command		S_toggle_cmd	= 0L;
 static AEGP_Command		S_selftest_cmd	= 0L;
+static AEGP_Command		S_cmdprobe_cmd	= 0L;
 static AEGP_PluginID	S_my_id			= 0L;
 static SPBasicSuite		*sP				= NULL;
 
@@ -1137,6 +1138,94 @@ RunSelfTest(AEGP_SuiteHandler &suites)
 }
 
 // ---------------------------------------------------------------------------
+//	AE command probe
+//
+//	The executor self-test showed ae-command 3819 working (the layer really did
+//	centre) while 2279 and 2767 returned SUCCESS and did nothing visible. That is
+//	the silent-wrong-id case the command map was always going to produce, but it
+//	has two possible causes and they need different fixes:
+//
+//	  a) the ids are wrong for AE 2026 (the map was hand-tested on 2025), or
+//	  b) the ids are right but a Layer > New command will not run in the state the
+//	     gesture leaves AE in - note 3819 fired from a MENU command while 2279 and
+//	     2767 fired from the gesture path.
+//
+//	This probe fires them from a menu command. If layers appear here but not from
+//	the wheel, it is (b). If nothing appears either way, it is (a).
+//
+//	It COUNTS THE LAYERS before and after rather than asking whether DoCommand
+//	returned an error, because that return value is exactly what lied last time.
+// ---------------------------------------------------------------------------
+static A_long
+CountCompLayers(AEGP_SuiteHandler &suites)
+{
+	A_Err		err		= A_Err_NONE;
+	AEGP_ItemH	itemH	= NULL;
+	AEGP_CompH	compH	= NULL;
+	A_long		n		= -1;
+
+	ERR(suites.ItemSuite6()->AEGP_GetActiveItem(&itemH));
+
+	if (err || !itemH) {
+		return -1;
+	}
+	ERR(suites.CompSuite11()->AEGP_GetCompFromItem(itemH, &compH));
+
+	if (err || !compH) {
+		return -1;
+	}
+	ERR(suites.LayerSuite9()->AEGP_GetCompNumLayers(compH, &n));
+	return err ? -1 : n;
+}
+
+static void
+ProbeCommand(AEGP_SuiteHandler &suites, long id, const char *nameZ,
+			 char *summaryZ, size_t summary_max)
+{
+	A_Err	err2	= A_Err_NONE, err = A_Err_NONE;
+	A_long	before	= CountCompLayers(suites);
+
+	ERR2(suites.CommandSuite1()->AEGP_DoCommand((AEGP_Command)id));
+
+	A_long	after	= CountCompLayers(suites);
+	char	line[200];
+
+	if (before < 0 || after < 0) {
+		sprintf_s(line, sizeof(line), "  %-18s id %4ld : NO ACTIVE COMP\n", nameZ, id);
+	} else if (after > before) {
+		sprintf_s(line, sizeof(line), "  %-18s id %4ld : WORKS (%ld -> %ld layers)\n",
+				  nameZ, id, before, after);
+	} else {
+		sprintf_s(line, sizeof(line),
+				  "  %-18s id %4ld : DID NOTHING (%ld layers, err %d)\n",
+				  nameZ, id, before, (int)err2);
+	}
+	Log("%s", line);
+	strcat_s(summaryZ, summary_max, line);
+}
+
+static void
+RunCommandProbe(AEGP_SuiteHandler &suites)
+{
+	char summary[1024] = { 0 };
+
+	Log("\n=== ae-command probe ===\n");
+	strcat_s(summary, sizeof(summary),
+		"Fired from a MENU command, counting the comp's layers around each one.\n"
+		"WORKS here but not from the wheel = an invocation-context problem.\n"
+		"DID NOTHING here too = the id is simply wrong for this AE.\n");
+
+
+	ProbeCommand(suites, PIEFX_PROBE_NULL,  "Null Object",      summary, sizeof(summary));
+	ProbeCommand(suites, PIEFX_PROBE_ADJ_A, "Adjustment (A)",   summary, sizeof(summary));
+	ProbeCommand(suites, PIEFX_PROBE_ADJ_B, "Adjustment (B)",   summary, sizeof(summary));
+
+	strcat_s(summary, sizeof(summary), "\nUndo three times to clean up.");
+	Log("=== ae-command probe done ===\n");
+	suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, summary);
+}
+
+// ---------------------------------------------------------------------------
 //	AEGP hooks
 // ---------------------------------------------------------------------------
 static A_Err
@@ -1199,6 +1288,7 @@ UpdateMenuHook(AEGP_GlobalRefcon, AEGP_UpdateMenuRefcon, AEGP_WindowType)
 	//	Always available - arming is a global mode, not a per-comp action.
 	suites.CommandSuite1()->AEGP_EnableCommand(S_toggle_cmd);
 	suites.CommandSuite1()->AEGP_EnableCommand(S_selftest_cmd);
+	suites.CommandSuite1()->AEGP_EnableCommand(S_cmdprobe_cmd);
 	return A_Err_NONE;
 }
 
@@ -1272,6 +1362,12 @@ CommandHook(AEGP_GlobalRefcon, AEGP_CommandRefcon, AEGP_Command command,
 	if (command == S_toggle_cmd) {
 		ToggleActive(suites);
 		*handledPB = TRUE;
+	} else if (command == S_cmdprobe_cmd) {
+		if (!S_log_path[0]) {
+			ResolveLogPath();
+		}
+		RunCommandProbe(suites);
+		*handledPB = TRUE;
 	} else if (command == S_selftest_cmd) {
 		if (!S_log_path[0]) {
 			ResolveLogPath();
@@ -1305,6 +1401,10 @@ EntryPointFunc(
 
 	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_toggle_cmd));
 	ERR(suites.CommandSuite1()->AEGP_InsertMenuCommand(S_toggle_cmd, PIEFX_MENU_NAME,
+														AEGP_Menu_WINDOW, AEGP_MENU_INSERT_SORTED));
+
+	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_cmdprobe_cmd));
+	ERR(suites.CommandSuite1()->AEGP_InsertMenuCommand(S_cmdprobe_cmd, PIEFX_CMDPROBE_NAME,
 														AEGP_Menu_WINDOW, AEGP_MENU_INSERT_SORTED));
 
 	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_selftest_cmd));

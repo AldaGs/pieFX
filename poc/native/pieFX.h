@@ -51,6 +51,19 @@
 //	command map, which is exactly the thing being checked.
 #define PIEFX_TEST_COMMAND	3819
 
+//	Layer > New commands, fired one after another by the command probe. They are
+//	the two the wheel uses that reported success and then did nothing, plus the
+//	map's OTHER AdjustmentLayer id - the name appears twice, at 2263 and 2279,
+//	and only one of them can be right.
+//
+//	All three create a layer immediately with no dialog, so the probe is
+//	countable by eye and undoes cleanly.
+#define PIEFX_PROBE_NULL	2767
+#define PIEFX_PROBE_ADJ_A	2279
+#define PIEFX_PROBE_ADJ_B	2263
+
+#define PIEFX_CMDPROBE_NAME	"pieFX Self-Test (AE Commands)"
+
 //	Named pipes the overlay connects to. Native is the server on both.
 //
 //	ONE PIPE PER DIRECTION, deliberately. A single duplex pipe opened WITHOUT

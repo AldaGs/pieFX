@@ -661,8 +661,17 @@ function draw() {
     }
   }
 
-  drawToast();
-  drawHud();
+  // A throw anywhere above used to abort before the next frame was scheduled,
+  // which silently killed the render loop and froze the overlay for the rest of
+  // the session with no clue why. (An undefined constant in drawToast did
+  // exactly that.) One bad frame should cost one frame.
+  try {
+    drawToast();
+    drawHud();
+  } catch (e) {
+    if (window.__PIEFX_SAY__) window.__PIEFX_SAY__("draw error: " + e);
+    else console.error("draw error:", e);
+  }
   requestAnimationFrame(draw);
 }
 
@@ -676,12 +685,20 @@ function drawToast() {
   if (left <= 0) return;
 
   const w = window.innerWidth;
+  const h = window.innerHeight;
   ctx.font = "600 14px system-ui, 'Segoe UI', sans-serif";
-  const tw = Math.min(ctx.measureText(TOAST.text).width + 40, w - 80);
-  const bw = tw;
-  const bh = 42;
-  const x = (w - bw) / 2;
-  const y = 42;
+  const bw = Math.min(ctx.measureText(TOAST.text).width + 44, 520);
+  const bh = 44;
+
+  // Anchored to the last summon, NOT to the window. innerWidth here is the
+  // whole virtual desktop, so a window-centred toast lands near the seam
+  // between monitors — which is how the first real error went unseen while
+  // the user was working on the other screen. The wheel is cursor-anchored
+  // for the same reason.
+  const ax = S.cx || w / 2;
+  const ay = S.cy || h / 2;
+  const x = Math.max(12, Math.min(w - bw - 12, ax - bw / 2));
+  const y = Math.max(12, Math.min(h - bh - 12, ay + SPACING + R + 26));
 
   // fade the last 400ms so it leaves rather than blinks out
   ctx.save();
@@ -915,7 +932,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     .catch((e) => say("listen FAILED " + e));
 } else {
   window.__PIEFX_LOCAL__ = true;
-  window.__PIEFX__ = { S, summon, move, release, MENU };
+  window.__PIEFX__ = { S, summon, move, release, toast, MENU };
   let holdTimer = null;
   let downAt = null;
 

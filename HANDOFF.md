@@ -28,7 +28,10 @@ the offline harness.
 | Two-way pipe, one per direction, with a ready handshake | harness + live |
 | Hexagon wheel: drill-down, arming, category defaults | harness, 5 gestures |
 | `script-snippet` executor (Master Null) | **live in AE** |
-| `ae-command` / `script-file` / `effect` / `anchor-grid` executors | wired and covered by the self-test; run it to confirm |
+| `script-file` executor | **live** — self-test writes a .jsx and confirms it ran |
+| `effect` executor | **live** — Gaussian Blur appeared |
+| `anchor-grid` executor via the overlay path | **live** — anchor recentred |
+| `ae-command` **3819** (Center in View) | **live** — the layer really centred |
 | Second AE instance gets its own pipes | harness, custom names on the command line |
 | Errors reach the user as a non-modal toast | harness |
 
@@ -39,6 +42,16 @@ the five must be judged by eye. That command exists because those paths were
 
 ## What is NOT proven, and what is missing
 
+- **Two AE command ids report success and do nothing.** `2767` (Null Object) and
+  `2279` (Adjustment Layer) fired from the wheel with no error and produced no
+  layer, while `3819` worked. That is the silent-wrong-id case, and it has two
+  possible causes needing different fixes: the ids are wrong for 2026, or they
+  are right but a `Layer > New` command will not run in the state the gesture
+  leaves AE in (3819 was fired from a *menu* command, those two from the
+  *gesture* path). **`Window > pieFX Self-Test (AE Commands)`** settles it — it
+  fires 2767, 2279 and the map's other AdjustmentLayer id 2263 from a menu
+  command and **counts the comp's layers** around each, because the DoCommand
+  return value is exactly what lied. `2161` is still unconfirmed either way.
 - **The AE command ids are the biggest unknown.** `poc/overlay/src/ae-commands-2025.json`
   was hand-tested by another developer against AE 2025; we run 2026. Checking the
   first draft of the defaults against it already caught three wrong guesses. A
