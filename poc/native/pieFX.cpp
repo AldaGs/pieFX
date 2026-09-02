@@ -97,6 +97,10 @@ static char				S_tx_name[128]	= { 0 };
 static char				S_rx_name[128]	= { 0 };
 
 static HANDLE			S_overlay_proc	= NULL;
+//	Kept open for the life of the process ON PURPOSE. The job is configured to
+//	kill everything in it when its last handle closes, and process exit closes
+//	it - so the overlay cannot outlive AE even if AE never runs a death hook.
+static HANDLE			S_overlay_job	= NULL;
 
 static HANDLE			S_pipe			= INVALID_HANDLE_VALUE;	// TX: UI thread writes
 static HANDLE			S_pipe_rx		= INVALID_HANDLE_VALUE;	// RX: pipe thread reads
@@ -725,12 +729,45 @@ LaunchOverlay(void)
 	sprintf_s(cmd, sizeof(cmd), "\"%s\" --events %s --actions %s --owner-pid %lu",
 			  exe, S_tx_name, S_rx_name, (unsigned long)GetCurrentProcessId());
 
+	//	A JOB OBJECT is the actual guarantee, and the reason the two earlier
+	//	attempts were not enough. The death hook DID fire and DID terminate
+	//	the overlay - the log says so - and AE still would not finish
+	//	quitting, because terminating the overlay leaves its WebView2 children
+	//	behind, and that is the process tree that hangs on. A job kills the
+	//	whole tree, and kills it on HANDLE CLOSE, which process exit does for
+	//	us - so it also covers the crash the death hook never reaches, with
+	//	neither side waiting on the other.
+	if (!S_overlay_job) {
+		S_overlay_job = CreateJobObjectA(NULL, NULL);
+		if (S_overlay_job) {
+			JOBOBJECT_EXTENDED_LIMIT_INFORMATION li;
+			ZeroMemory(&li, sizeof(li));
+			li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+			if (!SetInformationJobObject(S_overlay_job, JobObjectExtendedLimitInformation,
+										 &li, sizeof(li))) {
+				Log("  overlay: job limit not set, err=%lu\n", (unsigned long)GetLastError());
+			}
+		} else {
+			Log("  overlay: CreateJobObject failed, err=%lu\n", (unsigned long)GetLastError());
+		}
+	}
+
+	//	Suspended, so the process is inside the job before it can spawn a
+	//	single WebView2 child. Assign-then-resume is the whole point: a child
+	//	born in the gap would be outside the job, and outside the job is
+	//	exactly the leak this is here to stop.
 	STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
 	PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));
-	if (CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
+	if (CreateProcessA(exe, cmd, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, dir, &si, &pi)) {
+		if (S_overlay_job && !AssignProcessToJobObject(S_overlay_job, pi.hProcess)) {
+			Log("  overlay: AssignProcessToJobObject failed, err=%lu\n",
+				(unsigned long)GetLastError());
+		}
+		ResumeThread(pi.hThread);
 		CloseHandle(pi.hThread);
 		S_overlay_proc = pi.hProcess;		// kept, to answer "is it still up?"
-		Log("  overlay: launched %s (tx=%s)\n", exe, S_tx_name);
+		Log("  overlay: launched %s (tx=%s, job=%s)\n", exe, S_tx_name,
+			S_overlay_job ? "yes" : "NO");
 	} else {
 		Log("  overlay: CreateProcess failed, err=%lu\n", (unsigned long)GetLastError());
 	}
@@ -1455,30 +1492,43 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 	return A_Err_NONE;
 }
 
-//	Take the overlay down with us. The overlay also watches our pid and quits on
-//	its own, but that watchdog cannot be the primary route here: it waits for THIS
-//	process to exit, and the symptom being fixed is an AE that will not finish
-//	exiting while the overlay is up. Waiting on each other is not a plan. So the
-//	death hook insists, and the watchdog stays as the cover for a crash that never
-//	reaches this code.
+//	Take the overlay down with us. Three mechanisms, because the first two were
+//	measured to be insufficient: the death hook fired and terminated the overlay
+//	and AE still would not finish quitting.
+//
+//	  1. the job object, which kills the whole process TREE - the overlay and
+//	     the WebView2 children it spawns - and does it on handle close, so it
+//	     works whether or not this code ever runs;
+//	  2. this terminate, which is the orderly route when the hook does run;
+//	  3. the overlay's own --owner-pid watchdog, for a crash that reaches
+//	     neither of the above.
 static void
 StopOverlay(void)
 {
-	if (!S_overlay_proc) {
-		return;
+	if (S_overlay_proc) {
+		if (WaitForSingleObject(S_overlay_proc, 0) == WAIT_TIMEOUT) {
+			Log("  overlay: terminating at death\n");
+			TerminateProcess(S_overlay_proc, 0);
+			WaitForSingleObject(S_overlay_proc, 2000);
+		}
+		CloseHandle(S_overlay_proc);
+		S_overlay_proc = NULL;
 	}
-	if (WaitForSingleObject(S_overlay_proc, 0) == WAIT_TIMEOUT) {
-		Log("  overlay: terminating at death\n");
-		TerminateProcess(S_overlay_proc, 0);
-		WaitForSingleObject(S_overlay_proc, 2000);
+
+	//	Unconditional, and NOT inside the branch above: terminating the overlay
+	//	leaves its WebView2 children running, and closing the last job handle is
+	//	what takes those with it.
+	if (S_overlay_job) {
+		CloseHandle(S_overlay_job);
+		S_overlay_job = NULL;
+		Log("  overlay: job closed (takes the WebView2 children with it)\n");
 	}
-	CloseHandle(S_overlay_proc);
-	S_overlay_proc = NULL;
 }
 
 static A_Err
 DeathHook(AEGP_GlobalRefcon, AEGP_DeathRefcon)
 {
+	Log("=== death hook ===\n");
 	CancelHoldTimer();
 	if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
 	S_active = FALSE;

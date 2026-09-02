@@ -43,7 +43,9 @@ the offline harness (`poc/pipe_test.ps1`).
 | `Create > Comp` (`New Composition...`, 2000) | **live** |
 | `Layer > Pre-comp` (2071) and `Layer > Split + Dup` (2158) | **live** |
 | Dark-glass palette | **live**, and the user's call |
-| Overlay dies with AE (death hook, plus an `--owner-pid` watchdog) | **not yet** — written, built, unwatched |
+| `Create` (Solid/Null/Adjustment/Light/Camera), `Layer > Center in Comp` | **live** |
+| Per-slot `requires` greying | **live** — greys correctly with nothing selected |
+| Overlay dies with AE | **NO** — see below; third attempt is a job object, unwatched |
 
 Two menu commands to run after any install, both under `Window`:
 **pieFX Self-Test (Executors)** fires one of every action kind, and
@@ -72,12 +74,19 @@ were "code, not facts" for too long.
   `hexwheel.js`. `armMode` likewise defaults to `"center"` in code.
 - **The Effects search widget is a mock.** It draws and fires nothing. S5 found
   519 installed effects, so its real form is a filter field over the catalogue.
-- **Per-slot context gating is still not watched in AE.** The schema now
-  has `requires: "selection" | "comp"`, the plug-in sends `hasComp` alongside
-  `hasSelection`, and the overlay draws un-appliable slots dead, refuses to fire
-  them and says why in a toast. Verified only by a headless harness over
-  `hexwheel.js`, plus the browser HUD (`S` and `C` fake the context). Not seen
-  live, and the native side has not been recompiled since.
+- **The overlay still outlived AE, twice.** The death hook is not the problem:
+  the log shows `=== death hook ===` and `overlay: terminating at death`, so it
+  ran and it terminated the process — and AE still would not finish quitting
+  until the overlay was killed by hand. The remaining suspect is the process
+  TREE: terminating the overlay leaves its WebView2 children behind. Third
+  attempt is a **job object** with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which
+  kills the tree and does it when the handle closes — so it does not depend on
+  the death hook running at all. Unwatched. **When testing, check Task Manager
+  for `msedgewebview2.exe` as well as `pieFX-overlay.exe`**: which one is still
+  standing is the measurement that names the cause.
+- Per-slot context gating is **done and watched live**: `requires` is in the
+  schema, the plug-in sends `hasComp` alongside `hasSelection`, and the greying
+  reads correctly with nothing selected.
 - **A `script-snippet` needs its script already loaded.** `_mn.addMasterNull(...)`
   works only once `ag_masterNull.jsx` has been run, because AE shares one
   ExtendScript namespace. Intended fix: an action declares the global it needs
@@ -177,12 +186,11 @@ no-ops.
 Roughly in order. The first two are cheap and close open measurements; the third
 is the real remaining feature work.
 
-1. **Confirm the `requires` gating live.** The code is in and `SETTINGS.md`
-   carries the rule; what is missing is one AE session. Rebuild the native
-   plug-in first — `hasComp` is new in the summon message. With nothing
-   selected the wheel should still appear, with `Create` and `Queue Comp to
-   Render` live and the rest dead, and releasing on a dead slot should toast
-   what is missing rather than fire.
+1. **Get AE to quit cleanly.** The only thing in the way of the settings UI.
+   Attempt three is the job object; if it also fails, the log now prints the
+   death hook and the job close, and Task Manager says whether what survives is
+   `pieFX-overlay.exe` or `msedgewebview2.exe`. Do not guess again without
+   that.
 2. **The settings UI**, as a large clickable wheel with an inspector: label,
    action kind, kind-specific fields, and a **test-fire button per binding** —
    which is the practical safety net for menu ids and names alike. Wire it to

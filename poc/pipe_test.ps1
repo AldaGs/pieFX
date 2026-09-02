@@ -72,5 +72,18 @@ $w.WriteLine('{"type":"toast","level":"error","text":"_mn is undefined"}')
 Write-Output "  toast sent (check overlay log for receipt)"
 Start-Sleep -Milliseconds 800
 
-$proc.Kill(); $tx.Dispose(); $rx.Dispose()
+# Kill the TREE, not just the launcher. The overlay spawns WebView2 children,
+# and one of these runs left something alive that held the release binary and
+# made the next cargo build fail with "access denied" — the same leak the
+# plug-in now uses a job object to prevent.
+Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+$proc.WaitForExit(4000) | Out-Null
+$tx.Dispose(); $rx.Dispose()
+
+$stray = @(Get-Process pieFX-overlay -ErrorAction SilentlyContinue)
+if ($stray.Count) {
+    Write-Output "WARNING: $($stray.Count) pieFX-overlay process(es) still running: $($stray.Id -join ', ')"
+} else {
+    Write-Output "no stray overlay processes"
+}
 Write-Output "done"
