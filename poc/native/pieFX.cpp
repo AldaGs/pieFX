@@ -29,6 +29,7 @@
 //	globals
 // ---------------------------------------------------------------------------
 static AEGP_Command		S_toggle_cmd	= 0L;
+static AEGP_Command		S_selftest_cmd	= 0L;
 static AEGP_PluginID	S_my_id			= 0L;
 static SPBasicSuite		*sP				= NULL;
 
@@ -86,6 +87,15 @@ static int				S_q_tail		= 0;
 
 //	pipe (native = server). Writes happen on the UI thread; a background thread
 //	owns accept/re-accept. The critical section guards the handle + flags.
+//	Resolved at arm time. The base names are used when free, so the plain dev
+//	flow (running the overlay by hand) keeps working; a SECOND AE instance finds
+//	them taken and falls back to a pid suffix instead of silently having no
+//	overlay at all. The launched overlay is told which names to use.
+static char				S_tx_name[128]	= { 0 };
+static char				S_rx_name[128]	= { 0 };
+
+static HANDLE			S_overlay_proc	= NULL;
+
 static HANDLE			S_pipe			= INVALID_HANDLE_VALUE;	// TX: UI thread writes
 static HANDLE			S_pipe_rx		= INVALID_HANDLE_VALUE;	// RX: pipe thread reads
 static HANDLE			S_pipe_thread	= NULL;
@@ -204,6 +214,34 @@ static void SendCursor(LONG x, LONG y)
 }
 static void SendRelease(void) { PipeWrite("{\"type\":\"release\"}\n"); }
 static void SendCancel(void)  { PipeWrite("{\"type\":\"cancel\"}\n"); }
+
+//	Errors have to reach the user, but AEGP_ReportInfo is MODAL - throwing a
+//	dialog at someone mid-gesture is worse than the failure it reports. The
+//	overlay is already on screen and already non-modal, so it draws a toast.
+//
+//	Quotes and control characters are STRIPPED rather than escaped. These strings
+//	are ours and short, and a hand-rolled escaper is precisely the thing that has
+//	bitten this project before.
+static void SendToast(const char *levelZ, const char *textZ)
+{
+	char	safe[256];
+	size_t	o = 0;
+
+	for (const char *p = textZ; *p && o + 1 < sizeof(safe); p++) {
+		char c = *p;
+
+		if (c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t') {
+			c = ' ';
+		}
+		safe[o++] = c;
+	}
+	safe[o] = 0;
+
+	char m[400];
+	sprintf_s(m, sizeof(m),
+		"{\"type\":\"toast\",\"level\":\"%s\",\"text\":\"%s\"}\n", levelZ, safe);
+	PipeWrite(m);
+}
 
 // ---------------------------------------------------------------------------
 //	minimal JSON scanning + base64
@@ -406,13 +444,13 @@ PipeServerThread(LPVOID)
 		//	thread writes to; RX is inbound only and is the one this thread parks
 		//	on. Neither handle ever carries both directions - see PIEFX_PIPE_TX.
 		HANDLE tx = CreateNamedPipeA(
-			PIEFX_PIPE_TX,
+			S_tx_name,
 			PIPE_ACCESS_OUTBOUND,
 			PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
 			1, 4096, 4096, 0, NULL);
 
 		HANDLE rx = CreateNamedPipeA(
-			PIEFX_PIPE_RX,
+			S_rx_name,
 			PIPE_ACCESS_INBOUND,
 			PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
 			1, 4096, 4096, 0, NULL);
@@ -496,9 +534,34 @@ PipeServerThread(LPVOID)
 	}
 }
 
+//	Pick pipe names that are actually free. Trying the base names first keeps the
+//	dev flow working (an overlay started by hand knows only those); a second AE
+//	instance finds them taken and gets its own pair rather than silently running
+//	with no overlay, which is what a fixed name with nMaxInstances=1 produced.
+static void
+ResolvePipeNames(void)
+{
+	strcpy_s(S_tx_name, sizeof(S_tx_name), PIEFX_PIPE_TX);
+	strcpy_s(S_rx_name, sizeof(S_rx_name), PIEFX_PIPE_RX);
+
+	HANDLE probe = CreateNamedPipeA(S_tx_name, PIPE_ACCESS_OUTBOUND,
+									PIPE_TYPE_BYTE | PIPE_WAIT, 1, 512, 512, 0, NULL);
+
+	if (probe != INVALID_HANDLE_VALUE) {
+		CloseHandle(probe);				// free, and closing releases it again
+		return;
+	}
+
+	DWORD pid = GetCurrentProcessId();
+	sprintf_s(S_tx_name, sizeof(S_tx_name), "%s-%lu", PIEFX_PIPE_TX, (unsigned long)pid);
+	sprintf_s(S_rx_name, sizeof(S_rx_name), "%s-%lu", PIEFX_PIPE_RX, (unsigned long)pid);
+	Log("  pipe: base names taken (another AE?), using %s / %s\n", S_tx_name, S_rx_name);
+}
+
 static void
 StartPipeServer(void)
 {
+	ResolvePipeNames();
 	S_pipe_dead_evt = CreateEvent(NULL, FALSE, FALSE, NULL);	// auto-reset
 	S_pipe_stop_evt = CreateEvent(NULL, TRUE,  FALSE, NULL);	// manual-reset
 	S_pipe_thread = CreateThread(NULL, 0, PipeServerThread, NULL, 0, NULL);
@@ -525,11 +588,11 @@ StopPipeServer(void)
 	}
 
 	//	Nudge a blocking ConnectNamedPipe to return by opening+closing the pipes.
-	HANDLE poke_tx = CreateFileA(PIEFX_PIPE_TX, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+	HANDLE poke_tx = CreateFileA(S_tx_name, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
 	if (poke_tx != INVALID_HANDLE_VALUE) {
 		CloseHandle(poke_tx);
 	}
-	HANDLE poke_rx = CreateFileA(PIEFX_PIPE_RX, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+	HANDLE poke_rx = CreateFileA(S_rx_name, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
 	if (poke_rx != INVALID_HANDLE_VALUE) {
 		CloseHandle(poke_rx);
 	}
@@ -576,12 +639,28 @@ LaunchOverlay(void)
 		return;
 	}
 
+	//	Arm -> disarm -> arm used to start a second overlay every time, leaving
+	//	the earlier ones alive and spinning on a pipe they will never be given.
+	if (S_overlay_proc && WaitForSingleObject(S_overlay_proc, 0) == WAIT_TIMEOUT) {
+		Log("  overlay: already running, not launching another\n");
+		return;
+	}
+	if (S_overlay_proc) {
+		CloseHandle(S_overlay_proc);
+		S_overlay_proc = NULL;
+	}
+
+	//	Tell it which pipes to use, so a second AE instance's overlay finds its
+	//	own pair rather than the first instance's.
+	char cmd[MAX_PATH + 320];
+	sprintf_s(cmd, sizeof(cmd), "\"%s\" --tx %s --rx %s", exe, S_tx_name, S_rx_name);
+
 	STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
 	PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));
-	if (CreateProcessA(exe, NULL, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
+	if (CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
 		CloseHandle(pi.hThread);
-		CloseHandle(pi.hProcess);
-		Log("  overlay: launched %s\n", exe);
+		S_overlay_proc = pi.hProcess;		// kept, to answer "is it still up?"
+		Log("  overlay: launched %s (tx=%s)\n", exe, S_tx_name);
 	} else {
 		Log("  overlay: CreateProcess failed, err=%lu\n", (unsigned long)GetLastError());
 	}
@@ -760,6 +839,7 @@ RunScript(AEGP_SuiteHandler &suites, const char *codeZ, const char *whatZ)
 
 	if (err || !avail) {
 		Log("  %s: scripting unavailable\n", whatZ);
+		SendToast("error", "Scripting is disabled in AE preferences");
 		return;
 	}
 
@@ -769,6 +849,9 @@ RunScript(AEGP_SuiteHandler &suites, const char *codeZ, const char *whatZ)
 		A_char *t = NULL;
 		if (!suites.MemorySuite1()->AEGP_LockMemHandle(errorH, reinterpret_cast<void**>(&t)) && t && t[0]) {
 			Log("  %s ERROR: %s\n", whatZ, t);
+			//	Covers the commonest real failure: a snippet whose script has
+			//	not been loaded, so its global does not exist yet.
+			SendToast("error", t);
 		}
 		ERR2(suites.MemorySuite1()->AEGP_UnlockMemHandle(errorH));
 		ERR2(suites.MemorySuite1()->AEGP_FreeMemHandle(errorH));
@@ -839,6 +922,7 @@ ApplyEffectByMatchName(AEGP_SuiteHandler &suites, const char *matchZ)
 
 	if (err || !layerH) {
 		Log("  effect \"%s\": no single selected layer\n", matchZ);
+		SendToast("error", "Select one layer first");
 		return;
 	}
 	if (!FindEffectKeyByMatchName(suites, matchZ, &key)) {
@@ -846,6 +930,9 @@ ApplyEffectByMatchName(AEGP_SuiteHandler &suites, const char *matchZ)
 		//	copied from documentation can legitimately fail to match what the
 		//	API returns. Always round-trip through the catalogue's own strings.
 		Log("  effect \"%s\": not installed (or the stored name was not round-tripped)\n", matchZ);
+		char t[320];
+		sprintf_s(t, sizeof(t), "Effect not installed: %s", matchZ);
+		SendToast("error", t);
 		return;
 	}
 
@@ -876,6 +963,16 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 			//	language change. Settings resolves the name once, at bind time.
 			Log("  exec ae-command %ld\n", aP->id);
 			ERR2(suites.CommandSuite1()->AEGP_DoCommand((AEGP_Command)aP->id));
+			if (err2) {
+				//	The id map was hand-tested by someone else against another
+				//	AE version, so a stale id is a real case, not a theoretical
+				//	one - and a silent no-op is the worst way to present it.
+				char t[160];
+				sprintf_s(t, sizeof(t), "AE command %ld failed (error %d)",
+						  aP->id, (int)err2);
+				Log("  %s\n", t);
+				SendToast("error", t);
+			}
 			break;
 
 		case PK_SNIPPET:
@@ -911,6 +1008,119 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 		default:
 			break;
 	}
+}
+
+// ---------------------------------------------------------------------------
+//	self-test
+//
+//	Four of the five executor kinds could be reached by the wheel but had never
+//	actually been run inside AE - they were code, not facts. This fires one of
+//	each in sequence so a single click settles all of them, and reports what
+//	happened rather than leaving it in a log nobody opens.
+//
+//	Everything it does is visible and one undo away. It needs exactly one
+//	selected layer, which is also what the ae-command and effect probes need.
+// ---------------------------------------------------------------------------
+static A_Boolean
+SelfTestScriptFile(char *pathZ, size_t path_max)
+{
+	//	Written here rather than shipped, so the probe covers the whole path:
+	//	temp resolution, the backslash-to-forward-slash normalisation, and
+	//	$.evalFile actually finding and running the file.
+	if (!GetTempPathA((DWORD)path_max, pathZ)) {
+		return FALSE;
+	}
+	if (strcat_s(pathZ, path_max, "piefx_selftest.jsx")) {
+		return FALSE;
+	}
+
+	FILE *fp = NULL;
+	if (fopen_s(&fp, pathZ, "w") || !fp) {
+		return FALSE;
+	}
+	fprintf(fp, "$.global.__piefx_selftest_ran = true;\n");
+	fclose(fp);
+	return TRUE;
+}
+
+static void
+RunSelfTest(AEGP_SuiteHandler &suites)
+{
+	char		summary[1024]	= { 0 };
+	char		line[256];
+	AEGP_LayerH	layerH			= NULL;
+
+	Log("\n=== self-test ===\n");
+	suites.LayerSuite9()->AEGP_GetActiveLayer(&layerH);
+
+	strcat_s(summary, sizeof(summary),
+		layerH ? "One layer selected - all five probes can run.\n\n"
+			   : "NO single layer selected: the ae-command, effect and anchor\n"
+				 "probes will report failure for that reason alone.\n\n");
+
+	PieAction a;
+
+	//	1. script-snippet - the only kind already proven live, included so the
+	//	   test has a known-good control. A failure here means the harness is
+	//	   wrong, not the executor.
+	ZeroMemory(&a, sizeof(a));
+	a.kind = PK_SNIPPET;
+	strcpy_s(a.text, sizeof(a.text), "(function(){ return 'snippet ok'; })()");
+	ExecuteAction(suites, &a);
+	strcat_s(summary, sizeof(summary), "1. script-snippet  -> see log ('snippet ok')\n");
+
+	//	2. script-file - never run before.
+	ZeroMemory(&a, sizeof(a));
+	a.kind = PK_FILE;
+	if (SelfTestScriptFile(a.text, sizeof(a.text))) {
+		ExecuteAction(suites, &a);
+
+		//	Ask AE whether the file really executed, rather than trusting that
+		//	evalFile returning quietly means anything.
+		PieAction check;
+		ZeroMemory(&check, sizeof(check));
+		check.kind = PK_SNIPPET;
+		strcpy_s(check.text, sizeof(check.text),
+			"(function(){ return $.global.__piefx_selftest_ran ? "
+			"'script-file ok' : 'script-file DID NOT RUN'; })()");
+		ExecuteAction(suites, &check);
+		strcat_s(summary, sizeof(summary), "2. script-file     -> see log ('script-file ok')\n");
+	} else {
+		strcat_s(summary, sizeof(summary), "2. script-file     -> SKIPPED (no temp path)\n");
+	}
+
+	//	3. ae-command - the biggest unknown, because the id map was hand-tested
+	//	   by someone else against a different AE version.
+	ZeroMemory(&a, sizeof(a));
+	a.kind	= PK_AE_CMD;
+	a.id	= PIEFX_TEST_COMMAND;
+	ExecuteAction(suites, &a);
+	sprintf_s(line, sizeof(line),
+		"3. ae-command %d  -> did the layer CENTRE IN VIEW?\n", PIEFX_TEST_COMMAND);
+	strcat_s(summary, sizeof(summary), line);
+
+	//	4. effect by match name - proven in the S5 spike, never in the product.
+	ZeroMemory(&a, sizeof(a));
+	a.kind = PK_EFFECT;
+	strcpy_s(a.text, sizeof(a.text), PIEFX_TEST_EFFECT);
+	ExecuteAction(suites, &a);
+	strcat_s(summary, sizeof(summary), "4. effect          -> is there a Gaussian Blur on the layer?\n");
+
+	//	5. builtin anchor - worked through the OLD native hit-test path, never
+	//	   through the overlay's action path this now shares.
+	ZeroMemory(&a, sizeof(a));
+	a.kind = PK_ANCHOR;
+	a.cell = 4;						// centre
+	ExecuteAction(suites, &a);
+	strcat_s(summary, sizeof(summary), "5. anchor-grid     -> did the anchor snap to the layer centre?\n");
+
+	strcat_s(summary, sizeof(summary),
+		"\nJudge 3, 4 and 5 BY EYE - the log records what was attempted, not\n"
+		"what you saw. Undo a few times to put everything back.\n\nLog: ");
+	strcat_s(summary, sizeof(summary), S_log_path);
+
+	Log("=== self-test done ===\n");
+	suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, summary);
 }
 
 // ---------------------------------------------------------------------------
@@ -975,6 +1185,7 @@ UpdateMenuHook(AEGP_GlobalRefcon, AEGP_UpdateMenuRefcon, AEGP_WindowType)
 	AEGP_SuiteHandler suites(sP);
 	//	Always available - arming is a global mode, not a per-comp action.
 	suites.CommandSuite1()->AEGP_EnableCommand(S_toggle_cmd);
+	suites.CommandSuite1()->AEGP_EnableCommand(S_selftest_cmd);
 	return A_Err_NONE;
 }
 
@@ -1048,6 +1259,12 @@ CommandHook(AEGP_GlobalRefcon, AEGP_CommandRefcon, AEGP_Command command,
 	if (command == S_toggle_cmd) {
 		ToggleActive(suites);
 		*handledPB = TRUE;
+	} else if (command == S_selftest_cmd) {
+		if (!S_log_path[0]) {
+			ResolveLogPath();
+		}
+		RunSelfTest(suites);
+		*handledPB = TRUE;
 	}
 	return A_Err_NONE;
 }
@@ -1075,6 +1292,10 @@ EntryPointFunc(
 
 	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_toggle_cmd));
 	ERR(suites.CommandSuite1()->AEGP_InsertMenuCommand(S_toggle_cmd, PIEFX_MENU_NAME,
+														AEGP_Menu_WINDOW, AEGP_MENU_INSERT_SORTED));
+
+	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_selftest_cmd));
+	ERR(suites.CommandSuite1()->AEGP_InsertMenuCommand(S_selftest_cmd, PIEFX_SELFTEST_NAME,
 														AEGP_Menu_WINDOW, AEGP_MENU_INSERT_SORTED));
 
 	ERR(suites.RegisterSuite5()->AEGP_RegisterCommandHook(S_my_id, AEGP_HP_BeforeAE,

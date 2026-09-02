@@ -661,8 +661,47 @@ function draw() {
     }
   }
 
+  drawToast();
   drawHud();
   requestAnimationFrame(draw);
+}
+
+// --- toast ----------------------------------------------------------------
+// The plug-in's only non-modal way to tell the user something failed. A modal
+// AEGP_ReportInfo mid-gesture would be worse than the failure it reports.
+const TOAST = { text: "", until: 0, level: "error" };
+
+function drawToast() {
+  const left = TOAST.until - Date.now();
+  if (left <= 0) return;
+
+  const w = window.innerWidth;
+  ctx.font = "600 14px system-ui, 'Segoe UI', sans-serif";
+  const tw = Math.min(ctx.measureText(TOAST.text).width + 40, w - 80);
+  const bw = tw;
+  const bh = 42;
+  const x = (w - bw) / 2;
+  const y = 42;
+
+  // fade the last 400ms so it leaves rather than blinks out
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, left / 400);
+  glassPanel(x, y, bw, bh, 12);
+
+  ctx.fillStyle = TOAST.level === "error" ? "#B3261E" : C.ink;
+  ctx.fillRect(x + 1, y + 10, 3, bh - 20);
+
+  ctx.fillStyle = C.ink;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(TOAST.text, x + bw / 2, y + bh / 2);
+  ctx.restore();
+}
+
+function toast(level, text) {
+  TOAST.level = level;
+  TOAST.text = text;
+  TOAST.until = Date.now() + 3200;
 }
 
 function drawHud() {
@@ -861,6 +900,10 @@ if (window.__TAURI__ && window.__TAURI__.event) {
         say("release: armed=" + S.armed + " hot=" + S.hot);
         release();
       } else if (m.type === "cancel") S.visible = false;
+      else if (m.type === "toast") {
+        say("toast " + m.level + ": " + m.text);
+        toast(m.level, m.text);
+      }
     })
     .then(() => {
       say("listener registered");

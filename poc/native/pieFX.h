@@ -35,8 +35,21 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-//	The single POC menu command: arm/disarm the whole thing.
-#define PIEFX_MENU_NAME		"pieFX POC (Anchor Wheel: OFF/ON)"
+//	Arm/disarm the whole thing.
+#define PIEFX_MENU_NAME		"pieFX (Wheel: OFF/ON)"
+
+//	Fires one of EVERY executor kind in sequence, so the paths that the wheel
+//	can reach but nobody has yet exercised stop being guesses. Needs one
+//	selected layer; everything it does is one undo away.
+#define PIEFX_SELFTEST_NAME	"pieFX Self-Test (Executors)"
+
+//	A stock effect present in every install, used to prove apply-by-match-name.
+#define PIEFX_TEST_EFFECT	"ADBE Gaussian Blur 2"
+
+//	Center In View. Chosen for the ae-command probe because it needs a selected
+//	layer, is visible, and undoes cleanly. Its id comes from the hand-tested
+//	command map, which is exactly the thing being checked.
+#define PIEFX_TEST_COMMAND	3819
 
 //	Named pipes the overlay connects to. Native is the server on both.
 //

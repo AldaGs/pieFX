@@ -1,132 +1,148 @@
 # pieFX — handoff
 
-If you are picking this up cold, read this file, then `SPIKES.md`. Everything
-below is true as of 2026-09-01.
+If you are picking this up cold, read this file, then `poc/README.md`,
+`poc/SETTINGS.md` and `ARCHITECTURE.md`. `SPIKES.md` is the Phase 0 record and
+is still the reason several obvious-looking approaches are known to fail.
+Everything below is true as of 2026-09-01.
 
 ## One-paragraph state
 
-pieFX is a cursor-anchored radial menu for After Effects (AEGP plugin, not a
-pixel effect). **Phase 0 — the capability spikes — is complete. All five pass on
-both Windows and macOS.** Nothing that could kill the product remains unknown.
-There is no product yet: the code in this repo is throwaway spike code whose only
-job was to answer "is this buildable at all?" before any of it got expensive.
-The next phase is the POC (one wheel segment: Anchor).
+Phase 0 (capability spikes) is complete and **the POC is complete and verified
+live**: right-hold summons a wheel under the cursor, a flick picks a slot, and
+release fires a real action in After Effects. Since then the product has grown a
+**hexagon wheel with one level of drill-down**, an **action model** that can bind
+a slot to AE menu commands / user scripts / effects, and a **native executor
+table** for them. That work is MVP-shaped, so the project is no longer "the POC"
+— but it is not an MVP either, because settings have no UI and several things are
+coded rather than proven. The table below is the honest line between the two.
 
-## The gate is pass/pass
+## What is actually proven
 
-The roadmap's Phase 0 gate turns on S2 (Windows gesture) and S4 (macOS gesture).
-Both pass, so per the roadmap: **the full product — hold gesture on both
-platforms**, not the hotkey fallback.
+Observed working, either live in AE or against the real overlay binary driven by
+the offline harness.
 
-| Spike | Question | Windows | macOS |
-|---|---|---|---|
-| S1 | AEGP loads, registers a command, dispatches ExtendScript | pass | pass |
-| S2/S4 | Right-hold is detectable AND takeable, right-click intact | pass | pass |
-| S3 | Transparent overlay stays above AE; selection survives focus | pass | pass |
-| S5 | Enumerate all installed effects; apply by match name | pass (519/519) | pass (454/454) |
+| | How it was proven |
+|---|---|
+| Hold gesture: detect, swallow, replay; normal right-click intact | many live runs, both monitors |
+| Overlay: z-order over AE, spans all monitors, click-through | live |
+| Two-way pipe, one per direction, with a ready handshake | harness + live |
+| Hexagon wheel: drill-down, arming, category defaults | harness, 5 gestures |
+| `script-snippet` executor (Master Null) | **live in AE** |
+| `ae-command` / `script-file` / `effect` / `anchor-grid` executors | wired and covered by the self-test; run it to confirm |
+| Second AE instance gets its own pipes | harness, custom names on the command line |
+| Errors reach the user as a non-modal toast | harness |
 
-## The findings that constrain every design decision from here
+**Run `Window ▸ pieFX Self-Test (Executors)` after any install.** It fires one of
+every executor kind with a layer selected and reports what it attempted; three of
+the five must be judged by eye. That command exists because those paths were
+"code, not facts" for too long.
 
-These are *why* the code looks the way it does. Do not re-litigate them without
-re-reading `SPIKES.md` — several obvious-looking alternatives are already known
-to fail.
+## What is NOT proven, and what is missing
 
-1. **Nothing can identify which AE panel the cursor is over.** Windows: every
-   panel shares the window class `DroverLord - Window Class`. Both platforms:
-   `AEGP_WindowType` only refreshes when AE rebuilds its menus, so it is stale by
-   construction. **Consequence: the design gates on AE's *selection state*
-   (`AEGP_GetActiveItem`, the comp's selection collection), never on panel
-   identity.** This killed the roadmap's original "resolve the viewer window by
-   class name" plan.
+- **The AE command ids are the biggest unknown.** `poc/overlay/src/ae-commands-2025.json`
+  was hand-tested by another developer against AE 2025; we run 2026. Checking the
+  first draft of the defaults against it already caught three wrong guesses. A
+  wrong-but-valid id fires the *wrong menu item*, which is worse than failing, so
+  a settings **test-fire** button is a requirement, not a nicety.
+- **Settings have no UI.** The format is designed (`poc/SETTINGS.md`), and
+  `load_settings` / `save_settings` exist in Rust, but nothing calls them: there
+  is no settings file, and the slot tree is the `DEFAULTS` constant in
+  `hexwheel.js`. `armMode` likewise defaults to `"center"` in code.
+- **The Effects search widget is a mock.** It draws; it fires nothing. S5 found
+  519 installed effects, so its real form is a filter field over the catalogue.
+- **No per-slot context gating.** Nothing greys out when an action cannot apply.
+  "New Solid" needs no selection, "Master Null" does, and the schema cannot say
+  so yet. This wants a `requires` field.
+- **A `script-snippet` needs its script already loaded.** `_mn.addMasterNull(...)`
+  only works once `ag_masterNull.jsx` has been run, because AE shares one
+  ExtendScript namespace and the global has to exist. The intended fix is lazy
+  bootstrap — an action declaring the global it needs and the file to load — plus
+  a one-line guard in the user's script so loading it headless does not pop its
+  palette.
+- **macOS is untouched since the rename.** The Mac tree has not been rebuilt.
 
-2. **AE opens its context menu on mouse-DOWN.** So the gesture is taken by
-   swallowing the DOWN, and — if the press turns out to be a short click —
-   replaying it so the menu still appears. Swallowing the UP does nothing
-   (learned the hard way; a message trace lied and a user's eyes corrected it).
+## The bugs that cost real sessions, and what they taught
 
-3. **Layer selection is document state, not focus state.** The overlay can take
-   focus like a normal window, even from a separate process. No `NOACTIVATE`
-   tricks; the planned separate-process (Tauri) overlay is viable.
+Worth reading before changing the transport or the launch path.
 
-## Platform mechanics (what actually differs)
+1. **AE froze on the first right-hold.** The pipe was made duplex but left
+   synchronous, and Windows serialises I/O on a handle opened without
+   `FILE_FLAG_OVERLAPPED`: the reader thread parked in `ReadFile`, so the first
+   summon's `WriteFile` — from **AE's UI thread** — queued behind it forever.
+   Fixed by splitting the directions into two pipes. `ARCHITECTURE.md` already
+   said never to block the UI thread; the rule was written down and broken
+   anyway.
+2. **The first summon after arming was lost.** The pipes connected before the
+   webview had registered its listener. Fixed with the `ready` handshake the
+   architecture specified but the code never had.
+3. **Both were found by an offline harness, not by AE.** `scratchpad/pipe_test*.ps1`
+   mimics the plug-in with .NET named pipes and drives the real overlay binary.
+   It should have existed before the first build was handed over. Prefer it to
+   burning an AE session.
 
-| | Windows | macOS |
-|---|---|---|
-| Capture | thread-local `SetWindowsHookEx(WH_MOUSE, …, GetCurrentThreadId())` | `addLocalMonitorForEventsMatchingMask:` |
-| Swallow | return 1 from the hook | return `nil` from the monitor block |
-| Replay a short click | `SendInput` (synthesised) | **re-post the ORIGINAL `NSEvent`** via `[NSApp postEvent:atStart:NO]` |
-| Hold clock | `SetTimer(NULL, …)` (AE's modal loop starves the idle hook) | `dispatch_after` on the main queue (no starvation) |
-| Overlay | `WS_EX_LAYERED|TOPMOST` + `UpdateLayeredWindow` | borderless `NSWindow`, `NSStatusWindowLevel`, per-pixel alpha |
+Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
+`%TEMP%\pieFX_poc.txt`. Together they show which side stopped.
 
-**The single most important macOS lesson:** never synthesise input with
-`CGEventPost` from an AE plugin. It is gated on `AXIsProcessTrusted`, and the
-permission prompt names *After Effects*, not the plugin — a plugin cannot hold
-its own TCC entitlement. Re-posting the original `NSEvent` needs no permission
-and carries its own true window/view/location, so all coordinate maths
-disappears. (Windows still synthesises via `SendInput` and owns that risk.)
+## Design decisions that are settled
 
-macOS also revealed that **a local monitor cannot see the whole press once a menu
-is tracking** — NSMenu's tracking loop eats the mouse-UP. So on macOS swallowing
-is mandatory, not optional: without it you never observe the end of a press.
+- **Behavior B (drill-down), not paging.** A pager breaks positional constancy,
+  which is the entire value of a radial menu. "More Actions" became a named
+  `Layer` category instead.
+- **Depth is capped at 2.** Marking-menu accuracy degrades badly past two levels.
+- **Slots are positional; `null` is a real hole.** Never compact the array, or
+  adding an item moves the ones already in the user's hands.
+- **A category may carry a default action**, fired when you flick to it and
+  release without drilling. That is what keeps the common case one flick.
+- **Arming rule `center`** — level 2 stays inert until the cursor passes back
+  through the middle, which doubles as cancel. To become a user setting.
+- **The overlay owns geometry and hit-testing; native is a dumb executor.** The
+  native side has no opinion about which slot is under the cursor; having both
+  decide is what made every gesture fire twice, once.
+- **Menu commands persist the numeric id, never the name.** Names are localised,
+  are not unique, and are not AE's display strings anyway.
+- **Free text crosses the pipe base64-encoded.** A hand-rolled JSON unescaper for
+  arbitrary user script is a bug waiting for its first quote character.
+- **Settings do not live on the wheel.** The centre hex is cancel; putting
+  settings there would open a window on every aborted gesture. They belong in
+  `Window ▸ pieFX Settings`, and the settings screen should *be* a clickable
+  wheel.
 
 ## Repo layout
 
     README.md            Public-facing overview
     HANDOFF.md           This file
-    SPIKES.md            The full spike log — the real deliverable of Phase 0
-    ARCHITECTURE.md      The locked two-process design (read before POC code)
-    MAC_SESSION.md       The pre-written macOS checklist (now executed)
-    MAC_RESULTS.md       What the macOS bench actually found
+    SPIKES.md            The Phase 0 log — still the record of what cannot work
+    ARCHITECTURE.md      The locked two-process design
+    MAC_SESSION.md       Pre-written macOS checklist (executed once)
+    MAC_RESULTS.md       What the macOS bench found
 
-    pieFX.cpp/.h    Windows spikes S1,S2,S3,S5
-    pieFX_PiPL.r
-    Win/                 Visual Studio project
-    S3B_Overlay.cpp      Throwaway .exe: S3 overlay from a separate process
+    pieFX.cpp/.h         FROZEN Phase 0 spikes (S1,S2,S3,S5) — reference only
+    Win/                 spike VS project
+    pieFXMac.mm, Mac/    macOS spikes
 
-    pieFXMac.mm     macOS spikes S1,S3,S4,S5 (built + passing)
-    pieFXMac_PiPL.r
-    Mac/                 Xcode project, Info.plist, build_and_install.sh
+    poc/README.md        Build + run + verification steps
+    poc/SETTINGS.md      The action model and settings format
+    poc/native/          the product plug-in (pieFX.cpp/.h, Win/)
+    poc/overlay/         the Tauri app (src/hexwheel.js is the wheel)
 
-## Building (fast reminder — full detail in README)
+## Building
 
-- **Windows:** set `AE_PLUGIN_BUILD_DIR`, build `Win/pieFX.sln` Debug|x64,
-  install to AE's own `Support Files/Plug-ins/` (NOT MediaCore). Verify with
-  `dumpbin /EXPORTS` that `EntryPointFunc` is un-mangled.
-- **macOS:** `./Mac/build_and_install.sh` (quit AE first; needs sudo to copy).
-- Both: the entry point takes FIVE parameters. The `Commando` SDK sample shows a
-  stale seven-param form that compiles and links silently but exports mangled and
-  fails to load. Model AEGP work on `Persisto`.
+**Native:** set `AE_PLUGIN_BUILD_DIR`, build `poc/native/Win/pieFX.sln`
+`Debug|x64`, verify with `dumpbin /EXPORTS` that `EntryPointFunc` is **un-mangled**
+(the entry point takes FIVE parameters; `Commando` shows a stale seven-param form
+that links silently and fails to load — model on `Persisto`). Install to AE's own
+`Support Files/Plug-ins/`, not MediaCore.
 
-## What Phase 0 deliberately did NOT settle — the POC's opening questions
+**Overlay:** `cd poc/overlay/src-tauri && cargo build --release` →
+`pieFX-overlay.exe`. Copy it **beside the .aex** and the plug-in launches it
+automatically; otherwise `npm run tauri dev` works and the plug-in's launch
+no-ops.
 
-- **Naming.** DONE (2026-09-01). The whole tree was renamed `RadialMenu`→`pieFX`
-  / `RadialMenuMac`→`pieFXMac`: source, projects, PiPL Name, menu strings, log
-  leaf names, window-class strings, and the S3B helper (`pieFX_S3B.exe`). The
-  Windows build was re-verified (outputs `pieFX.aex`, un-mangled export). The
-  macOS files were renamed by text substitution and the Xcode project references
-  are internally consistent, but it has **not been rebuilt on a Mac** — do that
-  first next Mac session. No AEGP *match names* were involved (menu commands are
-  runtime handles, not persisted), so no saved project can break.
-- **Architecture lock.** DONE (2026-09-01) — see `ARCHITECTURE.md`. Two
-  processes: the native AEGP plug-in (input + catalogue + AE access, on AE's UI
-  thread) and a Tauri overlay/settings app (Rust + webview), over a local socket
-  / named pipe. All the assumptions it rested on passed in Phase 0.
-- **The 300ms replay window (macOS).** A genuine right-press within 300ms of a
-  replayed short click passes through un-gestured. Fine for a spike; decide
-  deliberately before ship, since fast repeated right-clicks are real.
-- **Effect-name encoding (S5).** On a non-English AE, `AEGP_GetEffectName` /
-  `AEGP_GetEffectCategory` return legacy single-byte text and there is **no
-  Unicode variant** (not even in `AEGP_EffectSuite5`). Must be *decoded*, not
-  swapped for another API, before those names reach a menu.
-- **Pseudo-effect filtering (S5).** 107 catalogue entries have an empty category
-  (pseudo-effects, preset rigs). `AEGP_EffectSuite5::AEGP_GetIsInternalEffect`
-  is likely the principled filter, rather than testing for an empty string.
+## The next three things, in order
 
-## The POC, when it starts
+1. **Run the self-test in AE** and settle the four unconfirmed executors —
+   especially whether the 2025 command ids hold on 2026.
+2. **Per-slot context gating** (`requires`), so slots grey out honestly.
+3. **The settings UI**, as a clickable wheel, with a test-fire button per binding.
 
-Per the roadmap: one segment only — **Anchor**, the 3×3 grid. Pure math, no
-dialogs, instantly verifiable, and genuinely annoying in stock AE. The S1 anchor
-script already does the hard part (moving the anchor while compensating Position
-through the layer's Scale/Rotation so the layer does not jump — 2D only so far;
-full 3D orientation is a POC problem). Windows only for the POC; Mac comes at
-MVP. Hardcoded layout, no settings, no persistence.
+Then: script bootstrap, the real Effects search, and the macOS port.

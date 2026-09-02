@@ -1,0 +1,44 @@
+# Consolidation harness. Uses NON-default pipe names passed on the command line,
+# which is the path a second AE instance takes, and probes the toast channel.
+$ErrorActionPreference = "Stop"
+$exe = "C:\AE_SDK\ae25.6_61.64bit.AfterEffectsSDK\Examples\Template\pieFX\poc\overlay\src-tauri\target\release\pieFX-overlay.exe"
+
+$tx = New-Object System.IO.Pipes.NamedPipeServerStream("pieFX-test99", [System.IO.Pipes.PipeDirection]::Out, 1)
+$rx = New-Object System.IO.Pipes.NamedPipeServerStream("pieFX-cmd-test99", [System.IO.Pipes.PipeDirection]::In, 1)
+
+$args = @("--rx", "\\.\pipe\pieFX-test99", "--tx", "\\.\pipe\pieFX-cmd-test99")
+$proc = Start-Process -FilePath $exe -PassThru -ArgumentList $args
+Write-Output "overlay pid $($proc.Id) (custom pipe names)"
+
+$t = $tx.WaitForConnectionAsync()
+if (-not $t.Wait(15000)) { Write-Output "FAIL: TX never opened"; $proc.Kill(); exit 1 }
+$t2 = $rx.WaitForConnectionAsync()
+if (-not $t2.Wait(15000)) { Write-Output "FAIL: RX never opened"; $proc.Kill(); exit 1 }
+Write-Output "PASS: connected on custom names (second-instance path works)"
+
+$w = New-Object System.IO.StreamWriter($tx); $w.AutoFlush = $true
+$r = New-Object System.IO.StreamReader($rx)
+
+function Fire($label, $steps) {
+    foreach ($s in $steps) { $w.WriteLine($s); Start-Sleep -Milliseconds 220 }
+    $w.WriteLine('{"type":"release"}')
+    $line = $r.ReadLineAsync()
+    if ($line.Wait(8000)) { Write-Output "  $label -> $($line.Result)" }
+    else { Write-Output "  $label -> FAIL (nothing)" }
+}
+
+$summon = '{"type":"summon","x":800,"y":500,"hasSelection":true,"layerCount":1}'
+
+Fire "S verb        " @($summon, '{"type":"cursor","x":800,"y":800}')
+Fire "NE default    " @($summon, '{"type":"cursor","x":1060,"y":350}')
+Fire "NE drill -> N " @($summon, '{"type":"cursor","x":1060,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')
+Fire "NW anchor c0  " @($summon, '{"type":"cursor","x":540,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":760,"y":460}')
+Fire "SW layer -> N " @($summon, '{"type":"cursor","x":540,"y":650}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')
+
+# toast channel: nothing comes back, it is one-way to the user
+$w.WriteLine('{"type":"toast","level":"error","text":"_mn is undefined"}')
+Write-Output "  toast sent (check overlay log for receipt)"
+Start-Sleep -Milliseconds 800
+
+$proc.Kill(); $tx.Dispose(); $rx.Dispose()
+Write-Output "done"

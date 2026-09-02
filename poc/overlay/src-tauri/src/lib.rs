@@ -28,6 +28,22 @@ use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 const PIPE_RX: &str = r"\\.\pipe\pieFX"; // plug-in -> us (events)
 const PIPE_TX: &str = r"\\.\pipe\pieFX-cmd"; // us -> plug-in (actions)
 
+// The plug-in passes the names it actually managed to create (`--rx` / `--tx`),
+// because a second AE instance finds the base names taken and falls back to a
+// pid-suffixed pair. Defaults are kept so an overlay started by hand — the dev
+// flow — still connects to the first instance.
+fn pipe_names() -> (String, String) {
+    let args: Vec<String> = std::env::args().collect();
+    let find = |flag: &str, fallback: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
+    };
+    (find("--rx", PIPE_RX), find("--tx", PIPE_TX))
+}
+
 // Virtual-desktop origin in physical px; the frontend converts the plug-in's
 // screen coordinates to window-local with it.
 struct Origin(Mutex<(i32, i32)>);
@@ -123,13 +139,16 @@ fn pipe_client(app: tauri::AppHandle) {
         thread::sleep(Duration::from_millis(25));
     }
 
+    let (rx_name, tx_name) = pipe_names();
+    dlog(&format!("  pipes: rx={} tx={}", rx_name, tx_name));
+
     loop {
         // Open the inbound pipe first — the plug-in accepts them in this order.
-        match std::fs::OpenOptions::new().read(true).open(PIPE_RX) {
+        match std::fs::OpenOptions::new().read(true).open(&rx_name) {
             Ok(file) => {
                 // Then the outbound one. A separate handle, so writes from the
                 // UI never queue behind the read parked below.
-                match std::fs::OpenOptions::new().write(true).open(PIPE_TX) {
+                match std::fs::OpenOptions::new().write(true).open(&tx_name) {
                     Ok(w) => *app.state::<Pipe>().0.lock().unwrap() = Some(w),
                     Err(_) => {
                         thread::sleep(Duration::from_millis(500));
