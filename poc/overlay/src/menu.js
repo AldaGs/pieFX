@@ -52,7 +52,8 @@ const DEFAULTS = {
   // one setting that has to be honoured before the overlay exists at all. It
   // ships on, so an install is "restart AE and flick" rather than "remember to
   // arm it first" — Window > pieFX is still the manual toggle and the way out.
-  gesture: { holdMs: 200, armMode: "center", armOnLaunch: true },
+  gesture: { holdMs: 200, armMode: "distance", armOnLaunch: true },
+  appearance: { accent: "#C74FD6" },
   wheel: {
     slots: [
       // N
@@ -250,6 +251,8 @@ function compile(slot, inherited) {
   const node = {
     label: slot.label,
     action: slot.action || null,
+    // Per-hexagon highlight colour, or null to use the wheel's.
+    accent: slot.accent || null,
     requires: "requires" in slot ? slot.requires : inherited || null,
     widget: slot.widget || (slot.action && slot.action.kind === "builtin" ? slot.action.name : null),
   };
@@ -309,6 +312,7 @@ export function parseSettings(text) {
     // Fill in whatever a file written by an older build is missing, rather
     // than treating an incomplete file as a broken one.
     s.gesture = Object.assign(cloneSettings(DEFAULTS.gesture), s.gesture || {});
+    s.appearance = Object.assign(cloneSettings(DEFAULTS.appearance), s.appearance || {});
     return s;
   } catch (e) {
     lastError = String((e && e.message) || e);

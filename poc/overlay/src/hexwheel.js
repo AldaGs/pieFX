@@ -13,7 +13,7 @@
 // still lands.
 
 import { compileMenu, parseSettings, settingsError } from "./menu.js";
-import { R, SPACING, DEAD, DIRS, bindDraw } from "./hexdraw.js";
+import { R, SPACING, DEAD, DIRS, bindDraw, DEFAULT_ACCENT } from "./hexdraw.js";
 import { sendFire, setInstallDir } from "./actions.js";
 
 const canvas = document.getElementById("wheel");
@@ -21,8 +21,24 @@ const ctx = canvas.getContext("2d");
 
 const D = bindDraw(ctx);
 const {
-  C, noise, roundRect, glassHex, drawHex, glassPanel,
+  C, hotPalette, noise, roundRect, glassHex, drawHex, glassPanel,
 } = D;
+
+// How far out a level-2 child arms, for armMode "distance": PAST the hexagon
+// you flicked through. The apothem is the hexagon's half-width along a slot
+// direction, so centre-to-slot plus apothem is exactly its far edge.
+//
+// This is what makes `Create > Adjustment Layer` one unbroken outward stroke.
+// The other two modes cannot do it: "center" holds every child inert until the
+// cursor returns to the middle, and "exit" specifically holds inert the child
+// lying in the direction you arrived from - which is that very item. Distance
+// also keeps the one-flick default intact, because releasing anywhere ON the
+// category hexagon is still inside this radius.
+const ARM_DIST = SPACING + (R * Math.sqrt(3)) / 2;
+
+// The wheel's highlight colour. A slot may override it; see `accent` in
+// SETTINGS.md.
+let ACCENT = DEFAULT_ACCENT;
 
 // The settings file is the source of truth; DEFAULTS is only the fallback for a
 // machine that has never opened the settings window. Loaded asynchronously at
@@ -42,6 +58,7 @@ function applySettings(text) {
   }
   MENU = compileMenu(SETTINGS);
   if (SETTINGS.gesture && SETTINGS.gesture.armMode) S.armMode = SETTINGS.gesture.armMode;
+  ACCENT = (SETTINGS.appearance && SETTINGS.appearance.accent) || DEFAULT_ACCENT;
   // A summon in flight keeps the tree it started with: swapping the menu out
   // from under a press would move hexagons while the cursor is travelling.
   if (!S.visible) S.node = MENU;
@@ -87,11 +104,11 @@ const S = {
   armed: true,
   entrySector: -1,
   hot: -1,
-  // "center" is the shipping default: level 2 stays inert until the cursor
-  // passes back through the middle, which doubles as the cancel gesture. "exit"
-  // is faster but needs a leave-and-return to pick the child lying in the
-  // parent's own direction. Exposed as a user setting, not a constant.
-  armMode: "center",
+  // Read from DEFAULTS rather than repeated as a literal - a second copy of the
+  // shipping default is a second thing to forget to change, and the browser
+  // preview (which never calls applySettings) would go on testing the old rule
+  // long after the wheel had stopped using it.
+  armMode: SETTINGS.gesture.armMode,
   lastFired: "",
   t0: 0,
 };
@@ -172,19 +189,21 @@ function anchorCellFor(px, py) {
 }
 
 function drawAnchorWidget() {
+  const acc = (S.parent && S.parent.accent) || ACCENT;
+  const P = hotPalette(acc);
   for (let i = 0; i < 9; i++) {
     const r = anchorCellRect(i);
     const hot = S.hot === i;
     const dead = !S.armed || !canFire(S.parent);
 
     ctx.save();
-    ctx.shadowColor = hot ? "rgba(199,79,214,0.45)" : "rgba(0,0,0,0.55)";
+    ctx.shadowColor = hot ? P.glow : "rgba(0,0,0,0.55)";
     ctx.shadowBlur = hot ? 28 : 14;
     ctx.shadowOffsetY = 3;
     roundRect(r.x, r.y, r.w, r.h, A_CORNER);
     const g = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
-    g.addColorStop(0, dead ? C.deadTop : hot ? C.hotTop : C.glassTop);
-    g.addColorStop(1, dead ? C.deadBot : hot ? C.hotBot : C.glassBot);
+    g.addColorStop(0, dead ? C.deadTop : hot ? P.hotTop : C.glassTop);
+    g.addColorStop(1, dead ? C.deadBot : hot ? P.hotBot : C.glassBot);
     ctx.fillStyle = g;
     ctx.fill();
     ctx.restore();
@@ -202,7 +221,7 @@ function drawAnchorWidget() {
     const rim = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
     rim.addColorStop(0, "rgba(255,255,255,0.38)");
     rim.addColorStop(1, "rgba(255,255,255,0.04)");
-    ctx.strokeStyle = hot ? C.accent : rim;
+    ctx.strokeStyle = hot ? P.accent : rim;
     ctx.lineWidth = hot ? 2 : 1.3;
     ctx.stroke();
     ctx.restore();
@@ -211,7 +230,7 @@ function drawAnchorWidget() {
     const dy = r.y + (r.row / 2) * r.h;
     ctx.beginPath();
     ctx.arc(dx, dy, hot ? 5 : 3.4, 0, Math.PI * 2);
-    ctx.fillStyle = dead ? C.inkDead : hot ? C.inkHot : C.ink;
+    ctx.fillStyle = dead ? C.inkDead : hot ? P.inkHot : C.ink;
     ctx.fill();
   }
 
@@ -251,7 +270,7 @@ function drawSearchWidget() {
   ctx.textBaseline = "middle";
   ctx.fillStyle = C.ink;
   ctx.fillText("blur", x + 26, y + 31);
-  ctx.fillStyle = C.accent;
+  ctx.fillStyle = hotPalette(ACCENT).accent;
   ctx.fillRect(x + 26 + ctx.measureText("blur").width + 2, y + 22, 1.5, 18);
 
   SEARCH_MOCK.forEach((name, i) => {
@@ -261,13 +280,13 @@ function drawSearchWidget() {
       roundRect(x + 14, ry, W_W - 28, 29, 8);
       ctx.fillStyle = "rgba(199,79,214,0.16)";
       ctx.fill();
-      ctx.strokeStyle = C.accent;
+      ctx.strokeStyle = hotPalette(ACCENT).accent;
       ctx.lineWidth = 1.4;
       ctx.stroke();
       ctx.restore();
     }
     ctx.font = "500 13.5px system-ui, 'Segoe UI', sans-serif";
-    ctx.fillStyle = i === 0 ? C.inkHot : C.ink;
+    ctx.fillStyle = i === 0 ? hotPalette(ACCENT).inkHot : C.ink;
     ctx.fillText(name, x + 26, ry + 15);
   });
 
@@ -298,7 +317,7 @@ function draw() {
       // Centre: empty and neutral at level 1 (release here = cancel), the
       // parent breadcrumb once drilled in.
       if (S.parent) {
-        drawHex(S.cx, S.cy, S.parent, "hot");
+        drawHex(S.cx, S.cy, S.parent, "hot", undefined, ACCENT);
       } else {
         glassHex(S.cx, S.cy, R, "dead");
         ctx.save();
@@ -321,14 +340,30 @@ function draw() {
         const node = kids[i];
         if (!node) continue;
         const [x, y] = slotPos(i);
-        const inert =
-          !S.armed || (S.armMode === "exit" && i === S.entrySector) || !isLive(node);
-        drawHex(x, y, node, inert ? "dead" : S.hot === i ? "hot" : "idle");
+        // Three different reasons a hexagon is not selectable right now, and
+        // only ONE of them is permanent. Drawing them alike is what made the
+        // wheel look like it was refusing an action it would happily perform.
+        const cannot = !isLive(node);
+        const notYet =
+          !cannot && (!S.armed || (S.armMode === "exit" && i === S.entrySector));
+        const mode = cannot ? "dead" : notYet ? "pending" : S.hot === i ? "hot" : "idle";
+        drawHex(x, y, node, mode, undefined, ACCENT);
       }
 
       // Why the greyed ones are greyed. One line, under the wheel, only when
-      // something is actually unavailable.
-      const missing = !CTX.hasComp
+      // something is actually unavailable - or, at level 2, what the stroke is
+      // still waiting for. The second case is the one that used to be silent.
+      const waiting =
+        S.parent && !S.armed
+          ? S.armMode === "distance"
+            ? "keep going to pick one"
+            : S.armMode === "center"
+            ? "back through the centre to pick one"
+            : ""
+          : "";
+      const missing = waiting
+        ? waiting
+        : !CTX.hasComp
         ? "no comp open"
         : !CTX.hasSelection && kids.some((n) => n && !isLive(n))
         ? "select a layer"
@@ -387,7 +422,7 @@ function drawToast() {
   ctx.globalAlpha = Math.min(1, left / 400);
   glassPanel(x, y, bw, bh, 12);
 
-  ctx.fillStyle = TOAST.level === "error" ? "#FF6B5E" : C.accent;
+  ctx.fillStyle = TOAST.level === "error" ? "#FF6B5E" : hotPalette(ACCENT).accent;
   ctx.fillRect(x + 1, y + 10, 3, bh - 20);
 
   ctx.fillStyle = C.ink;
@@ -464,14 +499,15 @@ function move(x, y) {
   }
 
   const sec = sectorFor(x, y);
+  const dist = Math.hypot(x - S.cx, y - S.cy);
 
-  if (S.level === 2 && !S.armed) {
-    if (S.armMode === "center" && sec === -1) S.armed = true;
-    if (S.armMode === "exit" && sec !== S.entrySector && sec !== -1) S.armed = true;
-  }
-
-  S.hot = sec;
-
+  // ORDER MATTERS, and it did not used to. Drill FIRST, then arm, then set the
+  // hot slot - because a fast flick crosses the whole wheel in ONE cursor
+  // message, and that single message has to leave the state machine somewhere
+  // a release can act on. Under the old order `S.hot = sec` ran before the
+  // drill and `drillInto` then blanked it, so a one-message flick released
+  // with nothing under the cursor and fired nothing at all.
+  //
   // Entering a category drills straight in, so the stroke never has to pause.
   if (S.level === 1 && sec >= 0) {
     const node = (S.node.children || [])[sec];
@@ -480,6 +516,23 @@ function move(x, y) {
     if (node && (node.kind === "ring" || node.kind === "widget") && isLive(node))
       drillInto(node, sec);
   }
+
+  // "distance" is CONTINUOUS, unlike the other two: cross ARM_DIST and the
+  // children are live, come back inside it and the category's own default is
+  // what you are holding again. Depth is the radius, and it is reversible,
+  // which is what makes it readable without instructions.
+  if (S.level === 2 && S.node.widget !== "anchor") {
+    if (S.armMode === "distance") S.armed = dist > ARM_DIST;
+    else if (!S.armed) {
+      if (S.armMode === "center" && sec === -1) S.armed = true;
+      if (S.armMode === "exit" && sec !== S.entrySector && sec !== -1) S.armed = true;
+    }
+  }
+
+  // A widget hit-tests for itself - the anchor grid's cells are not sectors -
+  // so it keeps the -1 that drillInto gave it until the next message, which is
+  // the first one the widget branch above handles.
+  S.hot = S.node.widget === "anchor" ? -1 : sec;
 }
 
 function release() {
@@ -509,8 +562,12 @@ function release() {
     } else if (node && node.kind === "verb" && !inertSlot && !isLive(node)) {
       unavailable = node;
     }
-  } else if (!S.armed && S.parent) {
+  } else if (!S.armed && S.parent && S.hot >= 0) {
     // Flicked to a category and let go without drilling: the common case.
+    // `S.hot >= 0` keeps the centre meaning cancel. Under "center" arming the
+    // point was moot - entering the middle armed you - but under "distance"
+    // the middle is inside ARM_DIST, so without this a release there would
+    // fire the default instead of cancelling.
     if (canFire(S.parent)) {
       action = S.parent.action;
       label = S.parent.label;

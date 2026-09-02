@@ -16,7 +16,7 @@
 //     uses.
 
 import { DEFAULTS, compile, parseSettings, cloneSettings, settingsError } from "./menu.js";
-import { R, bindDraw, slotPosAt } from "./hexdraw.js";
+import { R, bindDraw, slotPosAt, DEFAULT_ACCENT } from "./hexdraw.js";
 import { sendFire, setInstallDir } from "./actions.js";
 
 const T = window.__TAURI__;
@@ -42,6 +42,11 @@ function ensure6(a) {
   const out = Array.isArray(a) ? a.slice(0, 6) : [];
   while (out.length < 6) out.push(null);
   return out;
+}
+
+// The wheel's highlight colour, which a slot may override.
+function wheelAccent() {
+  return (state.settings.appearance && state.settings.appearance.accent) || DEFAULT_ACCENT;
 }
 
 // The slot array currently on screen.
@@ -127,7 +132,7 @@ function drawHole(x, y, hot) {
 function selectionRing(x, y) {
   ctx.save();
   D.hexPath(x, y, BIG + 7, 26 * (BIG / R));
-  ctx.strokeStyle = "#C74FD6";
+  ctx.strokeStyle = wheelAccent();
   ctx.lineWidth = 2;
   ctx.setLineDash([6, 5]);
   ctx.stroke();
@@ -144,7 +149,7 @@ function draw() {
   // Centre: the way back up when we are inside a category, and the wheel's own
   // inert middle when we are not.
   if (parent) {
-    D.drawHex(g.cx, g.cy, compile(parent, null), "hot", BIG * 0.82);
+    D.drawHex(g.cx, g.cy, compile(parent, null), "hot", BIG * 0.82, wheelAccent());
   } else {
     ctx.save();
     ctx.globalAlpha = 0.5;
@@ -165,7 +170,7 @@ function draw() {
     } else {
       const node = compile(slot, parent ? parent.requires || null : null);
       const mode = state.sel === i || state.hover === i ? "hot" : "idle";
-      D.drawHex(x, y, node, mode, BIG);
+      D.drawHex(x, y, node, mode, BIG, wheelAccent());
     }
     if (state.sel === i) selectionRing(x, y);
   }
@@ -308,6 +313,12 @@ function syncInspector() {
 
   const kind = kindOf(slot);
   el("f_kind").value = kind;
+  // A category's action is its DEFAULT. Saying so beside the field, rather
+  // than in a note at the bottom of the panel, is the difference between the
+  // screen explaining the wheel and the screen appearing to contradict it.
+  const ringNow = !!(slot && slot.slots);
+  el("actionlabel").firstChild.nodeValue = ringNow ? "Default action" : "Action";
+  el("defaultnote").hidden = !ringNow;
   for (const k of KINDS) el("k_" + k).hidden = k !== kind;
 
   const a = (slot && slot.action) || {};
@@ -325,6 +336,11 @@ function syncInspector() {
   const gridded = kind === "builtin" && el("f_builtin").value === "anchor-grid";
   el("cellfield").hidden = !gridded;
   el("cellnote").hidden = !gridded;
+
+  const acc = slot && slot.accent;
+  el("f_accent").value = acc || wheelAccent();
+  el("f_accent_clear").hidden = !acc;
+  el("accentusing").textContent = acc ? "this hexagon only" : "the wheel's colour";
 
   const isRing = !!(slot && slot.slots);
   const canRing = state.path.length === 0; // depth is capped at 2
@@ -455,6 +471,19 @@ function bindNeeds(id, key) {
 bindNeeds("f_needs_global", "global");
 bindNeeds("f_needs_file", "file");
 
+el("f_accent").addEventListener("input", (e) => {
+  const v = e.target.value;
+  edit((s) => {
+    s.accent = v;
+  });
+});
+
+el("f_accent_clear").addEventListener("click", () => {
+  edit((s) => {
+    delete s.accent;
+  });
+});
+
 el("makering").addEventListener("click", () => {
   edit((s) => {
     if (!s.slots) s.slots = ensure6(null);
@@ -510,6 +539,11 @@ el("g_armmode").addEventListener("change", (e) => {
   state.settings.gesture.armMode = e.target.value;
   el("dirty").hidden = !dirty();
 });
+el("g_accent").addEventListener("input", (e) => {
+  if (!state.settings.appearance) state.settings.appearance = {};
+  state.settings.appearance.accent = e.target.value;
+  syncInspector(); // a slot with no override follows the wheel, so redraw it
+});
 el("g_autoarm").addEventListener("change", (e) => {
   state.settings.gesture.armOnLaunch = e.target.checked;
   el("dirty").hidden = !dirty();
@@ -518,7 +552,8 @@ el("g_autoarm").addEventListener("change", (e) => {
 function syncGlobals() {
   const g = state.settings.gesture || {};
   el("g_hold").value = g.holdMs === undefined ? 200 : g.holdMs;
-  el("g_armmode").value = g.armMode || "center";
+  el("g_armmode").value = g.armMode || "distance";
+  el("g_accent").value = wheelAccent();
   el("g_autoarm").checked = g.armOnLaunch !== false;
 }
 

@@ -49,6 +49,8 @@ the offline harness (`poc/pipe_test.ps1`).
 | Script bootstrap: Master Null fires on the FIRST flick, no palette | **live** |
 | Per-slot `requires` greying | **live** — greys correctly with nothing selected |
 | Overlay dies with AE, and AE quits clean | **live** — quit message first, then the backstops |
+| The settings window, end to end in AE | **live** — the user's own session |
+| The settings window opens IN FRONT of AE | **live** — after the `raise()` fix |
 | A settings file changes what the wheel fires | harness — a rebound `S` fired the rebound command |
 | The whole harness still passes after the frontend was split into modules | harness |
 
@@ -77,18 +79,16 @@ were "code, not facts" for too long.
   opens from `Window > pieFX Settings` and the editing, test-fire and save all
   do what they claim. `DEFAULTS` in `menu.js` is now only the fallback for a
   machine with no settings file.
-- **The one fault found in that first AE session was the window opening BEHIND
-  After Effects**, which reads as it not opening at all. The cause is that
-  Windows refuses `SetForegroundWindow` to a process that does not own the
-  foreground, and the foreground belongs to AE — the click went to AE's menu,
-  not to the overlay. `.focused(true)` at build time asks for the same
-  privilege and is refused just as quietly. The fix is `raise()` in `lib.rs`:
-  a bounce through always-on-top (a **z-order** change, which needs no
-  foreground rights and is therefore the part that cannot be refused),
-  followed by the `AttachThreadInput` dance for the input focus that z-order
-  does not give. **Written, and NOT yet confirmed in AE.**
-- **The attempt to reproduce that bug offline FAILED, and the failure is worth
-  knowing.** A script that starts the overlay, gives another app the
+- The settings window opening BEHIND After Effects is **fixed and confirmed
+  live**. Windows refuses `SetForegroundWindow` to a process that does not own
+  the foreground, and the foreground belonged to AE — the click went to AE's
+  menu, not to the overlay; `.focused(true)` asks for the same privilege and is
+  refused just as quietly. `raise()` in `lib.rs` bounces through always-on-top
+  (a **z-order** change, which needs no foreground rights and so cannot be
+  refused) and then does the `AttachThreadInput` dance for the input focus that
+  z-order does not give.
+- **The attempt to reproduce that bug offline FAILED, and the failure is still
+  worth knowing.** A script that starts the overlay, gives another app the
   foreground and then asks for the settings window passes *against the
   pre-fix binary too* — so it never reproduced the condition and proves
   nothing about the fix. The likely reason: an overlay launched by the test a
@@ -192,8 +192,12 @@ Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
   adding an item moves the ones already in the user's hands.
 - **A category may carry a default action**, fired when you flick to it and
   release without drilling. That is what keeps the common case one flick.
-- **Arming rule `center`** — level 2 stays inert until the cursor passes back
-  through the middle, which doubles as cancel. To become a user setting.
+- **Arming rule `distance`** — the radius is the depth: inside the category
+  hexagon you hold its default, past it you hold one of its children. It
+  replaced `center` (still available, along with `exit`) because neither of the
+  other two can reach the child lying in its parent's own direction in a single
+  stroke, which is how the rule came to be reported as a bug. The centre still
+  cancels.
 - **The overlay owns geometry and hit-testing; native is a dumb executor.** The
   native side has no opinion about which slot is under the cursor; having both
   decide is what made every gesture fire twice, once.
@@ -250,14 +254,15 @@ no-ops.
 Roughly in order. The first two are cheap and close open measurements; the third
 is the real remaining feature work.
 
-1. **Confirm the settings window now opens IN FRONT of After Effects**, and
-   that the first keystroke goes to it rather than to AE. If it still lands
-   behind, the next move is not another guess: it is to read
-   `%TEMP%\piefx_overlay.log`, which now says whether the window was raised
-   and whether its HWND was even obtainable. The escalation after that is to
-   leave the window always-on-top for its whole life — correct for what is
-   effectively a modeless dialog of AE's, and only avoided because a settings
-   window that floats over everything forever is its own annoyance.
+1. **Watch the new `distance` arming rule in After Effects.** It is measured
+   against the state machine and passes the harness, but the thing it is meant
+   to fix is a feeling in the hand, and only a real flick can report on that.
+   Two questions in particular: does the one-flick category default still land
+   where you expect (releasing ON the hexagon), and does pushing past it to a
+   child feel like one motion or like two? An existing
+   `%APPDATA%\pieFX\settings.json` still says whatever it was saved with, so
+   a machine that has used the settings window is still on `center` until the
+   dropdown is changed or the defaults are reset.
 
 `Save Frame as PNG` no longer goes through the Render Queue: it is a snippet
 that opens a save dialog and calls `saveFrameToPng` at 1:1, restoring the comp's

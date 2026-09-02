@@ -25,6 +25,119 @@ export function slotPosAt(cx, cy, i, spacing) {
   return [cx + s * Math.cos(a), cy + s * Math.sin(a)];
 }
 
+// --- accent ---------------------------------------------------------------
+// The highlight colour is a setting now, globally and per hexagon, so the hot
+// state can no longer be four hand-picked constants.
+//
+// It is NOT recomputed from scratch either. The shipped purple's hot gradient
+// and hot ink were tuned by eye against real footage and are the user's call;
+// a formula that "derives" them would quietly change the default. So the
+// shipped values stay exactly as they are, and any other accent is the same
+// values ROTATED to the new hue (with saturation scaled, so a desaturated
+// accent gets a desaturated glow rather than a purple one). Default in, default
+// out, bit for bit.
+export const DEFAULT_ACCENT = "#C74FD6";
+
+const BASE = {
+  hotTop: "rgba(86,74,104,0.95)",
+  hotBot: "rgba(52,44,66,0.94)",
+  inkHot: "#F2C8FA",
+  glow: "rgba(199,79,214,0.45)",
+};
+
+function parseColor(c) {
+  const hex = /^#([0-9a-f]{6})$/i.exec(c.trim());
+  if (hex) {
+    const n = parseInt(hex[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 1];
+  }
+  const m = /rgba?\(([^)]+)\)/i.exec(c);
+  if (!m) return [255, 255, 255, 1];
+  const p = m[1].split(",").map((v) => parseFloat(v));
+  return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+}
+
+function rgbToHsl(r, g, b) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const mx = Math.max(r, g, b);
+  const mn = Math.min(r, g, b);
+  const l = (mx + mn) / 2;
+  const d = mx - mn;
+  if (!d) return [0, 0, l];
+  const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  let h;
+  if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  else if (mx === g) h = ((b - r) / d + 2) / 6;
+  else h = ((r - g) / d + 4) / 6;
+  return [h, s, l];
+}
+
+function hslToRgb(h, s, l) {
+  if (!s) {
+    const v = Math.round(l * 255);
+    return [v, v, v];
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const f = (t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  return [
+    Math.round(f(h + 1 / 3) * 255),
+    Math.round(f(h) * 255),
+    Math.round(f(h - 1 / 3) * 255),
+  ];
+}
+
+// Re-hue one of the BASE colours towards `accent`, keeping its alpha and its
+// tuned lightness.
+function shift(color, dh, sMul) {
+  const [r, g, b, a] = parseColor(color);
+  const [h, sat, l] = rgbToHsl(r, g, b);
+  const h2 = (((h + dh) % 1) + 1) % 1;
+  const s2 = Math.max(0, Math.min(1, sat * sMul));
+  const [r2, g2, b2] = hslToRgb(h2, s2, l);
+  return `rgba(${r2},${g2},${b2},${a})`;
+}
+
+const paletteCache = new Map();
+
+// The hot half of the palette for one accent. Cached: this runs inside the
+// render loop, once per hexagon per frame.
+export function hotPalette(accent) {
+  const key = accent || DEFAULT_ACCENT;
+  const hit = paletteCache.get(key);
+  if (hit) return hit;
+
+  let pal;
+  if (key.toLowerCase() === DEFAULT_ACCENT.toLowerCase()) {
+    pal = { accent: DEFAULT_ACCENT, ...BASE };
+  } else {
+    const [dr, dg, db] = parseColor(DEFAULT_ACCENT);
+    const [nr, ng, nb] = parseColor(key);
+    const [dh, ds] = rgbToHsl(dr, dg, db);
+    const [nh, ns] = rgbToHsl(nr, ng, nb);
+    const delta = nh - dh;
+    const mul = ds > 0.01 ? ns / ds : 1;
+    pal = {
+      accent: key,
+      hotTop: shift(BASE.hotTop, delta, mul),
+      hotBot: shift(BASE.hotBot, delta, mul),
+      inkHot: shift(BASE.inkHot, delta, mul),
+      glow: shift(BASE.glow, delta, mul),
+    };
+  }
+  paletteCache.set(key, pal);
+  return pal;
+}
+
 export function bindDraw(ctx) {
 // --- palette --------------------------------------------------------------
 // Dark smoked glass, with the accent doing all the colour work. The earlier
@@ -46,6 +159,7 @@ const C = {
   ink: "rgba(228,232,240,0.92)",
   inkHot: "#F2C8FA",
   inkDead: "rgba(210,216,228,0.26)",
+  inkPending: "rgba(226,230,238,0.55)",
   accent: "#C74FD6",
 };
 // --- film grain: a real glass cue, and it hides canvas banding -------------
@@ -116,19 +230,33 @@ function wrap(text, maxW) {
 // Simulated, not a real backdrop blur: a transparent Tauri window has nothing
 // behind it that CSS can blur (AE is another window entirely). The cues that
 // actually read as glass over moving footage are the rim light and the depth,
-function glassHex(x, y, r, mode) {
+// `mode` is one of four, and the fourth is the point of this refactor:
+//
+//   idle     available, not under the cursor
+//   hot      under the cursor, will fire on release
+//   dead     CANNOT fire - wrong context, nothing bound
+//   pending  can fire, but the gesture has not armed it yet
+//
+// `pending` used to be drawn as `dead`, which is a lie with consequences: a
+// hexagon one movement away from working looked exactly like one that could
+// never work, so the wheel appeared to be refusing an action it was perfectly
+// willing to perform. It now reads as a dimmed version of itself.
+function glassHex(x, y, r, mode, accent) {
   const round = CORNER * (r / R);
   const hot = mode === "hot";
   const dead = mode === "dead";
+  const pending = mode === "pending";
+  const P = hotPalette(accent || C.accent);
 
   ctx.save();
-  ctx.shadowColor = hot ? "rgba(199,79,214,0.45)" : "rgba(0,0,0,0.55)";
+  if (pending) ctx.globalAlpha = 0.5;
+  ctx.shadowColor = hot ? P.glow : "rgba(0,0,0,0.55)";
   ctx.shadowBlur = hot ? 30 : 16;
   ctx.shadowOffsetY = hot ? 5 : 3;
   hexPath(x, y, r, round);
   const g = ctx.createLinearGradient(x, y - r, x, y + r);
-  g.addColorStop(0, dead ? C.deadTop : hot ? C.hotTop : C.glassTop);
-  g.addColorStop(1, dead ? C.deadBot : hot ? C.hotBot : C.glassBot);
+  g.addColorStop(0, dead ? C.deadTop : hot ? P.hotTop : C.glassTop);
+  g.addColorStop(1, dead ? C.deadBot : hot ? P.hotBot : C.glassBot);
   ctx.fillStyle = g;
   ctx.fill();
   ctx.restore();
@@ -137,7 +265,7 @@ function glassHex(x, y, r, mode) {
   ctx.save();
   hexPath(x, y, r, round);
   ctx.clip();
-  ctx.globalAlpha = dead ? 0.02 : 0.045;
+  ctx.globalAlpha = dead ? 0.02 : pending ? 0.025 : 0.045;
   ctx.fillStyle = noise;
   ctx.fillRect(x - r, y - r, r * 2, r * 2);
   ctx.restore();
@@ -146,7 +274,10 @@ function glassHex(x, y, r, mode) {
   ctx.save();
   hexPath(x, y, r, round);
   const rim = ctx.createLinearGradient(x, y - r, x, y + r);
-  rim.addColorStop(0, dead ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.42)");
+  rim.addColorStop(
+    0,
+    dead ? "rgba(255,255,255,0.10)" : pending ? "rgba(255,255,255,0.20)" : "rgba(255,255,255,0.42)"
+  );
   rim.addColorStop(0.45, "rgba(255,255,255,0.08)");
   rim.addColorStop(1, "rgba(255,255,255,0.03)");
   ctx.strokeStyle = rim;
@@ -157,7 +288,7 @@ function glassHex(x, y, r, mode) {
   if (hot) {
     ctx.save();
     hexPath(x, y, r * 0.995, round);
-    ctx.strokeStyle = C.accent;
+    ctx.strokeStyle = P.accent;
     ctx.lineWidth = 2;
     ctx.globalAlpha = 0.9;
     ctx.stroke();
@@ -228,12 +359,15 @@ function glyphVerb(x, y, col) {
 // `radius` defaults to the live wheel's R. The settings window draws the same
 // hexagon larger, so everything inside it — glyph, type, line height, corner —
 // is scaled by the same factor rather than sized twice.
-function drawHex(x, y, node, mode, radius) {
+function drawHex(x, y, node, mode, radius, accent) {
   const rr = radius || R;
   const k = rr / R;
-  glassHex(x, y, rr, mode);
+  // A slot may carry its own highlight colour; otherwise the wheel's.
+  const acc = node.accent || accent || C.accent;
+  glassHex(x, y, rr, mode, acc);
   const dead = mode === "dead";
-  const col = dead ? C.inkDead : mode === "hot" ? C.inkHot : C.ink;
+  const col =
+    dead ? C.inkDead : mode === "hot" ? hotPalette(acc).inkHot : mode === "pending" ? C.inkPending : C.ink;
 
   ctx.save();
   ctx.translate(x, y - 20 * k);
@@ -289,6 +423,7 @@ function glassPanel(x, y, w, h, r) {
 
   return {
     C,
+    hotPalette,
     noise,
     hexPath,
     roundRect,

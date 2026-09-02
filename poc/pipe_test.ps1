@@ -35,11 +35,34 @@ function Fire($label, $steps) {
 
 $summon = '{"type":"summon","x":800,"y":500,"hasSelection":true,"layerCount":1}'
 
-Fire "S verb        " @($summon, '{"type":"cursor","x":800,"y":800}')
-Fire "NE default    " @($summon, '{"type":"cursor","x":1060,"y":350}')
-Fire "NE drill -> N " @($summon, '{"type":"cursor","x":1060,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')
-Fire "NW anchor c0  " @($summon, '{"type":"cursor","x":540,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":760,"y":460}')
-Fire "SW layer -> N " @($summon, '{"type":"cursor","x":540,"y":650}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')
+# DISTANCE MATTERS NOW. Under the shipped `distance` arming rule the radius is
+# the depth: inside ~147px of the summon you are holding the category's own
+# default, past it you are holding one of its children. Every stroke below says
+# which it means, because two of them used to be 300px out and labelled
+# "default" - they passed anyway, one because Comp's default and its S child
+# happen to be the same command and the other because nothing checked WHICH
+# snippet came back. A test that passes for the wrong reason is the thing this
+# script exists to prevent.
+#
+#   ~100px = on the category hexagon      (default)
+#    300px = well past it                 (child)
+
+# Comp's default and its S child are the SAME command, so a straight-out S
+# stroke prints the same line whatever the arming rule decided - it cannot tell
+# the two apart and must not be asked to. The child leg turns to N instead, to
+# `Comp Settings`, which nothing else can produce.
+Fire "S default (inside)  " @($summon, '{"type":"cursor","x":800,"y":600}')
+Fire "S > Comp Settings   " @($summon, '{"type":"cursor","x":800,"y":800}', '{"type":"cursor","x":800,"y":200}')
+Fire "NE default (inside) " @($summon, '{"type":"cursor","x":887,"y":450}')
+Fire "NE drill -> N     " @($summon, '{"type":"cursor","x":1060,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')
+Fire "NW anchor c0      " @($summon, '{"type":"cursor","x":540,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":760,"y":460}')
+Fire "SW layer -> N     " @($summon, '{"type":"cursor","x":540,"y":650}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')
+# The case the whole arming change was made for: ONE unbroken outward stroke
+# into the child that lies in the parent's own direction. Neither of the older
+# rules could do this - `center` held every child inert until the cursor came
+# back to the middle, and `exit` held THIS child inert specifically.
+Fire "SE straight through " @($summon, '{"type":"cursor","x":870,"y":540}', '{"type":"cursor","x":1060,"y":650}')
+
 
 # --- context gating (`requires`) ------------------------------------------
 # Same strokes, summoned with nothing selected. A slot that needs a selection
@@ -65,6 +88,13 @@ function Expect($label, $steps, $want) {
 
 $noSel = '{"type":"summon","x":800,"y":500,"hasSelection":false,"hasComp":true,"layerCount":0}'
 $noComp = '{"type":"summon","x":800,"y":500,"hasSelection":false,"hasComp":false,"layerCount":0}'
+
+# The mirror of the stroke above: the centre still cancels, even though under
+# `distance` the centre is INSIDE the arming radius rather than the thing that
+# arms you. Silence is the pass, so this is an Expect - a Fire would time out
+# and leave its read pending on the stream, which breaks every check after it.
+Write-Output "cancel:"
+Expect "SE opened, released in centre " @($summon, '{"type":"cursor","x":1060,"y":650}', '{"type":"cursor","x":803,"y":501}') "silence"
 
 Write-Output "context gating:"
 Expect "no-sel NE (Master Null, dead) " @($noSel, '{"type":"cursor","x":1060,"y":350}') "silence"
@@ -97,10 +127,19 @@ Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 $proc.WaitForExit(4000) | Out-Null
 $tx.Dispose(); $rx.Dispose()
 
-$stray = @(Get-Process pieFX-overlay -ErrorAction SilentlyContinue)
-if ($stray.Count) {
-    Write-Output "WARNING: $($stray.Count) pieFX-overlay process(es) still running: $($stray.Id -join ', ')"
+# Only THIS run's overlay is this run's business. The check used to count every
+# pieFX-overlay on the machine, so anyone with After Effects open - which owns a
+# perfectly healthy overlay of its own - got a WARNING about a leak that was not
+# there. A harness that cries transport bug at a normal desktop is the same
+# failure as one that passes for the wrong reason, pointed the other way.
+$others = @(Get-Process pieFX-overlay -ErrorAction SilentlyContinue |
+            Where-Object { $_.Id -ne $proc.Id })
+if (-not $proc.HasExited) {
+    Write-Output "WARNING: this run's overlay ($($proc.Id)) is still running"
 } else {
-    Write-Output "no stray overlay processes"
+    Write-Output "no stray overlay from this run"
+}
+if ($others.Count) {
+    Write-Output "  note: $($others.Count) other overlay(s) alive ($($others.Id -join ', ')) - an open After Effects owns one; not this run's"
 }
 Write-Output "done"

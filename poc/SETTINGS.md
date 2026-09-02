@@ -236,7 +236,8 @@ the mouse hook or off the UI thread.
 
     {
       "version": 1,
-      "gesture": { "holdMs": 200, "armMode": "center", "armOnLaunch": true },
+      "gesture": { "holdMs": 200, "armMode": "distance", "armOnLaunch": true },
+      "appearance": { "accent": "#C74FD6" },
       "wheel": {
         "slots": [ <slot>|null × 6 ]
       }
@@ -245,6 +246,7 @@ the mouse hook or off the UI thread.
     <slot> = {
       "label":    "Master Null",
       "requires": "selection",             // or "comp", or absent/null for none
+      "accent":   "#E8A33D",               // optional: this hexagon's highlight
       "action":   { "kind": "script-snippet", "code": "_mn.addMasterNull(false)" },
       "slots":    [ <slot>|null × 6 ]      // present only when it is a ring
     }
@@ -257,8 +259,39 @@ Notes that are load-bearing rather than cosmetic:
 - **A ring may also carry an `action`** — that is its *default*, fired when the
   user flicks to it and releases without drilling in. This is what keeps the
   common case one flick.
-- **`armMode`** is a setting, defaulting to `"center"`. `"exit"` is faster but
-  needs a leave-and-return to pick the child lying in the parent's own direction.
+- **`armMode`** is a setting, and the default is now `"distance"`. The three:
+
+  - **`distance`** — a child is live once the stroke passes the category
+    hexagon (`SPACING` plus the apothem, so literally its far edge). The radius
+    IS the depth: inside it you are holding the category's default, outside it
+    you are holding one of its children, and moving back in returns you to the
+    default. Reversible, which is what makes it readable without instructions.
+  - **`center`** — level 2 stays inert until the cursor passes back through the
+    middle. Was the default.
+  - **`exit`** — armed at once, but the child lying in the direction you arrived
+    from stays inert until you leave that sector and return.
+
+  `distance` replaced `center` because **neither of the other two can select the
+  child that lies in its parent's own direction in one stroke** — the case that
+  sent a user back to report `Create > Adjustment Layer` as broken. `center`
+  holds every child inert until the cursor comes back to the middle; `exit`
+  holds that specific child inert on purpose. Distance also leaves the one-flick
+  default intact, because releasing anywhere ON the category hexagon is still
+  inside the radius.
+
+- **The highlight colour is a setting**, `appearance.accent`, and a slot may
+  override it with its own `accent`. The shipped purple's hot gradient and hot
+  ink were tuned by eye and are the user's call, so they are not recomputed from
+  the accent: they are kept verbatim for the default and hue-rotated (with
+  saturation scaled) for anything else. Default in, default out, bit for bit.
+
+- **"Not armed yet" is drawn differently from "cannot apply".** They used to be
+  the same grey, which is a lie with consequences — a hexagon one movement away
+  from working looked exactly like one that could never work, so the wheel
+  appeared to refuse an action it was perfectly willing to perform. There are
+  now four states: `idle`, `hot`, `dead` (cannot fire) and `pending` (can fire,
+  not armed), plus a line under the wheel saying what the stroke is waiting
+  for.
 - **A resolved name is not a correct name.** `Create > Solid` carries an id and
   no name, alone among the menu bindings, because `"Solid..."` resolves — to
   3000, which makes a solid in the **project** and never puts it in the comp.
@@ -307,6 +340,11 @@ easy to break:
 - **Depth is capped at 2.** "Make a category" is simply absent at level 2.
 - **`needs` is part of the snippet form**, not an advanced option, because a
   snippet without it is the flaky case.
+- **A category's action is labelled `Default action`**, with the explanation
+  beside the field rather than at the foot of the panel. It read as "this
+  hexagon runs Add to Render Queue" when what it means is "this fires only if
+  you let go without picking a child", and a user duly reported the screen as
+  contradicting the wheel.
 - **Test-fire, per binding.** It goes through `sendFire` — the same function the
   gesture calls, down the same pipe — because a test through a second code path
   tests the wrong thing. This is the practical answer to a command map that has

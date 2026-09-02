@@ -51,7 +51,7 @@
             </select>
           </label>
 
-          <label>Action
+          <label id="actionlabel">Action
             <select id="f_kind">
               <option value="">— none —</option>
               <option value="ae-command">AE menu command</option>
@@ -61,6 +61,13 @@
               <option value="builtin">pieFX built-in</option>
             </select>
           </label>
+
+          <p class="note" id="defaultnote" hidden>
+            This category holds six hexagons, so what you bind here is its
+            <b>default</b>: it fires only when you flick to the hexagon and let
+            go without going on to pick a child. That is what keeps the common
+            case a single flick.
+          </p>
 
           <div class="kindfields" id="k_ae-command" hidden>
             <label>Menu name
@@ -143,6 +150,16 @@
 
           <div class="rule"></div>
 
+          <label>Highlight colour
+            <span class="colourrow">
+              <input id="f_accent" type="color" />
+              <button id="f_accent_clear" class="ghost" hidden>Use the wheel's</button>
+              <span class="using" id="accentusing"></span>
+            </span>
+          </label>
+
+          <div class="rule"></div>
+
           <div class="row">
             <button id="makering" class="ghost">Make a category</button>
             <button id="openring" class="ghost" hidden>Open ▸</button>
@@ -163,9 +180,13 @@
       </label>
       <label class="inline">Second level arms
         <select id="g_armmode">
+          <option value="distance">once the stroke goes past the category</option>
           <option value="center">on passing back through the centre</option>
           <option value="exit">on leaving the direction you came from</option>
         </select>
+      </label>
+      <label class="inline">Highlight
+        <input id="g_accent" type="color" />
       </label>
       <label class="inline check">
         <input id="g_autoarm" type="checkbox" />
