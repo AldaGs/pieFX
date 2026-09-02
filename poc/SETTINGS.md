@@ -12,46 +12,66 @@ product can ever do is one of six action kinds:
 | Kind | Payload | Executed by |
 |---|---|---|
 | `builtin` | `name` (`anchor-grid`, `effect-search`), plus per-tool args | pieFX's own native code and custom widget |
-| `ae-command` | `id` (numeric), `name` (display only) | `AEGP_DoCommand(id)` |
+| `ae-command` | `name` (preferred), `id` (fallback) | `app.executeCommand(findMenuCommandId(name))` |
 | `script-snippet` | ExtendScript source | `AEGP_ExecuteScript` |
 | `script-file` | path to a `.jsx` | `AEGP_ExecuteScript` wrapping `$.evalFile` |
 | `effect` | `matchName` | S5's catalogue lookup + `AEGP_ApplyEffect` |
 | `ring` | six child slots | nothing — it is a container |
 
-Every kind was already proven in Phase 0 except `ae-command`, and
-`AEGP_DoCommand(AEGP_Command)` exists in `AE_GeneralPlug.h:2897` with
-`AEGP_Command` being a plain `A_long`. So this is assembly, not new risk.
+Every kind is now proven live in After Effects. `ae-command` was the one that
+fought back, and the two sections below record why.
 
 Adding a seventh kind later must never touch the gesture code — that is the test
 of whether this abstraction is holding.
 
-## AE menu commands: store the ID, never the name
+## AE menu commands: resolve by NAME, keep the id as a fallback
 
-There is **no API to enumerate** After Effects' menu commands. What exists is the
-ExtendScript pair `app.findMenuCommandId(name)` → numeric id, and natively
-`AEGP_DoCommand(id)`.
+**This reverses an earlier decision in this file, and the reason is worth
+keeping.** The original rule was "store the id, never the name", on the grounds
+that names are localised and `app.findMenuCommandId` could not validate the names
+we had. That second half was only true because the names in the *command map* are
+internal identifiers (`AddtoRenderQueue`), not the strings AE puts in its menus.
 
-So the binding is resolved **once, at bind time**, in settings: the user picks or
-types the menu item as it appears in *their* AE, we resolve it to a number, and
-we persist **the number**. The name is kept for display only and is never the
-key.
+Given the real menu name, `findMenuCommandId` resolves it against the running
+After Effects and returns 0 when it does not exist. That is **bind-time
+validation, which ids never offered** — and it is the exact protection needed
+against a map that has already produced three wrong entries and two duplicate
+names, and whose ids are only as good as one developer's testing on AE 2025.
 
-This is the S5 lesson in a different costume: round-trip through the API's own
-values rather than persisting a human-readable string. If the name were the key,
-a user switching AE to another language would break every binding they own. The
-numeric id survives a language change, survives most version changes, and is
-faster at fire time because it needs no script round-trip at all.
+An id can only ever be trusted. A wrong-but-valid id fires *some other command*
+silently, which is strictly worse than failing.
 
-A stored id that no longer resolves is a real case (an older AE, a removed
-feature). Those slots grey out at summon, reusing the context gating that already
-exists rather than failing at fire time.
+So a binding carries a `name` and, optionally, a cached `id`:
+
+    { "kind": "ae-command", "name": "Add to Render Queue", "id": 2161 }
+
+The executor prefers the name, falls back to the id, and reports
+`NO SUCH MENU COMMAND` as a toast when the name does not resolve. Names being
+localised is the remaining cost, and the id fallback is what covers it.
+
+## Menu commands must go through ExtendScript
+
+`AEGP_DoCommand` is not usable for this. Measured both ways: every id fired
+through it from a **menu command** worked, and every id fired through it from the
+**idle hook** — where the gesture path lands — silently did nothing and still
+returned `A_Err_NONE`.
+
+That is the S2B finding again. `UpdateMenuHook` fires when AE **rebuilds its
+menus**, so command enable-state is only current just after a menu interaction;
+during idle AE treats the command as not-enabled and drops it. There is no API to
+force a rebuild.
+
+`app.executeCommand` is a different dispatch path and is already proven to work
+from idle — it is how Master Null fires. The generated snippet brackets the call
+with the comp's layer count and the render queue's item count, so a command that
+returns cleanly and changes nothing says so.
 
 ### The command map
 
 `overlay/src/ae-commands-2025.json` is an id → name table (909 entries: 613 menu
-commands, 296 effects) brought over from another project. It exists so the
-settings picker can offer searchable **names** while still persisting the
-**number**. Three things about it are load-bearing:
+commands, 296 effects) brought over from another project. It is now a **hint for
+the settings picker only** — not the binding key — because bindings resolve by
+name. Three things about it are load-bearing:
 
 - **It is version-stamped, and the stamp is the point.** It was captured from AE
   2025; we target 2026. Ids are mostly stable across versions but not provably
@@ -63,7 +83,8 @@ settings picker can offer searchable **names** while still persisting the
   and cannot validate them for us.
 - **Names are not unique.** `AdjustmentLayer` appears at both 2263 and 2279,
   `File` at four different ids. The id disambiguates; the name never can. One
-  more reason the name is never the key.
+  more reason a *map* name cannot be the key. A real MENU name can, because AE
+  resolves it itself.
 
 Checking the first draft of the defaults against this map caught three wrong
 guesses — `SaveFrameAs` is 2233 (not 2104, which is `File`), `CenterInView` is

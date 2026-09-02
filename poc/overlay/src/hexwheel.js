@@ -800,7 +800,13 @@ function sendFire(action, cell) {
   let m = null;
   switch (action.kind) {
     case "ae-command":
-      m = { type: "fire", kind: "ae-command", id: action.id };
+      // Name first, id as fallback. findMenuCommandId resolves the name against
+      // the running AE, so a binding is checkable at the moment it is made — an
+      // id can only be trusted, and the hand-tested map has already produced
+      // three wrong entries and two duplicate names.
+      m = { type: "fire", kind: "ae-command" };
+      if (action.name) m.b64 = b64(action.name);
+      if (action.id) m.id = action.id;
       break;
     case "script-snippet":
       m = { type: "fire", kind: "script-snippet", b64: b64(action.code) };

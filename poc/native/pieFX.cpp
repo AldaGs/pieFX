@@ -392,8 +392,19 @@ HandleOverlayLine(const char *lineZ)
 	a.cell = -1;
 
 	if (!strcmp(kind, "ae-command")) {
-		if (!JsonNum(lineZ, "\"id\":", &a.id)) {
-			return;
+		//	A name is preferred and an id is the fallback, so a binding can
+		//	be validated against the running AE rather than trusted. The name
+		//	arrives base64 for the usual reason - it contains spaces, dots and
+		//	apostrophes, and hand-rolled escaping is what keeps biting here.
+		char b64[PIEFX_B64_MAX] = { 0 };
+
+		if (JsonStr(lineZ, "\"b64\":", b64, sizeof(b64))) {
+			B64Decode(b64, a.text, sizeof(a.text));
+		}
+		JsonNum(lineZ, "\"id\":", &a.id);
+
+		if (!a.text[0] && !a.id) {
+			return;		// neither a name nor an id: nothing to run
 		}
 		a.kind = PK_AE_CMD;
 	} else if (!strcmp(kind, "script-snippet") ||
@@ -832,6 +843,10 @@ RefreshSelectionContext(AEGP_SuiteHandler &suites)
 //	want to own several, and a group we opened could be left dangling by a throw
 //	we cannot see - which wedges AE's undo stack until some other script happens
 //	to close one. Scripts own their own undo, the way ag_masterNull.jsx does.
+//	Last value a script returned, so a probe can put it in front of the user
+//	instead of leaving it in a log nobody opens.
+static char			S_last_result[2048] = { 0 };
+
 static void
 RunScript(AEGP_SuiteHandler &suites, const char *codeZ, const char *whatZ)
 {
@@ -874,6 +889,7 @@ RunScript(AEGP_SuiteHandler &suites, const char *codeZ, const char *whatZ)
 			} else {
 				Log("  %s: %s\n", whatZ, t);
 			}
+			strcpy_s(S_last_result, sizeof(S_last_result), t);
 		}
 		ERR2(suites.MemorySuite1()->AEGP_UnlockMemHandle(resultH));
 		ERR2(suites.MemorySuite1()->AEGP_FreeMemHandle(resultH));
@@ -972,43 +988,60 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 
 	switch (aP->kind) {
 		case PK_AE_CMD: {
-			//	app.executeCommand, NOT AEGP_DoCommand.
+			//	app.executeCommand, NOT AEGP_DoCommand. Measured: every id fired
+			//	through DoCommand from a MENU command worked, and every id fired
+			//	through it from HERE - the idle hook, where the gesture lands -
+			//	silently did nothing while still returning A_Err_NONE. That is the
+			//	S2B finding again: UpdateMenuHook fires when AE REBUILDS ITS MENUS,
+			//	so enable-state is stale during idle and the command is dropped.
 			//
-			//	Measured: every id fired through AEGP_DoCommand from a MENU
-			//	command worked (2767, 2279, 3819 all did their thing), and every
-			//	id fired through it from HERE - the idle hook, where the gesture
-			//	lands - silently did nothing while still returning A_Err_NONE.
-			//	The ids were never wrong.
+			//	A NAME is preferred over an id when the binding carries one.
+			//	findMenuCommandId resolves it against the running AE, so the binding
+			//	is checkable the moment it is made and cannot silently rot into some
+			//	other command the way a stale id does. Names are localised, so the
+			//	id stays as the fallback.
 			//
-			//	That matches the S2B finding: UpdateMenuHook fires when AE
-			//	REBUILDS ITS MENUS, so command enable-state is only current just
-			//	after a menu interaction. During idle AE treats the command as
-			//	not-enabled and drops it. There is no API to force a rebuild.
-			//
-			//	ExtendScript is a different dispatch path and is already proven to
-			//	work from idle - that is how Master Null fires.
-			//
-			//	The snippet measures itself. A command that returns cleanly and
-			//	changes nothing is exactly the failure that cost two sessions, so
-			//	the layer and render-queue counts bracket the call and land in the
-			//	log whether it worked or not.
-			char code[640];
-			char what[64];
+			//	It measures itself either way: a command that returns cleanly and
+			//	changes nothing is the failure that cost two sessions.
+			char code[1024];
+			char what[96];
 
-			sprintf_s(code, sizeof(code),
-				"(function(){"
-				"  var c = app.project.activeItem;"
-				"  var isC = (c && c instanceof CompItem);"
-				"  var L0 = isC ? c.numLayers : -1;"
-				"  var R0 = app.project.renderQueue.numItems;"
-				"  app.executeCommand(%ld);"
-				"  var L1 = isC ? c.numLayers : -1;"
-				"  var R1 = app.project.renderQueue.numItems;"
-				"  return 'layers ' + L0 + '->' + L1 + ', rq ' + R0 + '->' + R1;"
-				"})()", aP->id);
+			if (aP->text[0]) {
+				sprintf_s(code, sizeof(code),
+					"(function(){"
+					"  var id = app.findMenuCommandId('%s');"
+					"  if (!id) { return 'NO SUCH MENU COMMAND'; }"
+					"  var c = app.project.activeItem;"
+					"  var isC = (c && c instanceof CompItem);"
+					"  var L0 = isC ? c.numLayers : -1;"
+					"  var R0 = app.project.renderQueue.numItems;"
+					"  app.executeCommand(id);"
+					"  var L1 = isC ? c.numLayers : -1;"
+					"  var R1 = app.project.renderQueue.numItems;"
+					"  return 'id ' + id + ', layers ' + L0 + '->' + L1 + ', rq ' + R0 + '->' + R1;"
+					"})()", aP->text);
+				sprintf_s(what, sizeof(what), "ae-command '%s'", aP->text);
+			} else {
+				sprintf_s(code, sizeof(code),
+					"(function(){"
+					"  var c = app.project.activeItem;"
+					"  var isC = (c && c instanceof CompItem);"
+					"  var L0 = isC ? c.numLayers : -1;"
+					"  var R0 = app.project.renderQueue.numItems;"
+					"  app.executeCommand(%ld);"
+					"  var L1 = isC ? c.numLayers : -1;"
+					"  var R1 = app.project.renderQueue.numItems;"
+					"  return 'layers ' + L0 + '->' + L1 + ', rq ' + R0 + '->' + R1;"
+					"})()", aP->id);
+				sprintf_s(what, sizeof(what), "ae-command %ld", aP->id);
+			}
 
-			sprintf_s(what, sizeof(what), "ae-command %ld", aP->id);
 			RunScript(suites, code, what);
+			if (0 == strcmp(S_last_result, "NO SUCH MENU COMMAND")) {
+				char t[200];
+				sprintf_s(t, sizeof(t), "No menu command named \"%s\"", aP->text);
+				SendToast("error", t);
+			}
 		} break;
 
 		case PK_SNIPPET:
@@ -1236,9 +1269,55 @@ ProbeCommand(AEGP_SuiteHandler &suites, long id, const char *nameZ,
 }
 
 static void
+ResolveMenuNames(AEGP_SuiteHandler &suites, char *summaryZ, size_t summary_max)
+{
+	//	app.findMenuCommandId turns a MENU NAME into an id, which means a
+	//	binding can be validated at the moment it is made: a name that does not
+	//	resolve comes back 0. Ids never offered that, and the hand-tested map
+	//	has already produced three wrong entries and two duplicate names.
+	//
+	//	This asks AE which spellings actually exist on THIS install, so the
+	//	defaults are copied from a measurement instead of guessed again.
+	const char *codeZ =
+		"(function(){"
+		"  var n = ["
+		"    'Precompose...',"
+		"    'Pre-compose...',"
+		"    'Precompose',"
+		"    'Add to Render Queue',"
+		"    'Add To Render Queue',"
+		"    'Null Object',"
+		"    'New Null Object',"
+		"    'Adjustment Layer',"
+		"    'New Adjustment Layer',"
+		"    'Solid...',"
+		"    'New Solid...',"
+		"    'Text',"
+		"    'Light...',"
+		"    'Camera...',"
+		"    'Save Frame As...',"
+		"    'Center in View',"
+		"    'Duplicate',"
+		"    'Split Layer',"
+		"    'Center Anchor Point in Layer Content'"
+		"  ];"
+		"  var o = [];"
+		"  for (var i = 0; i < n.length; i++) {"
+		"    var id = 0;"
+		"    try { id = app.findMenuCommandId(n[i]); } catch (e) { id = -1; }"
+		"    o.push((id ? id : '  --') + '  ' + n[i]);"
+		"  }"
+		"  return o.join(String.fromCharCode(10));"
+		"})()";
+
+	S_last_result[0] = 0;
+	RunScript(suites, codeZ, "menu-name lookup");
+	strcat_s(summaryZ, summary_max, S_last_result);
+}
+static void
 RunCommandProbe(AEGP_SuiteHandler &suites)
 {
-	char summary[1024] = { 0 };
+	char summary[4096] = { 0 };
 
 	Log("\n=== ae-command probe ===\n");
 	strcat_s(summary, sizeof(summary),
@@ -1246,6 +1325,10 @@ RunCommandProbe(AEGP_SuiteHandler &suites)
 		"layers around each call. The wheel itself now uses executeCommand,\n"
 		"because DoCommand works here and does nothing from the idle hook.\n\n");
 
+
+	strcat_s(summary, sizeof(summary), "Menu names AE resolves on THIS install:\n");
+	ResolveMenuNames(suites, summary, sizeof(summary));
+	strcat_s(summary, sizeof(summary), "\n\nId dispatch comparison:\n");
 
 	ProbeCommand(suites, PIEFX_PROBE_NULL,  "Null Object",   FALSE, summary, sizeof(summary));
 	ProbeCommand(suites, PIEFX_PROBE_NULL,  "Null Object",   TRUE,  summary, sizeof(summary));
