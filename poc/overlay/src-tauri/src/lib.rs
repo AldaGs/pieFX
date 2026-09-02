@@ -18,7 +18,8 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl};
+use tauri::webview::WebviewWindowBuilder;
 
 // One pipe per direction. A single duplex pipe opened synchronously has its I/O
 // serialised by Windows, so a thread parked in read blocks any write issued from
@@ -180,27 +181,102 @@ fn fire_action(json: String, state: tauri::State<Pipe>) -> Result<(), String> {
     }
 }
 
+// The settings window. A SECOND window in this same process, not a second
+// process: it must read and write the same settings file the wheel is using,
+// and two processes racing on one file is a bug waiting for the first time
+// someone leaves the configurator open.
+//
+// Everything the overlay window is, this one is not — decorated, focusable,
+// opaque, not always-on-top, and it takes the mouse.
+fn show_settings(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        dlog("  settings window refocused");
+        return;
+    }
+    match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+        .title("pieFX Settings")
+        .inner_size(1180.0, 760.0)
+        .min_inner_size(920.0, 620.0)
+        .resizable(true)
+        .decorations(true)
+        .transparent(false)
+        .always_on_top(false)
+        .skip_taskbar(false)
+        .focused(true)
+        .center()
+        .build()
+    {
+        Ok(_) => dlog("  settings window opened"),
+        Err(e) => dlog(&format!("  settings window FAILED: {}", e)),
+    }
+}
+
+// Asked for by the plug-in's `Window > pieFX Settings` menu item, which arrives
+// down the events pipe like any other message.
+#[tauri::command]
+fn open_settings(app: tauri::AppHandle) {
+    show_settings(&app);
+}
+
+// `--settings <path>` overrides where settings come from, and `--settings none`
+// means "there are none, use the built-in defaults".
+//
+// This exists for the offline harness. Once the wheel reads a settings file, a
+// harness that asserts on the DEFAULT tree starts failing on any machine whose
+// owner has configured anything - and the failure would look exactly like a
+// transport bug, which is the one thing that harness is for. A test that
+// depends on the developer's own settings is not a test.
+fn settings_arg() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|a| a == "--settings")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
 fn settings_path() -> Option<PathBuf> {
-    let base = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(base).join("pieFX").join("settings.json"))
+    match settings_arg() {
+        Some(v) if v == "none" => None,
+        Some(v) => Some(PathBuf::from(v)),
+        None => {
+            let base = std::env::var_os("APPDATA")?;
+            Some(PathBuf::from(base).join("pieFX").join("settings.json"))
+        }
+    }
 }
 
 // Returns the settings file's contents, or "" when there is none — the frontend
 // falls back to its built-in DEFAULTS in that case.
 #[tauri::command]
 fn load_settings() -> String {
-    settings_path()
+    if matches!(settings_arg().as_deref(), Some("none")) {
+        dlog("  load_settings: --settings none -> built-in defaults");
+        return String::new();
+    }
+    let s = settings_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    dlog(&format!("  load_settings: {} bytes", s.len()));
+    s
 }
 
+// Written, then BROADCAST. Without the broadcast the wheel would keep serving
+// the tree it loaded at startup, and a user who just rebound a hexagon would
+// flick at it and get the old action — which reads as "settings do not work"
+// rather than as "settings are cached".
 #[tauri::command]
-fn save_settings(json: String) -> Result<(), String> {
-    let p = settings_path().ok_or("no APPDATA")?;
+fn save_settings(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    let p = settings_path().ok_or("settings are disabled (--settings none)")?;
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    std::fs::write(p, json).map_err(|e| e.to_string())
+    std::fs::write(&p, json).map_err(|e| e.to_string())?;
+    dlog(&format!("  settings saved -> {}", p.display()));
+    let _ = app.emit("piefx-settings", "saved");
+    Ok(())
 }
 
 fn pipe_client(app: tauri::AppHandle) {
@@ -241,6 +317,14 @@ fn pipe_client(app: tauri::AppHandle) {
                             let msg = line.trim();
                             if !msg.is_empty() {
                                 dlog(&format!("  emit -> {}", msg));
+                                // The settings window is opened HERE rather than
+                                // from the wheel's JS: the wheel is a
+                                // click-through renderer and has no business
+                                // owning another window's lifetime.
+                                if msg.contains("\"type\":\"settings\"") {
+                                    let h = app.clone();
+                                    let _ = app.run_on_main_thread(move || show_settings(&h));
+                                }
                                 let _ = app.emit("piefx", msg.to_string());
                             }
                         }
@@ -271,6 +355,7 @@ pub fn run() {
             dbg,
             load_settings,
             save_settings,
+            open_settings,
             quit_overlay
         ])
         .setup(|app| {

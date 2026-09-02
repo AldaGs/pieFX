@@ -6,7 +6,13 @@ $exe = "C:\AE_SDK\ae25.6_61.64bit.AfterEffectsSDK\Examples\Template\pieFX\poc\ov
 $tx = New-Object System.IO.Pipes.NamedPipeServerStream("pieFX-test99", [System.IO.Pipes.PipeDirection]::Out, 1)
 $rx = New-Object System.IO.Pipes.NamedPipeServerStream("pieFX-cmd-test99", [System.IO.Pipes.PipeDirection]::In, 1)
 
-$args = @("--events", "\\.\pipe\pieFX-test99", "--actions", "\\.\pipe\pieFX-cmd-test99")
+# `--settings none` pins the overlay to its BUILT-IN defaults. Everything this
+# script asserts is a default binding, so without it the harness would pass or
+# fail according to whatever the developer happens to have configured - and a
+# failure would read as a transport bug, which is the one thing this script
+# exists to catch.
+$args = @("--events", "\\.\pipe\pieFX-test99", "--actions", "\\.\pipe\pieFX-cmd-test99",
+          "--settings", "none")
 $proc = Start-Process -FilePath $exe -PassThru -ArgumentList $args
 Write-Output "overlay pid $($proc.Id) (custom pipe names)"
 

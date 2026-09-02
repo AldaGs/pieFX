@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pieFX Settings</title>
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <header>
+      <div class="crumbs" id="crumbs"></div>
+      <div class="spacer"></div>
+      <span class="dirty" id="dirty" hidden>unsaved changes</span>
+      <button id="revert" class="ghost">Revert</button>
+      <button id="reset" class="ghost">Reset to defaults</button>
+      <button id="save" class="primary">Save</button>
+    </header>
+
+    <main>
+      <!-- The wheel IS the settings screen: click a hexagon to edit it,
+           double-click a category to walk into it. -->
+      <section class="stage">
+        <canvas id="wheel"></canvas>
+        <p class="hint">
+          Click a hexagon to edit it. Double-click a category to open it.
+          The centre goes back up.
+        </p>
+      </section>
+
+      <aside class="inspector" id="inspector">
+        <div class="empty" id="empty">
+          <h2>Nothing selected</h2>
+          <p>Pick a hexagon on the left. Empty positions are holes you can fill —
+             they keep their direction reserved so nothing already in your hands
+             ever moves.</p>
+        </div>
+
+        <div id="form" hidden>
+          <h2 id="slotTitle">Slot</h2>
+
+          <label>Label
+            <input id="f_label" type="text" placeholder="what the hexagon says" />
+          </label>
+
+          <label>Needs
+            <select id="f_requires">
+              <option value="inherit">Inherit from the category</option>
+              <option value="none">Nothing</option>
+              <option value="selection">A selected layer</option>
+              <option value="comp">A comp open</option>
+            </select>
+          </label>
+
+          <label>Action
+            <select id="f_kind">
+              <option value="">— none —</option>
+              <option value="ae-command">AE menu command</option>
+              <option value="script-snippet">ExtendScript snippet</option>
+              <option value="script-file">ExtendScript file</option>
+              <option value="effect">Effect (match name)</option>
+              <option value="builtin">pieFX built-in</option>
+            </select>
+          </label>
+
+          <div class="kindfields" id="k_ae-command" hidden>
+            <label>Menu name
+              <input id="f_cmd_name" type="text" list="cmdnames"
+                     placeholder="Add to Render Queue" />
+            </label>
+            <label>Fallback id
+              <input id="f_cmd_id" type="number" placeholder="2161" />
+            </label>
+            <p class="note">
+              The name is resolved against the running After Effects, so a wrong
+              one fails loudly. The id is only the fallback for a localised AE —
+              and a wrong-but-valid id silently fires some other command, which
+              is why the name goes first. <b>Test-fire before you trust either.</b>
+            </p>
+          </div>
+
+          <div class="kindfields" id="k_script-snippet" hidden>
+            <label>Code
+              <textarea id="f_code" rows="4"
+                        placeholder="_mn.addMasterNull(false)"></textarea>
+            </label>
+            <label>Needs global
+              <input id="f_needs_global" type="text" placeholder="_mn" />
+            </label>
+            <label>Loaded from
+              <input id="f_needs_file" type="text"
+                     placeholder="scripts/ag_masterNull.jsx" />
+            </label>
+            <p class="note">
+              After Effects shares one ExtendScript namespace, so a snippet can
+              call into a script you already have — but only once that script has
+              been loaded. Naming the global and the file makes pieFX load it on
+              demand, which is the difference between a wheel that works on the
+              first flick and one that works on the second.
+            </p>
+          </div>
+
+          <div class="kindfields" id="k_script-file" hidden>
+            <label>Path
+              <input id="f_path" type="text" placeholder="scripts/my_script.jsx" />
+            </label>
+            <p class="note">
+              Relative paths resolve against pieFX's install folder, so a script
+              that ships with the product travels with it. A bare filename is
+              searched in After Effects' own Scripts folders. Most panel scripts
+              pop their palette when run this way — a snippet is usually what you
+              actually want.
+            </p>
+          </div>
+
+          <div class="kindfields" id="k_effect" hidden>
+            <label>Match name
+              <input id="f_match" type="text" placeholder="ADBE Gaussian Blur 2" />
+            </label>
+            <p class="note">Applied to every selected layer by match name.</p>
+          </div>
+
+          <div class="kindfields" id="k_builtin" hidden>
+            <label>Built-in
+              <select id="f_builtin">
+                <option value="anchor-grid">Anchor grid</option>
+                <option value="effect-search">Effect search</option>
+              </select>
+            </label>
+            <label>Default cell
+              <input id="f_cell" type="number" min="-1" max="8" placeholder="4" />
+            </label>
+          </div>
+
+          <div class="row">
+            <button id="testfire" class="primary">Test-fire</button>
+            <span id="testresult" class="testresult"></span>
+          </div>
+
+          <div class="rule"></div>
+
+          <div class="row">
+            <button id="makering" class="ghost">Make a category</button>
+            <button id="openring" class="ghost" hidden>Open ▸</button>
+            <button id="clear" class="danger">Clear slot</button>
+          </div>
+          <p class="note" id="ringnote" hidden>
+            A category holds six more hexagons. Its own action, if it has one, is
+            its <b>default</b> — flick to it and release without drilling in and
+            that is what fires, which is what keeps the common case one flick.
+          </p>
+        </div>
+      </aside>
+    </main>
+
+    <footer>
+      <label class="inline">Hold to summon
+        <input id="g_hold" type="number" min="80" max="1000" step="10" /> ms
+      </label>
+      <label class="inline">Second level arms
+        <select id="g_armmode">
+          <option value="center">on passing back through the centre</option>
+          <option value="exit">on leaving the direction you came from</option>
+        </select>
+      </label>
+      <label class="inline check">
+        <input id="g_autoarm" type="checkbox" />
+        Arm automatically when After Effects starts
+      </label>
+      <div class="spacer"></div>
+      <span class="where" id="where"></span>
+    </footer>
+
+    <datalist id="cmdnames"></datalist>
+    <script type="module" src="settings.js"></script>
+  </body>
+</html>

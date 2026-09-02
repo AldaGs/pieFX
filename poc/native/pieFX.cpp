@@ -31,11 +31,25 @@
 static AEGP_Command		S_toggle_cmd	= 0L;
 static AEGP_Command		S_selftest_cmd	= 0L;
 static AEGP_Command		S_cmdprobe_cmd	= 0L;
+static AEGP_Command		S_settings_cmd	= 0L;
 static AEGP_PluginID	S_my_id			= 0L;
 static SPBasicSuite		*sP				= NULL;
 
 static A_Boolean		S_active		= FALSE;	// POC armed?
 static char				S_log_path[MAX_PATH] = { 0 };
+
+//	Read from settings.json at the first idle. `armOnLaunch` ships ON, so an
+//	install is "restart AE and flick" rather than "remember to arm it first";
+//	Window > pieFX remains the manual toggle and the way out.
+static A_Boolean		S_arm_on_launch	= TRUE;
+static UINT				S_hold_ms		= PIEFX_HOLD_MS;
+static A_Boolean		S_settings_read	= FALSE;
+static A_Boolean		S_launch_armed	= FALSE;	// the auto-arm has had its one go
+
+//	Defined with the rest of the lifecycle, below; the idle hook needs them.
+static void			ResolveLogPath(void);
+static void			ReadSettings(void);
+static A_Boolean	Arm(AEGP_SuiteHandler &suites, A_Boolean announce);
 
 //	gesture state (from the S2D spike)
 static HHOOK			S_mouse_hook	= NULL;
@@ -324,6 +338,12 @@ static void SendCancel(void)  { PipeWrite("{\"type\":\"cancel\"}\n"); }
 //	succeeded and the process was still in Task Manager" means. Letting it
 //	unwind its own read is the only exit that is actually clean.
 static void SendQuit(void)    { PipeWrite("{\"type\":\"quit\"}\n"); }
+
+//	Window > pieFX Settings. The overlay opens a second, ordinary window in
+//	its OWN process - the one process that already owns the slot tree and the
+//	settings file, so nothing has to be kept in sync and no two processes race
+//	on the file. The plug-in only asks.
+static void SendSettings(void) { PipeWrite("{\"type\":\"settings\"}\n"); }
 
 //	Errors have to reach the user, but AEGP_ReportInfo is MODAL - throwing a
 //	dialog at someone mid-gesture is worse than the failure it reports. The
@@ -910,14 +930,14 @@ MouseProc(int code, WPARAM wParam, LPARAM lParam)
 				S_rdown_tick  = GetTickCount();
 				S_rdown_pt	  = mhs ? mhs->pt : S_rdown_pt;
 				CancelHoldTimer();
-				S_hold_timer = SetTimer(NULL, 0, PIEFX_HOLD_MS, HoldTimerProc);
+				S_hold_timer = SetTimer(NULL, 0, S_hold_ms, HoldTimerProc);
 				//	AE opens its context menu on DOWN, so the DOWN must go.
 				return 1;
 			}
 
 			case WM_MOUSEMOVE: {
 				if (S_rdownB && !S_hold_firedB &&
-					(GetTickCount() - S_rdown_tick) >= PIEFX_HOLD_MS) {
+					(GetTickCount() - S_rdown_tick) >= S_hold_ms) {
 					OnHoldDetected();
 				}
 				//	Raw cursor only. The overlay owns the wheel geometry, so it
@@ -1536,6 +1556,28 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 {
 	AEGP_SuiteHandler suites(sP);
 
+	//	Arm without being asked, once, on the first idle after AE has finished
+	//	coming up. NOT from EntryPointFunc: the mouse hook binds to the calling
+	//	thread and the overlay is a process launch, and neither belongs in the
+	//	middle of AE loading its plug-ins. Idle is guaranteed to be AE's UI
+	//	thread and guaranteed to be after startup, which is exactly the two
+	//	things arming needs.
+	//
+	//	It runs silently. A modal 'pieFX: ON' on every launch would be the
+	//	feature announcing itself forever; the wheel appearing on the first
+	//	right-hold is the confirmation.
+	if (!S_launch_armed) {
+		S_launch_armed = TRUE;
+		if (!S_log_path[0])   { ResolveLogPath(); }
+		if (!S_settings_read) { ReadSettings(); }
+		if (S_arm_on_launch) {
+			Log("  armOnLaunch: arming without being asked\n");
+			Arm(suites, FALSE);
+		} else {
+			Log("  armOnLaunch off; waiting for the menu item\n");
+		}
+	}
+
 	//	Backstop for a press whose UP we never saw. The thread-local WH_MOUSE hook
 	//	only sees AE's thread, so a right-release over a NON-AE window is invisible
 	//	to us: S_rdownB stays set and the wheel is left showing. Idle is starved
@@ -1641,6 +1683,7 @@ UpdateMenuHook(AEGP_GlobalRefcon, AEGP_UpdateMenuRefcon, AEGP_WindowType)
 	AEGP_SuiteHandler suites(sP);
 	//	Always available - arming is a global mode, not a per-comp action.
 	suites.CommandSuite1()->AEGP_EnableCommand(S_toggle_cmd);
+	suites.CommandSuite1()->AEGP_EnableCommand(S_settings_cmd);
 	suites.CommandSuite1()->AEGP_EnableCommand(S_selftest_cmd);
 	suites.CommandSuite1()->AEGP_EnableCommand(S_cmdprobe_cmd);
 	return A_Err_NONE;
@@ -1654,37 +1697,126 @@ ResolveLogPath(void)
 	strcat_s(S_log_path, MAX_PATH, "pieFX_poc.txt");
 }
 
-static void
-ToggleActive(AEGP_SuiteHandler &suites)
+//	The two settings the plug-in has to know before the overlay exists.
+//
+//	Hand-scanned, not parsed. The rest of settings.json is the overlay's - it
+//	owns the slot tree and writes the file - and a real JSON parser here would
+//	be a second implementation of a format that already has one. What is needed
+//	is two scalars out of a file we wrote ourselves, and a scan for the key
+//	followed by the next token does exactly that without pretending to be
+//	general.
+//
+//	A missing or unreadable file is not an error: it is a machine where the
+//	settings window has never been opened, and the shipped defaults are right.
+static const char *
+FindKey(const char *bufZ, const char *keyZ)
 {
-	if (S_active) {
-		//	Disarm.
-		S_active = FALSE;
-		CancelHoldTimer();
-		if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
-		SendCancel();
-		StopPipeServer();
-		Log("=== pieFX POC disarmed ===\n");
-		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, "pieFX POC: OFF.");
+	const char *p = strstr(bufZ, keyZ);
+
+	if (!p) { return NULL; }
+	p += strlen(keyZ);
+	while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') { p++; }
+	if (*p != ':') { return NULL; }
+	p++;
+	while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') { p++; }
+	return p;
+}
+
+static void
+ReadSettings(void)
+{
+	char	path[MAX_PATH];
+	DWORD	len;
+	FILE	*fp = NULL;
+	char	buf[8192];
+	size_t	got;
+
+	S_settings_read = TRUE;
+
+	len = GetEnvironmentVariableA("APPDATA", path, MAX_PATH);
+	if (!len || len >= MAX_PATH - (DWORD)strlen(PIEFX_SETTINGS_REL) - 2) {
+		Log("  settings: no APPDATA; using defaults\n");
 		return;
 	}
+	strcat_s(path, MAX_PATH, "\\");
+	strcat_s(path, MAX_PATH, PIEFX_SETTINGS_REL);
 
-	//	Arm.
+	if (fopen_s(&fp, path, "rb") || !fp) {
+		Log("  settings: none at %s; defaults (armOnLaunch=on, %ums)\n",
+			path, S_hold_ms);
+		return;
+	}
+	got = fread(buf, 1, sizeof(buf) - 1, fp);
+	fclose(fp);
+	buf[got] = 0;
+
+	{
+		const char *v = FindKey(buf, "\"armOnLaunch\"");
+
+		if (v) { S_arm_on_launch = (strncmp(v, "false", 5) != 0); }
+	}
+	{
+		const char *v = FindKey(buf, "\"holdMs\"");
+
+		if (v) {
+			int ms = atoi(v);
+
+			//	Clamped rather than trusted. A zero here would summon the wheel
+			//	on every right-click and take AE's context menu away entirely -
+			//	a setting nobody could undo without editing the file by hand.
+			if (ms < 80)   { ms = 80; }
+			if (ms > 2000) { ms = 2000; }
+			S_hold_ms = (UINT)ms;
+		}
+	}
+	Log("  settings: %s -> armOnLaunch=%s holdMs=%u\n",
+		path, S_arm_on_launch ? "true" : "false", S_hold_ms);
+}
+
+static void
+Disarm(AEGP_SuiteHandler &suites, A_Boolean announce)
+{
+	S_active = FALSE;
+	CancelHoldTimer();
+	if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
+	SendCancel();
+	StopPipeServer();
+	Log("=== pieFX disarmed ===\n");
+	if (announce) {
+		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, "pieFX: OFF.");
+	}
+}
+
+//	`announce` is the whole reason arming is a function rather than the second
+//	half of a toggle. A modal dialog is right when the user has just clicked the
+//	menu item and wants to know it took; it is intolerable on every AE launch,
+//	which is what auto-arm would otherwise be.
+static A_Boolean
+Arm(AEGP_SuiteHandler &suites, A_Boolean announce)
+{
+	if (S_active) { return TRUE; }
+
 	ResolveLogPath();
+
 	FILE *fp = NULL;
 	if (!fopen_s(&fp, S_log_path, "w") && fp) {
-		fprintf(fp, "pieFX POC log. Hold %dms. Thread %lu.\n\n",
-				PIEFX_HOLD_MS, (unsigned long)GetCurrentThreadId());
+		fprintf(fp, "pieFX log. Hold %ums. Thread %lu.\n\n",
+				S_hold_ms, (unsigned long)GetCurrentThreadId());
 		fclose(fp);
 	}
 
 	S_mouse_hook = SetWindowsHookEx(WH_MOUSE, MouseProc, NULL, GetCurrentThreadId());
 	if (!S_mouse_hook) {
 		char m[160];
-		sprintf_s(m, sizeof(m), "pieFX POC: SetWindowsHookEx failed, err=%lu",
+
+		sprintf_s(m, sizeof(m), "pieFX: SetWindowsHookEx failed, err=%lu",
 				  (unsigned long)GetLastError());
-		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, m);
-		return;
+		Log("  %s\n", m);
+		//	A silent auto-arm that fails still has to be reachable: it leaves
+		//	S_active FALSE, so the menu item is the way to try again AND to see
+		//	why. A modal error thrown during AE's startup is not.
+		if (announce) { suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, m); }
+		return FALSE;
 	}
 
 	StartPipeServer();
@@ -1694,18 +1826,44 @@ ToggleActive(AEGP_SuiteHandler &suites)
 	S_rdownB = FALSE;
 	S_hold_firedB = FALSE;
 	S_replay_pending = 0;
-	Log("=== pieFX POC armed ===\n");
+	Log("=== pieFX armed (hold %ums) ===\n", S_hold_ms);
 
-	char msg[MAX_PATH + 256];
+	if (!announce) { return TRUE; }
+
+	char msg[MAX_PATH + 320];
 	sprintf_s(msg, sizeof(msg),
-		"pieFX POC: ON.\n\n"
-		"Select a layer, then right-press-and-hold past %dms: the 3x3 anchor wheel\n"
-		"appears under the cursor. Flick to a cell and release to move the anchor there.\n"
-		"A quick right-click still opens AE's normal menu.\n\n"
-		"If the wheel does not appear, run the overlay by hand (npm run tauri dev in\n"
-		"poc/overlay) - it retries connecting.\n\nLog: %s",
-		PIEFX_HOLD_MS, S_log_path);
+		"pieFX: ON.\n\n"
+		"Right-press and hold past %ums: the wheel appears under the cursor.\n"
+		"Flick to a hexagon and release to fire it. A quick right-click still\n"
+		"opens AE's normal menu.\n\n"
+		"Window > pieFX Settings edits the wheel.\n\nLog: %s",
+		S_hold_ms, S_log_path);
 	suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, msg);
+	return TRUE;
+}
+
+static void
+ToggleActive(AEGP_SuiteHandler &suites)
+{
+	if (S_active) { Disarm(suites, TRUE); }
+	else          { Arm(suites, TRUE); }
+}
+
+//	The settings window needs the overlay to exist, and the overlay only exists
+//	while pieFX is armed. So this arms first if it has to - which is also the
+//	honest reading of "open the settings for the thing", and it means the menu
+//	item never appears to do nothing.
+static void
+OpenSettings(AEGP_SuiteHandler &suites)
+{
+	if (!S_active && !Arm(suites, FALSE)) {
+		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id,
+			"pieFX could not start, so there is nothing to configure. "
+			"The log says why: %TEMP%\\pieFX_poc.txt");
+		return;
+	}
+	Log("  settings window requested\n");
+	SendSettings();
 }
 
 static A_Err
@@ -1715,6 +1873,12 @@ CommandHook(AEGP_GlobalRefcon, AEGP_CommandRefcon, AEGP_Command command,
 	AEGP_SuiteHandler suites(sP);
 	if (command == S_toggle_cmd) {
 		ToggleActive(suites);
+		*handledPB = TRUE;
+	} else if (command == S_settings_cmd) {
+		if (!S_log_path[0]) {
+			ResolveLogPath();
+		}
+		OpenSettings(suites);
 		*handledPB = TRUE;
 	} else if (command == S_cmdprobe_cmd) {
 		if (!S_log_path[0]) {
@@ -1755,6 +1919,10 @@ EntryPointFunc(
 
 	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_toggle_cmd));
 	ERR(suites.CommandSuite1()->AEGP_InsertMenuCommand(S_toggle_cmd, PIEFX_MENU_NAME,
+														AEGP_Menu_WINDOW, AEGP_MENU_INSERT_SORTED));
+
+	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_settings_cmd));
+	ERR(suites.CommandSuite1()->AEGP_InsertMenuCommand(S_settings_cmd, PIEFX_SETTINGS_NAME,
 														AEGP_Menu_WINDOW, AEGP_MENU_INSERT_SORTED));
 
 	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_cmdprobe_cmd));

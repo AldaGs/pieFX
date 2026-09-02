@@ -12,9 +12,10 @@ runs **end to end in After Effects with nothing started by hand**: arm it from t
 Window menu, right-press and hold, and a hexagon wheel appears under the cursor
 with one level of drill-down. Releasing on a slot fires a real action — an AE menu
 command, a user's ExtendScript, an effect by match name, or the built-in anchor
-grid. **All five executor kinds are proven live from the gesture.** What is
-missing is not capability but polish: settings have no UI, the Effects search is a
-mock, and nothing greys out when an action cannot apply. The tables below are the
+grid. **All five executor kinds are proven live from the gesture.** A settings
+window and auto-arm-on-launch are now written but **have not been watched inside
+AE** — that is the first thing the next session should do. The remaining known
+gap is the Effects search, which is still a mock. The tables below are the
 honest line between what has been watched working and what has merely been
 written.
 
@@ -48,6 +49,8 @@ the offline harness (`poc/pipe_test.ps1`).
 | Script bootstrap: Master Null fires on the FIRST flick, no palette | **live** |
 | Per-slot `requires` greying | **live** — greys correctly with nothing selected |
 | Overlay dies with AE, and AE quits clean | **live** — quit message first, then the backstops |
+| A settings file changes what the wheel fires | harness — a rebound `S` fired the rebound command |
+| The whole harness still passes after the frontend was split into modules | harness |
 
 Two menu commands to run after any install, both under `Window`:
 **pieFX Self-Test (Executors)** fires one of every action kind, and
@@ -70,10 +73,15 @@ were "code, not facts" for too long.
 - **`(5027 :: 12)`** appeared once after the AE Commands probe and is
   unattributed. Possibly `executeCommand(2263)`, the id that fires and does
   nothing. Watch for it.
-- **Settings have no UI.** The format is designed (`poc/SETTINGS.md`) and
-  `load_settings` / `save_settings` exist in Rust, but nothing calls them: there
-  is no settings file, and the slot tree is the `DEFAULTS` constant in
-  `hexwheel.js`. `armMode` likewise defaults to `"center"` in code.
+- **The settings UI is written and NOT yet watched in After Effects.** It is a
+  clickable wheel with an inspector and a per-binding test-fire, at
+  `Window > pieFX Settings`; it reads and writes `load_settings` /
+  `save_settings`, and the live wheel reloads on every save. Verified in a
+  browser against the real page (select, drill, edit, holes, depth cap);
+  **unverified in AE**: the second Tauri window opening on the pipe message,
+  test-fire reaching the plug-in, and a save landing on the next flick.
+  `DEFAULTS` in `menu.js` is now only the fallback for a machine with no
+  settings file.
 - **The Effects search widget is a mock.** It draws and fires nothing. S5 found
   519 installed effects, so its real form is a filter field over the catalogue.
 - Per-slot context gating is **done and watched live**: `requires` is in the
@@ -92,6 +100,14 @@ were "code, not facts" for too long.
 - **macOS is untouched since the rename.** The Mac tree has not been rebuilt.
 - **The gesture is always armed once toggled on.** No per-panel gating, and
   right-DRAG inside AE is still untested (S2D left that open).
+- **Auto-arm is written and unwatched.** `gesture.armOnLaunch` ships ON: the
+  plug-in reads it (and `gesture.holdMs`) from
+  `%APPDATA%\pieFX\settings.json` on the FIRST IDLE and arms silently. Not
+  from `EntryPointFunc` - the mouse hook binds to the calling thread and the
+  overlay is a process launch, neither of which belongs in the middle of AE
+  loading its plug-ins. The failure mode to watch for is the mirror of the old
+  one: a broken settings file or a missing `pieFX-overlay.exe` now fails
+  silently at launch instead of loudly at a click, and only the log says so.
 
 ## The bugs that cost real sessions, and what they taught
 
@@ -132,6 +148,21 @@ Worth reading before changing the transport or the launch path.
    mimics the plug-in with .NET named pipes and drives the real overlay binary.
    It should have existed before the first build was handed over. Prefer it to
    burning an AE session.
+
+7. **A settings file the wheel could not read was ignored in SILENCE.** The
+   first hand-written `settings.json` did nothing, and the wheel gave no sign
+   it had even been read: `parseSettings` caught the exception and quietly
+   returned `DEFAULTS`. The cause was a **UTF-8 BOM** — PowerShell's
+   `Set-Content -Encoding utf8` writes one and `JSON.parse` rejects the string
+   outright. The BOM is now stripped, but the silence was the worse half: a
+   parse failure is now reported (a toast on the wheel, a line in the settings
+   window) instead of swallowed, because a file that is read and rejected
+   without a word is indistinguishable from one that is working. And the sharp
+   edge underneath: the **native** side scans the same file with `strstr` and
+   is unbothered by a BOM, so `holdMs` and `armOnLaunch` were being honoured
+   from a file the overlay had thrown away. Two halves of one product
+   disagreeing about whether a file exists is the actual bug — and the same
+   shape as the `--tx`/`--rx` mix-up above.
 
 Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
 `%TEMP%\pieFX_poc.txt`. Together they show which side stopped.
@@ -179,7 +210,12 @@ Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
     poc/scripts/         ExtendScript that SHIPS with pieFX; install beside the
                          .aex. ag_masterNull.jsx is a vendored fork of the
                          author's, with the __pieFXHeadless guard added.
-    poc/overlay/         the Tauri app (src/hexwheel.js is the wheel)
+    poc/overlay/         the Tauri app. src/hexwheel.js is the live wheel and
+                         src/settings.js the settings window; the two share
+                         menu.js (the slot tree), hexdraw.js (the glass
+                         renderer) and actions.js (firing), so what you
+                         configure is drawn and fired by the same code that
+                         draws and fires the real thing.
 
 ## Building
 
@@ -199,20 +235,30 @@ no-ops.
 Roughly in order. The first two are cheap and close open measurements; the third
 is the real remaining feature work.
 
-1. **The settings UI**, as a large clickable wheel with an inspector: label,
-   action kind, kind-specific fields, and a **test-fire button per binding** —
-   which is the practical safety net for menu ids and names alike. Wire it to
-   `load_settings` / `save_settings`, which already exist and are unused.
+1. **Watch the settings UI in After Effects.** It is built; nothing about it
+   has been seen inside AE. In order: does `Window > pieFX Settings` open the
+   window (it arms first if it has to); does **test-fire** actually reach the
+   plug-in; does a save land on the very next flick without an AE restart;
+   and does a cold AE with `armOnLaunch` on summon the wheel with no menu
+   click at all. Then delete this item and write down which of them lied.
 
 `Save Frame as PNG` no longer goes through the Render Queue: it is a snippet
 that opens a save dialog and calls `saveFrameToPng` at 1:1, restoring the comp's
 resolutionFactor afterwards. Unwatched in AE.
 
-After that: the real Effects search (filter over the S5 catalogue), script
-bootstrap, then the macOS port. `ARCHITECTURE.md` is still accurate; the Mac side
+After that: the real Effects search (filter over the S5 catalogue), then the
+macOS port. `ARCHITECTURE.md` is still accurate; the Mac side
 needs the two-pipe transport and the `ready` handshake replicated.
 
 **Before handing over any build, run `poc/pipe_test.ps1`.** It drives the real
 overlay binary with no AE involved and has caught every transport bug in this
 project — the freeze, the startup race, and the swapped launch flags.
+
+It passes the overlay `--settings none`, which pins it to the built-in
+`DEFAULTS`. That flag was added the moment the wheel started reading a settings
+file, because everything the harness asserts is a default binding: without it,
+the harness would pass or fail according to whatever the developer happened to
+have configured, and the failure would read as a transport bug — the one thing
+the harness exists to catch. A test that depends on the tester's own settings
+is not a test.
 

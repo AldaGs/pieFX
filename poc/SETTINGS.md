@@ -236,7 +236,7 @@ the mouse hook or off the UI thread.
 
     {
       "version": 1,
-      "gesture": { "holdMs": 200, "armMode": "center" },
+      "gesture": { "holdMs": 200, "armMode": "center", "armOnLaunch": true },
       "wheel": {
         "slots": [ <slot>|null × 6 ]
       }
@@ -278,14 +278,70 @@ Notes that are load-bearing rather than cosmetic:
 - **Depth is capped at 2.** The format could nest forever; the UI must not let
   it. Marking-menu accuracy degrades badly past two levels.
 
-## Settings UI (not built yet)
+## Settings UI
 
-The settings screen should **be a wheel**: a large, clickable version of the real
-thing, with an inspector beside it for the selected slot (label, action kind,
-kind-specific fields). It is self-documenting, and it teaches the layout while
-the user configures it — which a list of dropdowns never would.
+Built, and it **is** a wheel: a large, clickable version of the real thing with
+an inspector beside it. Self-documenting, and it teaches the layout while you
+configure it — which a list of dropdowns never would.
 
-Global settings (hold threshold, arm mode, theme) sit alongside it.
+`Window ▸ pieFX Settings` (`overlay/src/settings.html` + `settings.js`). It is a
+**second window in the overlay's own process**, not a second process: it must
+read and write the same file the wheel is using, and two processes racing on one
+settings file is a bug waiting for the first person who leaves the configurator
+open. The plug-in only sends `{"type":"settings"}` down the events pipe, arming
+first if it has to — the overlay does not exist while disarmed, so a settings
+item that did nothing when off would look broken.
+
+The wheel, the settings window and the firing path are **one implementation**:
+`menu.js` holds the slot tree and the compile step, `hexdraw.js` the glass
+renderer, `actions.js` the action-to-message translation. A configurator drawn
+by a second renderer would drift from the thing being configured, and the copy
+that drifted would be the one the user is looking at.
+
+What it enforces, because these are the rules that are easy to write down and
+easy to break:
+
+- **A hole is drawn.** An empty position renders as a hexagon with a `+`, and
+  "Clear slot" writes `null` in place rather than compacting. Seeing the hole is
+  what makes "slots are positional" obvious instead of a rule in a document.
+- **Depth is capped at 2.** "Make a category" is simply absent at level 2.
+- **`needs` is part of the snippet form**, not an advanced option, because a
+  snippet without it is the flaky case.
+- **Test-fire, per binding.** It goes through `sendFire` — the same function the
+  gesture calls, down the same pipe — because a test through a second code path
+  tests the wrong thing. This is the practical answer to a command map that has
+  been wrong three times, and to `findMenuCommandId` proving only that *a* menu
+  item by that name exists.
+
+Saving broadcasts `piefx-settings`, and the live wheel reloads. Without that a
+rebound hexagon would keep firing the old action until AE restarted, which reads
+as "settings do not work" rather than as "settings are cached". A summon in
+flight keeps the tree it started with: swapping the menu out from under a press
+would move hexagons while the cursor is still travelling to one.
+
+Global settings sit along the bottom: hold threshold, arm mode, and **arm on
+launch**.
+
+### The two settings the plug-in reads for itself
+
+`gesture.holdMs` and `gesture.armOnLaunch` are read by the NATIVE side, from
+`%APPDATA%\pieFX\settings.json`, on the first idle after AE starts. They have to
+be: the hold is measured in the mouse hook before the overlay is involved at
+all, and `armOnLaunch` has to be honoured *before the overlay exists*.
+
+It is a hand scan for two scalars, not a parser — `FindKey` finds the key and
+reads the next token. A real JSON parser in the plug-in would be a second
+implementation of a format that already has one, and everything else in the file
+belongs to the overlay. `holdMs` is **clamped to 80–2000ms**: a zero would summon
+the wheel on every right-click and take AE's context menu away entirely, which is
+a setting nobody could undo without editing the file by hand.
+
+`armOnLaunch` ships **on**, so an install is "restart AE and flick" rather than
+"remember to arm it first". The cost is real and worth stating: a global mouse
+hook and a spawned overlay process now happen at every AE launch with no click to
+attribute them to, and a missing `pieFX-overlay.exe` fails silently there instead
+of loudly at a menu click. `Window ▸ pieFX` remains the manual toggle and the way
+out.
 
 ## Deliberately not decided yet
 

@@ -66,6 +66,12 @@
 
 #define PIEFX_CMDPROBE_NAME	"pieFX Self-Test (AE Commands)"
 
+//	Opens the settings window, which is a SECOND window inside the already
+//	running overlay process (see overlay/src/settings.js). It is not on the
+//	wheel: the centre hexagon is cancel, so settings living there would open a
+//	window on every aborted gesture.
+#define PIEFX_SETTINGS_NAME	"pieFX Settings"
+
 //	Named pipes the overlay connects to. Native is the server on both.
 //
 //	ONE PIPE PER DIRECTION, deliberately. A single duplex pipe opened WITHOUT
@@ -82,8 +88,17 @@
 //	overlay also retries connecting, so during dev it can be run by hand).
 #define PIEFX_OVERLAY_EXE	"pieFX-overlay.exe"
 
-//	Hold threshold (roadmap's 200ms; a setting at MVP).
+//	Hold threshold. Now the DEFAULT rather than the value: settings.json may
+//	carry `gesture.holdMs`, which the plug-in reads at launch into S_hold_ms.
+//	The overlay cannot own this one — the hold is detected in the mouse hook,
+//	before the overlay is involved at all.
 #define PIEFX_HOLD_MS		200
+
+//	Where the settings the overlay writes are read back from. The plug-in reads
+//	exactly two fields out of it (`armOnLaunch` and `holdMs`) because those are
+//	the two that have to be honoured BEFORE the overlay exists. Everything else
+//	in the file belongs to the overlay, which owns the slot tree.
+#define PIEFX_SETTINGS_REL	"pieFX\\settings.json"
 
 //	Wheel geometry, in screen px. Used only by the legacy 3x3 POC path; the
 //	hexagon wheel does its hit-testing overlay-side (it owns the geometry it
