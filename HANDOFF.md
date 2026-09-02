@@ -73,15 +73,30 @@ were "code, not facts" for too long.
 - **`(5027 :: 12)`** appeared once after the AE Commands probe and is
   unattributed. Possibly `executeCommand(2263)`, the id that fires and does
   nothing. Watch for it.
-- **The settings UI is written and NOT yet watched in After Effects.** It is a
-  clickable wheel with an inspector and a per-binding test-fire, at
-  `Window > pieFX Settings`; it reads and writes `load_settings` /
-  `save_settings`, and the live wheel reloads on every save. Verified in a
-  browser against the real page (select, drill, edit, holes, depth cap);
-  **unverified in AE**: the second Tauri window opening on the pipe message,
-  test-fire reaching the plug-in, and a save landing on the next flick.
-  `DEFAULTS` in `menu.js` is now only the fallback for a machine with no
-  settings file.
+- **The settings UI works in After Effects**, watched by the user: the window
+  opens from `Window > pieFX Settings` and the editing, test-fire and save all
+  do what they claim. `DEFAULTS` in `menu.js` is now only the fallback for a
+  machine with no settings file.
+- **The one fault found in that first AE session was the window opening BEHIND
+  After Effects**, which reads as it not opening at all. The cause is that
+  Windows refuses `SetForegroundWindow` to a process that does not own the
+  foreground, and the foreground belongs to AE — the click went to AE's menu,
+  not to the overlay. `.focused(true)` at build time asks for the same
+  privilege and is refused just as quietly. The fix is `raise()` in `lib.rs`:
+  a bounce through always-on-top (a **z-order** change, which needs no
+  foreground rights and is therefore the part that cannot be refused),
+  followed by the `AttachThreadInput` dance for the input focus that z-order
+  does not give. **Written, and NOT yet confirmed in AE.**
+- **The attempt to reproduce that bug offline FAILED, and the failure is worth
+  knowing.** A script that starts the overlay, gives another app the
+  foreground and then asks for the settings window passes *against the
+  pre-fix binary too* — so it never reproduced the condition and proves
+  nothing about the fix. The likely reason: an overlay launched by the test a
+  moment earlier still holds foreground rights inherited from its launcher,
+  while the real overlay was launched by AE at startup and those rights have
+  long expired by the time anyone clicks the menu. A test that passes before
+  and after the fix is worse than no test, so it was not kept. Confirming this
+  one needs a real AE.
 - **The Effects search widget is a mock.** It draws and fires nothing. S5 found
   519 installed effects, so its real form is a filter field over the catalogue.
 - Per-slot context gating is **done and watched live**: `requires` is in the
@@ -235,12 +250,14 @@ no-ops.
 Roughly in order. The first two are cheap and close open measurements; the third
 is the real remaining feature work.
 
-1. **Watch the settings UI in After Effects.** It is built; nothing about it
-   has been seen inside AE. In order: does `Window > pieFX Settings` open the
-   window (it arms first if it has to); does **test-fire** actually reach the
-   plug-in; does a save land on the very next flick without an AE restart;
-   and does a cold AE with `armOnLaunch` on summon the wheel with no menu
-   click at all. Then delete this item and write down which of them lied.
+1. **Confirm the settings window now opens IN FRONT of After Effects**, and
+   that the first keystroke goes to it rather than to AE. If it still lands
+   behind, the next move is not another guess: it is to read
+   `%TEMP%\piefx_overlay.log`, which now says whether the window was raised
+   and whether its HWND was even obtainable. The escalation after that is to
+   leave the window always-on-top for its whole life — correct for what is
+   effectively a modeless dialog of AE's, and only avoided because a settings
+   window that floats over everything forever is its own annoyance.
 
 `Save Frame as PNG` no longer goes through the Render Queue: it is a snippet
 that opens a save dialog and calls `saveFrameToPng` at 1:1, restoring the comp's

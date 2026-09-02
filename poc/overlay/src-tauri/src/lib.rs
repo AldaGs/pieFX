@@ -188,11 +188,79 @@ fn fire_action(json: String, state: tauri::State<Pipe>) -> Result<(), String> {
 //
 // Everything the overlay window is, this one is not — decorated, focusable,
 // opaque, not always-on-top, and it takes the mouse.
+//
+// It also has to be RAISED by hand, which is the part that is not obvious.
+// Windows refuses SetForegroundWindow from a process that does not own the
+// foreground, and the process that owns it is After Effects - the user's click
+// went to AE's menu, not to us. So the window was created, correctly, BEHIND
+// the app that asked for it, and reads as "the settings never opened".
+//
+// Two steps, because they fix two different things:
+//
+//   1. A bounce through always-on-top. SetWindowPos changing Z-ORDER needs no
+//      foreground rights at all, so this is what actually puts the window in
+//      front of AE. It is dropped again immediately: a settings window that
+//      floated over everything forever would be its own bug.
+//   2. force_foreground, for the input FOCUS, which z-order does not give.
+//      Without it the window is visible but the first keystroke still goes to
+//      After Effects.
+fn raise(w: &tauri::WebviewWindow) {
+    let _ = w.show();
+    let _ = w.unminimize();
+    let _ = w.set_always_on_top(true);
+    let _ = w.set_always_on_top(false);
+    let _ = w.set_focus();
+    #[cfg(windows)]
+    {
+        match w.hwnd() {
+            Ok(h) => force_foreground(h.0 as isize),
+            Err(e) => dlog(&format!("  no hwnd for settings window: {}", e)),
+        }
+    }
+}
+
+// The AttachThreadInput dance. Windows grants SetForegroundWindow only to a
+// process that already has the foreground, or shares an input queue with the
+// one that does - so we borrow the foreground thread's input queue for exactly
+// as long as it takes to make the call, and give it straight back.
+//
+// This must run on the thread that OWNS the window, which is why show_settings
+// is always reached on the main thread (the pipe reader hops via
+// run_on_main_thread; a sync #[tauri::command] is already there).
+#[cfg(windows)]
+fn force_foreground(hwnd: isize) {
+    extern "system" {
+        fn GetForegroundWindow() -> isize;
+        fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
+        fn GetCurrentThreadId() -> u32;
+        fn AttachThreadInput(attach: u32, attach_to: u32, do_attach: i32) -> i32;
+        fn BringWindowToTop(hwnd: isize) -> i32;
+        fn SetForegroundWindow(hwnd: isize) -> i32;
+    }
+    unsafe {
+        let fg = GetForegroundWindow();
+        let me = GetCurrentThreadId();
+        if fg == 0 {
+            SetForegroundWindow(hwnd);
+            return;
+        }
+        let fg_thread = GetWindowThreadProcessId(fg, std::ptr::null_mut());
+        // Already ours: no borrowing needed, and attaching a thread to itself
+        // is an error.
+        if fg_thread == 0 || fg_thread == me {
+            SetForegroundWindow(hwnd);
+            return;
+        }
+        AttachThreadInput(me, fg_thread, 1);
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+        AttachThreadInput(me, fg_thread, 0);
+    }
+}
+
 fn show_settings(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("settings") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+        raise(&w);
         dlog("  settings window refocused");
         return;
     }
@@ -209,7 +277,13 @@ fn show_settings(app: &tauri::AppHandle) {
         .center()
         .build()
     {
-        Ok(_) => dlog("  settings window opened"),
+        // .focused(true) at build time is not enough, for the same reason: it
+        // asks Windows for the foreground from a process that is not allowed
+        // to have it. The window is raised explicitly after it exists.
+        Ok(w) => {
+            raise(&w);
+            dlog("  settings window opened and raised");
+        }
         Err(e) => dlog(&format!("  settings window FAILED: {}", e)),
     }
 }
