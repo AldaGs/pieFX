@@ -66,6 +66,26 @@ from idle — it is how Master Null fires. The generated snippet brackets the ca
 with the comp's layer count and the render queue's item count, so a command that
 returns cleanly and changes nothing says so.
 
+### Names measured on AE 2026 (findMenuCommandId)
+
+Asking AE directly beat the map three times, which is the argument for name
+binding in one table:
+
+| Menu name | AE returns | the map said |
+|---|---|---|
+| `Solid...` | **3000** | 2038 is `Solid`, 3000 is `Solid...` — the guess took the wrong twin |
+| `Text` | **7034** | 2836; **7034 is not in the map at all** |
+| `Split Layer` | **2158** | labels 2158 `DuplicatePreserveFile`, so this was written off as having no id |
+| `Pre-compose...` | **2071** | id right, but `Precompose...` does **not** resolve — the hyphen matters |
+| `Null Object`, `Adjustment Layer`, `Add to Render Queue`, `Light...`, `Camera...`, `Duplicate` | 2767, 2279, 2161, 2563, 2564, 2080 | agreed |
+| `Center Anchor Point in Layer Content` | **10312** | agreed — useful for the Anchor tool |
+
+Not resolving yet, and running by id meanwhile: **`Save Frame As...`** (a
+*submenu* in AE, so the command is probably its leaf) and **`Center in View`**
+(3819 is proven to work, so only the spelling is missing).
+
+`2263`, the map's second `AdjustmentLayer`, does nothing. `2279` is the live one.
+
 ### The command map
 
 `overlay/src/ae-commands-2025.json` is an id → name table (909 entries: 613 menu

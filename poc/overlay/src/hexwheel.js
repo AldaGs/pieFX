@@ -37,7 +37,7 @@ const DIRS = [-90, -30, 30, 90, 150, 210]; // N, NE, SE, S, SW, NW
 // to it and release without drilling in).
 //
 //   builtin        { name: "anchor-grid" | "effect-search" }
-//   ae-command     { id: 2359, name: "Precompose…" }   id is the key, not name
+//   ae-command     { name: "Add to Render Queue", id: 2161 }  name first, id is fallback
 //   script-snippet { code: "_mn.addMasterNull(false)" }
 //   script-file    { path: "D:/…/ag_masterNull.jsx" }
 //   effect         { matchName: "ADBE Gaussian Blur 2" }
@@ -92,21 +92,26 @@ const DEFAULTS = {
       {
         label: "Create",
         slots: [
-          { label: "Solid", action: { kind: "ae-command", id: 2038, name: "New Solid…" } },
-          { label: "Null", action: { kind: "ae-command", id: 2767, name: "New Null Object" } },
+          // Every name here was resolved by app.findMenuCommandId on AE 2026;
+          // the ids are what it returned, kept only as a locale fallback.
+          // Two of them corrected a guess taken from the command map: Solid is
+          // 3000 ("Solid...") not 2038 ("Solid"), and Text is 7034, which the
+          // map does not contain at all.
+          { label: "Solid", action: { kind: "ae-command", name: "Solid...", id: 3000 } },
+          { label: "Null", action: { kind: "ae-command", name: "Null Object", id: 2767 } },
           {
             label: "Adjustment Layer",
-            action: { kind: "ae-command", id: 2279, name: "New Adjustment Layer" },
+            action: { kind: "ae-command", name: "Adjustment Layer", id: 2279 },
           },
-          { label: "Text", action: { kind: "ae-command", id: 2836, name: "New Text Layer" } },
-          { label: "Light", action: { kind: "ae-command", id: 2563, name: "New Light…" } },
-          { label: "Camera", action: { kind: "ae-command", id: 2564, name: "New Camera…" } },
+          { label: "Text", action: { kind: "ae-command", name: "Text", id: 7034 } },
+          { label: "Light", action: { kind: "ae-command", name: "Light...", id: 2563 } },
+          { label: "Camera", action: { kind: "ae-command", name: "Camera...", id: 2564 } },
         ],
       },
       // S
       {
         label: "Queue Comp to Render",
-        action: { kind: "ae-command", id: 2161, name: "Add to Render Queue" },
+        action: { kind: "ae-command", name: "Add to Render Queue", id: 2161 },
       },
       // SW — was "More Actions" (a pager). Same content as a NAMED category, so
       // positions stay stable; paging would break the muscle memory the whole
@@ -114,18 +119,23 @@ const DEFAULTS = {
       {
         label: "Layer",
         slots: [
-          { label: "Pre-comp", action: { kind: "ae-command", id: 2071, name: "Precompose" } },
-          // "Split + Dup" as drawn has no single menu id — there is no Split
-          // Layer entry in the command map at all, so it is a script action
-          // waiting to be written. Duplicate stands in until then.
-          { label: "Duplicate", action: { kind: "ae-command", id: 2080, name: "Duplicate" } },
+          { label: "Pre-comp", action: { kind: "ae-command", name: "Pre-compose...", id: 2071 } },
+          // "Split + Dup" is back. The command map labels 2158
+          // "DuplicatePreserveFile", which is why it was written off as having
+          // no menu id — but findMenuCommandId("Split Layer") returns 2158.
+          // The map's names are not to be trusted; AE's own lookup is.
+          { label: "Split + Dup", action: { kind: "ae-command", name: "Split Layer", id: 2158 } },
           {
+            // Name still unresolved — "Save Frame As..." returns 0. Likely a
+            // submenu whose leaf carries the command. Runs by id meanwhile.
             label: "Save Frame as PNG",
-            action: { kind: "ae-command", id: 2233, name: "SaveFrameAs" },
+            action: { kind: "ae-command", id: 2233 },
           },
           {
+            // Name unresolved too, but 3819 is PROVEN: the self-test really did
+            // centre the layer. Runs by id until the spelling is found.
             label: "Center in Comp",
-            action: { kind: "ae-command", id: 3819, name: "CenterInView" },
+            action: { kind: "ae-command", id: 3819 },
           },
           null,
           null,
