@@ -112,12 +112,14 @@ const DEFAULTS = {
             label: "Adjustment Layer",
             action: { kind: "ae-command", name: "Adjustment Layer", id: 2279 },
           },
-          // NOTE: neither the name nor the id here is measured yet. The name
-          // is a guess at AE's menu text and 2000 comes from the command map,
-          // which has been wrong three times. The AE Commands probe carries
-          // candidate spellings for it — confirm before trusting.
-          // The one Create item that needs nothing: it MAKES the comp. An
-          // explicit null overrides the category's inherited "comp".
+          // Replaced Text (7034, which does resolve if it is ever wanted
+          // back). The one Create item that needs nothing: it MAKES the comp,
+          // so an explicit null overrides the category's inherited "comp".
+          //
+          // STILL UNMEASURED. The probe carries four spellings for this and
+          // the resolution list came back cut off before them, so both the
+          // name and the id 2000 are unconfirmed — and the command map has
+          // been wrong three times already.
           {
             label: "Comp",
             requires: null,
@@ -147,12 +149,33 @@ const DEFAULTS = {
           // The map's names are not to be trusted; AE's own lookup is.
           { label: "Split + Dup", action: { kind: "ae-command", name: "Split Layer", id: 2158 } },
           {
-            // Resolved: the spelling carries NO ellipsis, though the menu shows
-            // one — "Save Frame As..." returns 0 and "Save Frame As" returns
-            // 2233. This opens the Render Queue route; a full-res PNG straight
-            // to disk is a separate action, still to be built.
+            // NOT the menu command. "Save Frame As" (2233, and the spelling
+            // really does drop the ellipsis the menu shows) only queues the
+            // frame in the Render Queue, where it waits for a second gesture
+            // that has nothing to do with this one. This writes the PNG.
+            //
+            // resolutionFactor is forced to 1:1 and restored, because
+            // saveFrameToPng honours it: exporting at Half because that is how
+            // you happened to be previewing is a silent wrong answer, and the
+            // slot says "full res".
             label: "Save Frame as PNG",
-            action: { kind: "ae-command", name: "Save Frame As", id: 2233 },
+            requires: "comp",
+            action: {
+              kind: "script-snippet",
+              code:
+                "(function(){" +
+                "var c=app.project.activeItem;" +
+                "if(!(c&&c instanceof CompItem))return'pieFX: no comp is active';" +
+                "if(typeof c.saveFrameToPng!=='function')return'pieFX: saveFrameToPng unavailable in this AE';" +
+                "var f=File.saveDialog('Save frame as PNG','PNG:*.png');" +
+                "if(!f)return'cancelled';" +
+                "if(!/\\.png$/i.test(f.fsName))f=new File(f.fsName+'.png');" +
+                "var res=c.resolutionFactor;" +
+                "try{c.resolutionFactor=[1,1];c.saveFrameToPng(c.time,f);}" +
+                "finally{c.resolutionFactor=res;}" +
+                "return'saved '+f.fsName;" +
+                "})()",
+            },
           },
           {
             // Resolved, and the capital I is the whole story: "Center in View"
