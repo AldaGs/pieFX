@@ -45,7 +45,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | Dark-glass palette | **live**, and the user's call |
 | `Create` (Solid/Null/Adjustment/Light/Camera), `Layer > Center in Comp` | **live** |
 | Per-slot `requires` greying | **live** — greys correctly with nothing selected |
-| Overlay dies with AE | **NO** — see below; third attempt is a job object, unwatched |
+| Overlay dies with AE, and AE quits clean | **live** — quit message first, then the backstops |
 
 Two menu commands to run after any install, both under `Window`:
 **pieFX Self-Test (Executors)** fires one of every action kind, and
@@ -74,22 +74,6 @@ were "code, not facts" for too long.
   `hexwheel.js`. `armMode` likewise defaults to `"center"` in code.
 - **The Effects search widget is a mock.** It draws and fires nothing. S5 found
   519 installed effects, so its real form is a filter field over the catalogue.
-- **The overlay outlived AE three times, and the fourth attempt is the first
-  one aimed at the real cause.** What the measurements ruled out, in order: the
-  death hook not running (it runs — the log says so); the process not being
-  terminated (it is: `TerminateProcess` is called and returns); and the WebView2
-  children being what hangs on (the survivor in Task Manager was
-  `pieFX-overlay.exe` itself, not `msedgewebview2.exe`).
-  What is left is a process that **survives being terminated**, which on Windows
-  means a thread stuck in a kernel I/O that never completes — and the overlay
-  has exactly one candidate: a synchronous `ReadFile` on the events pipe, whose
-  server the death hook had already torn down two lines earlier. **The order was
-  the bug.** The hook now sends `{"type":"quit"}` FIRST, while the pipe is still
-  whole, and waits up to 2s for the overlay to leave under its own power. The
-  terminate and the job object stay as backstops, and both now log what they
-  actually achieved rather than that they were attempted.
-  Proven offline (`pipe_test.ps1` ends with the quit and the process goes);
-  unwatched in AE.
 - Per-slot context gating is **done and watched live**: `requires` is in the
   schema, the plug-in sends `hasComp` alongside `hasSelection`, and the greying
   reads correctly with nothing selected.
@@ -124,7 +108,21 @@ Worth reading before changing the transport or the launch path.
    used the defaults and worked, which hid it. Channels are now named for what
    flows through them — `--events` and `--actions` — which has no perspective to
    get backwards.
-4. **All were found by an offline harness, not by AE.** `scratchpad/pipe_test*.ps1`
+5. **The overlay survived being terminated, and the order was why.** Three
+   attempts failed — a death-hook terminate, an `--owner-pid` watchdog, a job
+   object — because all three were ways of *killing* a process that was stuck in
+   a synchronous `ReadFile` on a pipe whose server the same hook had just torn
+   down. A thread in a kernel I/O that never completes makes a process un-dead,
+   and `TerminateProcess` returns success on one. The fix was to ask first:
+   send `{"type":"quit"}` while the pipe is still whole, and let it leave under
+   its own power. Each failed attempt was kept as a backstop; none of them is
+   the plan. **Two lessons.** Log what an operation ACHIEVED, not that it was
+   attempted — "terminate ok" printed as success while the process sat in Task
+   Manager. And when a fix fails, the next move is the measurement that
+   distinguishes the remaining theories, not the next fix: the one that cracked
+   this was "which process is still in Task Manager", which cost nothing.
+
+6. **All were found by an offline harness, not by AE.** `scratchpad/pipe_test*.ps1`
    mimics the plug-in with .NET named pipes and drives the real overlay binary.
    It should have existed before the first build was handed over. Prefer it to
    burning an AE session.
@@ -192,12 +190,7 @@ no-ops.
 Roughly in order. The first two are cheap and close open measurements; the third
 is the real remaining feature work.
 
-1. **Get AE to quit cleanly.** The only thing in the way of the settings UI.
-   Attempt three is the job object; if it also fails, the log now prints the
-   death hook and the job close, and Task Manager says whether what survives is
-   `pieFX-overlay.exe` or `msedgewebview2.exe`. Do not guess again without
-   that.
-2. **The settings UI**, as a large clickable wheel with an inspector: label,
+1. **The settings UI**, as a large clickable wheel with an inspector: label,
    action kind, kind-specific fields, and a **test-fire button per binding** —
    which is the practical safety net for menu ids and names alike. Wire it to
    `load_settings` / `save_settings`, which already exist and are unused.
