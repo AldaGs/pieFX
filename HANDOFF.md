@@ -38,6 +38,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | `ae-command` **from the gesture**, via `app.executeCommand` | **live** — Null and Adjustment Layer appeared |
 | Menu names resolved by `findMenuCommandId` | **live** — corrected three ids the map had wrong |
 | Error toast, anchored below the summon | harness |
+| Overlay dies with AE (death hook, plus an `--owner-pid` watchdog) | **not yet** — written, built, unwatched |
 
 Two menu commands to run after any install, both under `Window`:
 **pieFX Self-Test (Executors)** fires one of every action kind, and
@@ -47,15 +48,18 @@ were "code, not facts" for too long.
 
 ## What is NOT proven, and what is missing
 
-- **Two menu names still return 0** from `findMenuCommandId`: `Save Frame As...`
-  and `Center in View`. Both run by id meanwhile (3819 is *proven* — it really
-  centred the layer), so only the spelling is missing. Save Frame As is a
-  *submenu* in AE, so its command is probably a leaf (`File...` /
-  `Photoshop Layers...`). The AE Commands probe carries candidates for both.
-- **The `Comp` slot is unmeasured.** `Create > Comp` was just swapped in for
-  `Text` and carries the name `New Composition...` with id 2000 from the command
-  map — neither confirmed. The probe has candidate spellings; confirm before
-  trusting it.
+- **The `Comp` slot is still unmeasured.** `Create > Comp` (swapped in for
+  `Text`, which does resolve at 7034) carries `New Composition...` with id 2000
+  from the command map — neither confirmed. The probe carries four spellings for
+  it, but the resolution list came back **cut off before them**. Re-run
+  `Window > pieFX Self-Test (AE Commands)` and read the last four lines.
+- The other two open names are closed. `Save Frame As` resolves at 2233 without
+  the ellipsis the menu shows, and `Center In View` at 3819 — **the capital I is
+  the whole difference**; `Center in View` returns 0. AE's menu strings are not
+  case-normalised and `findMenuCommandId` does not forgive. Also resolved and
+  unused so far: `Duplicate` 2080, `Fit to Comp` 2156,
+  `Center Anchor Point in Layer Content` 10312, `File...` 2003,
+  `Photoshop Layers...` 5002.
 - **`(5027 :: 12)`** appeared once after the AE Commands probe and is
   unattributed. Possibly `executeCommand(2263)`, the id that fires and does
   nothing. Watch for it.
@@ -170,11 +174,10 @@ no-ops.
 Roughly in order. The first two are cheap and close open measurements; the third
 is the real remaining feature work.
 
-1. **Finish the menu-name table.** Run `Window > pieFX Self-Test (AE Commands)`
-   and read the resolution list. Fold whatever resolves into the `DEFAULTS` in
-   `poc/overlay/src/hexwheel.js` — specifically `Save Frame As...`,
-   `Center in View` and the new `Comp` slot. Delete candidates that never
-   resolve.
+1. **Close the last menu name.** Re-run `Window > pieFX Self-Test (AE Commands)`
+   for the four `Composition` spellings the truncated list never showed, and
+   fold the winner into `Create > Comp` in `poc/overlay/src/hexwheel.js`. Every
+   other name in `DEFAULTS` is now measured.
 2. **Confirm the `requires` gating live.** The code is in and `SETTINGS.md`
    carries the rule; what is missing is one AE session. Rebuild the native
    plug-in first — `hasComp` is new in the summon message. With nothing
@@ -185,6 +188,10 @@ is the real remaining feature work.
    action kind, kind-specific fields, and a **test-fire button per binding** —
    which is the practical safety net for menu ids and names alike. Wire it to
    `load_settings` / `save_settings`, which already exist and are unused.
+
+`Save Frame as PNG` no longer goes through the Render Queue: it is a snippet
+that opens a save dialog and calls `saveFrameToPng` at 1:1, restoring the comp's
+resolutionFactor afterwards. Unwatched in AE.
 
 After that: the real Effects search (filter over the S5 catalogue), script
 bootstrap, then the macOS port. `ARCHITECTURE.md` is still accurate; the Mac side
