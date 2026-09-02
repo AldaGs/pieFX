@@ -415,7 +415,12 @@ HandleOverlayLine(const char *lineZ)
 			return;
 		}
 		if (strcmp(name, "anchor-grid")) {
+			//	Silence is the worst answer: the wheel offers the slot, the
+			//	user flicks to it, and nothing whatsoever happens.
+			char t[160];
+			sprintf_s(t, sizeof(t), "\"%s\" is not built yet", name);
 			Log("  overlay: builtin \"%s\" not implemented yet\n", name);
+			SendToast("info", t);
 			return;
 		}
 
@@ -859,7 +864,15 @@ RunScript(AEGP_SuiteHandler &suites, const char *codeZ, const char *whatZ)
 	if (resultH) {
 		A_char *t = NULL;
 		if (!suites.MemorySuite1()->AEGP_LockMemHandle(resultH, reinterpret_cast<void**>(&t)) && t) {
-			Log("  %s: %s\n", whatZ, t);
+			//	A function with no return statement yields "undefined", which
+			//	is SUCCESS - addMasterNull in ag_masterNull.jsx is exactly
+			//	that. Logging it verbatim made every successful Master Null
+			//	read like a failure.
+			if (!t[0] || 0 == strcmp(t, "undefined")) {
+				Log("  %s: ok\n", whatZ);
+			} else {
+				Log("  %s: %s\n", whatZ, t);
+			}
 		}
 		ERR2(suites.MemorySuite1()->AEGP_UnlockMemHandle(resultH));
 		ERR2(suites.MemorySuite1()->AEGP_FreeMemHandle(resultH));
