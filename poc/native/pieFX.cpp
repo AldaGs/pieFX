@@ -1066,12 +1066,23 @@ RunAnchorAction(AEGP_SuiteHandler &suites, int cell)
 			col = cell % 3;
 	double	fx	= col * 0.5,	// 0, 0.5, 1
 			fy	= row * 0.5;
-	char	script[2048];
+	//	Sized FROM THE FORMAT STRING, not from a number someone typed once. The
+	//	fixed 2048 that used to be here fitted the S1 spike's script exactly, and
+	//	became a Debug Assertion inside sprintf_s the moment the keyframe-aware
+	//	version landed - which takes After Effects down with it. A script that
+	//	grows is not a reason to guess a bigger constant.
+	size_t	need	= strlen(S_anchor_script_fmt) + 64;	// two %f -> a few chars
+	char   *script	= (char *)malloc(need);
 	char	what[64];
 
-	sprintf_s(script, sizeof(script), S_anchor_script_fmt, fx, fy);
+	if (!script) {
+		SendToast("error", "pieFX: out of memory building the anchor script");
+		return;
+	}
+	_snprintf_s(script, need, _TRUNCATE, S_anchor_script_fmt, fx, fy);
 	sprintf_s(what, sizeof(what), "anchor cell %d (fx=%.1f fy=%.1f)", cell, fx, fy);
 	RunScript(suites, script, what);
+	free(script);
 }
 
 //	S5's lookup: walk the installed catalogue for an exact match name.

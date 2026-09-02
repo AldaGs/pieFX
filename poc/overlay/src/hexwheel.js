@@ -48,10 +48,18 @@ const DIRS = [-90, -30, 30, 90, 150, 210]; // N, NE, SE, S, SW, NW
 // dead and refuses to fire, instead of firing into nothing and reporting
 // success. Omit it for actions that need nothing at all.
 // Every Master Null variant is a call into the same script, so the load
-// declaration is written once. A bare filename is SEARCHED in AE's script
-// folders (ScriptUI Panels first) rather than hardcoded to one machine's
-// layout; give an absolute path here to point somewhere else.
-const MN = { global: "_mn", file: "ag_masterNull.jsx" };
+// declaration is written once.
+//
+// `file` may be a bare filename, which is SEARCHED in AE's script folders
+// (ScriptUI Panels first) — the portable form, and the right default for
+// anything shared. This one is absolute because that is where the script
+// actually lives on this machine, outside AE's folders entirely, where no
+// search would find it. It is the first thing the settings UI should let a
+// user point somewhere else.
+const MN = {
+  global: "_mn",
+  file: "D:/Dropbox (Personal)/Ae Stuff/AG-SCRIPTING/MasterNull/ag_masterNull.jsx",
+};
 
 const DEFAULTS = {
   version: 1,
