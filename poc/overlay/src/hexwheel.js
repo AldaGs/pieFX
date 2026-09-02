@@ -48,18 +48,18 @@ const DIRS = [-90, -30, 30, 90, 150, 210]; // N, NE, SE, S, SW, NW
 // dead and refuses to fire, instead of firing into nothing and reporting
 // success. Omit it for actions that need nothing at all.
 // Every Master Null variant is a call into the same script, so the load
-// declaration is written once.
+// declaration is written once. Three forms of `file`, in order of how portable
+// they are:
 //
-// `file` may be a bare filename, which is SEARCHED in AE's script folders
-// (ScriptUI Panels first) — the portable form, and the right default for
-// anything shared. This one is absolute because that is where the script
-// actually lives on this machine, outside AE's folders entirely, where no
-// search would find it. It is the first thing the settings UI should let a
-// user point somewhere else.
-const MN = {
-  global: "_mn",
-  file: "D:/Dropbox (Personal)/Ae Stuff/AG-SCRIPTING/MasterNull/ag_masterNull.jsx",
-};
+//   "scripts/ag_masterNull.jsx"  RELATIVE — resolved against pieFX's install
+//                                directory, so the script travels with the
+//                                product. What anything shipped should use.
+//   "ag_masterNull.jsx"          bare — searched in AE's own script folders
+//                                (ScriptUI Panels first), for a script the user
+//                                already has.
+//   "D:/…/ag_masterNull.jsx"     absolute — one machine's layout, and the thing
+//                                the other two exist to avoid.
+const MN = { global: "_mn", file: "scripts/ag_masterNull.jsx" };
 
 const DEFAULTS = {
   version: 1,
@@ -997,11 +997,26 @@ function b64(s) {
 // — so that loading a panel script to reach its functions does not also pop its
 // palette in the middle of a gesture. Scripts without the guard still work;
 // they just show their window the first time.
+// Set once at startup from the Rust side. Empty in a browser preview, where
+// there is no install directory and a relative path just stays relative.
+let INSTALL_DIR = "";
+
+// Absolute stays absolute; a bare name is left for the script-side search of
+// AE's folders; anything with a directory in it is ours, and belongs to the
+// install.
+function resolveScript(path) {
+  const c0 = path.charAt(0);
+  if (c0 === "/" || c0 === "~" || c0 === String.fromCharCode(92)) return path;
+  if (path.charAt(1) === ":") return path;
+  if (path.indexOf("/") < 0) return path;
+  return INSTALL_DIR ? INSTALL_DIR + "/" + path : path;
+}
+
 function bootstrapped(action) {
   const n = action.needs;
   if (!n || !n.global || !n.file) return action.code;
   const g = JSON.stringify(n.global);
-  const f = JSON.stringify(n.file);
+  const f = JSON.stringify(resolveScript(n.file));
   return (
     "$.global.__pieFXHeadless = true;" +
     "try {" +
@@ -1151,6 +1166,14 @@ if (window.__TAURI__ && window.__TAURI__.event) {
   window.addEventListener("error", (e) => say("ERROR " + e.message));
 
   say("module loaded, keys=" + Object.keys(T).join(","));
+
+  T.core
+    .invoke("overlay_dir")
+    .then((d) => {
+      INSTALL_DIR = d || "";
+      say("install dir " + INSTALL_DIR);
+    })
+    .catch((e) => say("overlay_dir FAILED " + e));
 
   T.core
     .invoke("overlay_origin")

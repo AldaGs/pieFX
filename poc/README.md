@@ -60,6 +60,12 @@ folder the `.aex` lives in (e.g. `...\Support Files\Plug-ins\AGS\`). During dev
 you can skip that and just run `npm run tauri dev` — the plug-in's launch simply
 no-ops when the exe is not found, and the running dev overlay connects anyway.
 
+**Bundled scripts.** `poc/scripts/` travels with the product: copy it beside the
+`.aex` too, so the folder holds `pieFX.aex`, `pieFX-overlay.exe` and
+a `scripts` folder. A binding whose `needs.file` is relative
+(`scripts/ag_masterNull.jsx`) is resolved against that directory, which is how a
+snippet can depend on a script without depending on where one machine keeps it.
+
 The overlay window spans the **whole virtual desktop** (all monitors) and is
 positioned at the virtual-desktop origin; the frontend converts the plug-in's
 physical screen coords to window-local using that origin (and divides by

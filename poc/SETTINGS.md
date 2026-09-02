@@ -159,10 +159,18 @@ The overlay wraps the snippet in a loader that runs the file **only when the
 global is absent**, and the whole thing crosses the pipe base64-encoded as
 before — the native side stays a dumb executor that knows nothing about scripts.
 
-`file` may be an absolute path, or a **bare filename**, which is searched in
-AE's own script folders (`Scripts/ScriptUI Panels` first, then `Scripts`, under
-every version directory in the user data folder). A bare name is preferred in
-anything shared: an absolute path is one machine's layout.
+`file` takes three forms, in order of how portable they are:
+
+- **relative** (`scripts/ag_masterNull.jsx`) — resolved against pieFX's install
+  directory, the folder holding the `.aex` and the overlay. This is the form for
+  a script that **ships with the product**: `poc/scripts/` is copied beside the
+  plug-in at install time, so the binding works on any machine without anyone
+  editing it.
+- **bare** (`ag_masterNull.jsx`) — searched in AE's own script folders
+  (`Scripts/ScriptUI Panels` first, then `Scripts`, under every version
+  directory in the user data folder), for a script the user already has.
+- **absolute** (`D:/…/ag_masterNull.jsx`) — one machine's layout, and the thing
+  the other two exist to avoid.
 
 `$.global.__pieFXHeadless` is set for the duration of the call. That is the flag
 a script author guards their UI with —

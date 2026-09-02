@@ -44,6 +44,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | `Layer > Pre-comp` (2071) and `Layer > Split + Dup` (2158) | **live** |
 | Dark-glass palette | **live**, and the user's call |
 | `Create` (Solid/Null/Adjustment/Light/Camera), `Layer > Center in Comp` | **live** |
+| Anchor grid on an ANIMATED layer: keyframes rewritten, no jump | **live** |
 | Per-slot `requires` greying | **live** — greys correctly with nothing selected |
 | Overlay dies with AE, and AE quits clean | **live** — quit message first, then the backstops |
 
@@ -79,20 +80,13 @@ were "code, not facts" for too long.
   reads correctly with nothing selected.
 - **Script bootstrap is built, unwatched.** An action declares
   `needs: { global, file }` and the overlay wraps the snippet in a loader that
-  runs the file only when the global is missing. `file` may be a bare filename,
-  which is searched in AE's script folders — but `ag_masterNull.jsx` lives in
-  Dropbox, outside them, so `MN.file` in `hexwheel.js` is an absolute path and is
-  the first thing the settings UI should let a user change.
-  **`ag_masterNull.jsx` calls `showUI(thisObj)` unconditionally at load**, so the
-  bootstrap pops its palette the first time each session until the script carries
-  the guard the design assumes:
-  `if (!$.global.__pieFXHeadless) showUI(thisObj);`
-- **The anchor tool is rewritten and still unwatched.** It rewrites animated
-  Position per keyframe (eases, tangents and roving preserved, separated
-  dimensions handled) instead of calling `setValue`, which throws on an animated
-  layer. Its first live run crashed AE — in the plug-in, not the script: the
-  generated script had outgrown the fixed buffer it was formatted into. Fixed;
-  the behaviour itself has therefore still never been seen work.
+  runs the file only when the global is missing. `ag_masterNull.jsx` now **ships
+  with the product** in `poc/scripts/`, carrying the guard
+  `if (!$.global.__pieFXHeadless) { showUI(thisObj); }` so a headless load does
+  not pop its palette mid-gesture. Relative `file` paths resolve against the
+  install directory, so **the `scripts` folder must be copied beside the .aex**
+  along with the overlay exe. The vendored copy is a FORK of the author's
+  original in Dropbox: changes there do not flow here by themselves.
 - `Create > Solid` at id **2038** is confirmed live: the solid lands in the comp.
 - **macOS is untouched since the rename.** The Mac tree has not been rebuilt.
 - **The gesture is always armed once toggled on.** No per-panel gating, and
@@ -181,6 +175,9 @@ Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
     poc/README.md        Build + run + verification steps
     poc/SETTINGS.md      The action model and settings format
     poc/native/          the product plug-in (pieFX.cpp/.h, Win/)
+    poc/scripts/         ExtendScript that SHIPS with pieFX; install beside the
+                         .aex. ag_masterNull.jsx is a vendored fork of the
+                         author's, with the __pieFXHeadless guard added.
     poc/overlay/         the Tauri app (src/hexwheel.js is the wheel)
 
 ## Building

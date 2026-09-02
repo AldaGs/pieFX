@@ -138,6 +138,21 @@ fn dbg(msg: String) {
     dlog(&format!("  js: {}", msg));
 }
 
+// Where we are installed, which is beside the .aex — the plug-in launches us
+// from there. Scripts that SHIP with pieFX are resolved against this, so a
+// binding can say "scripts/ag_masterNull.jsx" and travel with the product
+// instead of naming one machine's Dropbox.
+#[tauri::command]
+fn overlay_dir() -> String {
+    let d = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .map(|d| d.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
+        .unwrap_or_default();
+    dlog(&format!("  overlay_dir -> {}", d));
+    d
+}
+
 #[tauri::command]
 fn overlay_origin(state: tauri::State<Origin>) -> (i32, i32) {
     let o = *state.0.lock().unwrap();
@@ -250,6 +265,7 @@ pub fn run() {
         .manage(Ready(Mutex::new(false)))
         .invoke_handler(tauri::generate_handler![
             overlay_origin,
+            overlay_dir,
             fire_action,
             frontend_ready,
             dbg,
