@@ -3,19 +3,15 @@
 A cursor-anchored radial menu for After Effects. Press and hold summons a wheel
 under the pointer; flick to a segment, release to fire.
 
-**Status: Phase 0 — capability spikes.** There is no product here yet. This
-repository currently holds throwaway code whose only job is to answer, cheaply,
-whether the thing is buildable at all before any of it becomes expensive.
+**Status: working on Windows.** Right-press and hold inside After Effects and a
+hexagon wheel appears under the cursor; flick to a slot and release to fire. A
+slot can run an AE menu command, a snippet of your own ExtendScript, an effect by
+match name, or a built-in tool such as the 3x3 anchor grid. One level of
+drill-down. Settings have no UI yet, and macOS is not built.
 
-## Where it stands
-
-| Spike | Question | Outcome |
-|---|---|---|
-| S1 | Does an AEGP plugin load, register a menu command, and dispatch? | **PASS** |
-| S2 | Can we detect right-button-held-past-200ms, and *take* it, without breaking normal right-click? | **PASS** |
-| S3 | Can a transparent overlay stay above AE without costing the layer selection? | **PASS** |
-| S4 | Same as S2, on macOS | **not run — needs a Mac** |
-| S5 | Can we enumerate every installed effect and apply one by match name? | **PASS** (519/519) |
+The product lives in `poc/` — start with `HANDOFF.md`, then `poc/README.md` and
+`poc/SETTINGS.md`. The files at the top level are the frozen Phase 0 spikes, kept
+as reference.
 
 `SPIKES.md` is the full log: what each spike measured, what it found, and — in
 two cases — what it got wrong first and how that was caught. Worth reading before

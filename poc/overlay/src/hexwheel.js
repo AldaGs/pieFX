@@ -103,7 +103,11 @@ const DEFAULTS = {
             label: "Adjustment Layer",
             action: { kind: "ae-command", name: "Adjustment Layer", id: 2279 },
           },
-          { label: "Text", action: { kind: "ae-command", name: "Text", id: 7034 } },
+          // NOTE: neither the name nor the id here is measured yet. The name
+          // is a guess at AE's menu text and 2000 comes from the command map,
+          // which has been wrong three times. The AE Commands probe carries
+          // candidate spellings for it — confirm before trusting.
+          { label: "Comp", action: { kind: "ae-command", name: "New Composition...", id: 2000 } },
           { label: "Light", action: { kind: "ae-command", name: "Light...", id: 2563 } },
           { label: "Camera", action: { kind: "ae-command", name: "Camera...", id: 2564 } },
         ],

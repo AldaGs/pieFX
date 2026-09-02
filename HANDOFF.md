@@ -7,76 +7,76 @@ Everything below is true as of 2026-09-01.
 
 ## One-paragraph state
 
-Phase 0 (capability spikes) is complete and **the POC is complete and verified
-live**: right-hold summons a wheel under the cursor, a flick picks a slot, and
-release fires a real action in After Effects. Since then the product has grown a
-**hexagon wheel with one level of drill-down**, an **action model** that can bind
-a slot to AE menu commands / user scripts / effects, and a **native executor
-table** for them. That work is MVP-shaped, so the project is no longer "the POC"
-— but it is not an MVP either, because settings have no UI and several things are
-coded rather than proven. The table below is the honest line between the two.
+Phase 0 (capability spikes) is complete, the POC is complete, and the product now
+runs **end to end in After Effects with nothing started by hand**: arm it from the
+Window menu, right-press and hold, and a hexagon wheel appears under the cursor
+with one level of drill-down. Releasing on a slot fires a real action — an AE menu
+command, a user's ExtendScript, an effect by match name, or the built-in anchor
+grid. **All five executor kinds are proven live from the gesture.** What is
+missing is not capability but polish: settings have no UI, the Effects search is a
+mock, and nothing greys out when an action cannot apply. The tables below are the
+honest line between what has been watched working and what has merely been
+written.
 
 ## What is actually proven
 
 Observed working, either live in AE or against the real overlay binary driven by
-the offline harness.
+the offline harness (`poc/pipe_test.ps1`).
 
 | | How it was proven |
 |---|---|
 | Hold gesture: detect, swallow, replay; normal right-click intact | many live runs, both monitors |
 | Overlay: z-order over AE, spans all monitors, click-through | live |
-| Two-way pipe, one per direction, with a ready handshake | harness + live |
-| Hexagon wheel: drill-down, arming, category defaults | harness, 5 gestures |
-| `script-snippet` executor (Master Null) | **live in AE** |
-| `ae-command` via `app.executeCommand` **from the gesture** | **live** — Null and Adjustment Layer appeared |
-| Menu names resolved by `findMenuCommandId` | **live** — corrected 3 ids the map got wrong |
-| `script-file` executor | **live** — self-test writes a .jsx and confirms it ran |
-| `effect` executor | **live** — Gaussian Blur appeared |
-| `anchor-grid` executor via the overlay path | **live** — anchor recentred |
-| `ae-command` via **menu** dispatch (2767, 2279, 3819) | **live** — Null, Adjustment Layer and centring all happened |
-| Second AE instance gets its own pipes | harness, custom names on the command line |
-| Errors reach the user as a non-modal toast | harness |
+| Overlay auto-launches beside the .aex; no manual start | live |
+| Two pipes (one per direction) + ready handshake | harness + live |
+| Second AE instance gets its own pid-suffixed pipes | harness, non-default names |
+| Hexagon wheel: drill-down, arming, category defaults | harness + live |
+| `script-snippet` (Master Null, all variants) | **live** |
+| `script-file` | **live** — self-test writes a .jsx and confirms it ran |
+| `effect` by match name | **live** — Gaussian Blur appeared |
+| `builtin` anchor grid via the overlay action path | **live** — anchor recentred |
+| `ae-command` **from the gesture**, via `app.executeCommand` | **live** — Null and Adjustment Layer appeared |
+| Menu names resolved by `findMenuCommandId` | **live** — corrected three ids the map had wrong |
+| Error toast, anchored below the summon | harness |
 
-**Run `Window ▸ pieFX Self-Test (Executors)` after any install.** It fires one of
-every executor kind with a layer selected and reports what it attempted; three of
-the five must be judged by eye. That command exists because those paths were
-"code, not facts" for too long.
+Two menu commands to run after any install, both under `Window`:
+**pieFX Self-Test (Executors)** fires one of every action kind, and
+**pieFX Self-Test (AE Commands)** resolves candidate menu names against the
+running AE and compares the two dispatch paths. They exist because these things
+were "code, not facts" for too long.
 
 ## What is NOT proven, and what is missing
 
-- **AE menu commands must go through ExtendScript, not `AEGP_DoCommand`.**
-  Measured both ways: every id fired through `AEGP_DoCommand` from a **menu
-  command** worked (2767 made a Null, 2279 an Adjustment Layer, 3819 centred the
-  layer), and every id fired through it from the **idle hook** — where the
-  gesture lands — silently did nothing while still returning `A_Err_NONE`. The
-  ids were never wrong; the dispatch path was. This is the S2B finding again:
-  `UpdateMenuHook` fires when AE **rebuilds its menus**, so command enable-state
-  is only current just after a menu interaction, and there is no API to force a
-  rebuild. The executor now runs `app.executeCommand(id)`, a path already proven
-  to work from idle. The snippet brackets the call with layer and render-queue
-  counts, so a command that returns cleanly and changes nothing says so in the
-  log.
-- **The AE command ids are the biggest unknown.** `poc/overlay/src/ae-commands-2025.json`
-  was hand-tested by another developer against AE 2025; we run 2026. Checking the
-  first draft of the defaults against it already caught three wrong guesses. A
-  wrong-but-valid id fires the *wrong menu item*, which is worse than failing, so
-  a settings **test-fire** button is a requirement, not a nicety.
-- **Settings have no UI.** The format is designed (`poc/SETTINGS.md`), and
+- **Two menu names still return 0** from `findMenuCommandId`: `Save Frame As...`
+  and `Center in View`. Both run by id meanwhile (3819 is *proven* — it really
+  centred the layer), so only the spelling is missing. Save Frame As is a
+  *submenu* in AE, so its command is probably a leaf (`File...` /
+  `Photoshop Layers...`). The AE Commands probe carries candidates for both.
+- **The `Comp` slot is unmeasured.** `Create > Comp` was just swapped in for
+  `Text` and carries the name `New Composition...` with id 2000 from the command
+  map — neither confirmed. The probe has candidate spellings; confirm before
+  trusting it.
+- **`(5027 :: 12)`** appeared once after the AE Commands probe and is
+  unattributed. Possibly `executeCommand(2263)`, the id that fires and does
+  nothing. Watch for it.
+- **Settings have no UI.** The format is designed (`poc/SETTINGS.md`) and
   `load_settings` / `save_settings` exist in Rust, but nothing calls them: there
   is no settings file, and the slot tree is the `DEFAULTS` constant in
   `hexwheel.js`. `armMode` likewise defaults to `"center"` in code.
-- **The Effects search widget is a mock.** It draws; it fires nothing. S5 found
+- **The Effects search widget is a mock.** It draws and fires nothing. S5 found
   519 installed effects, so its real form is a filter field over the catalogue.
-- **No per-slot context gating.** Nothing greys out when an action cannot apply.
-  "New Solid" needs no selection, "Master Null" does, and the schema cannot say
-  so yet. This wants a `requires` field.
+- **No per-slot context gating.** Nothing greys out when an action cannot apply:
+  `Create > Solid` needs no selection, `Master Null` does, and the schema cannot
+  say so. Wants a `requires` field.
 - **A `script-snippet` needs its script already loaded.** `_mn.addMasterNull(...)`
-  only works once `ag_masterNull.jsx` has been run, because AE shares one
-  ExtendScript namespace and the global has to exist. The intended fix is lazy
-  bootstrap — an action declaring the global it needs and the file to load — plus
-  a one-line guard in the user's script so loading it headless does not pop its
-  palette.
+  works only once `ag_masterNull.jsx` has been run, because AE shares one
+  ExtendScript namespace. Intended fix: an action declares the global it needs
+  and the file to load, plus a one-line guard in the user's script
+  (`if (!$.global.__pieFXHeadless) showUI(thisObj);`) so a headless load does not
+  pop its palette.
 - **macOS is untouched since the rename.** The Mac tree has not been rebuilt.
+- **The gesture is always armed once toggled on.** No per-panel gating, and
+  right-DRAG inside AE is still untested (S2D left that open).
 
 ## The bugs that cost real sessions, and what they taught
 
@@ -162,11 +162,30 @@ that links silently and fails to load — model on `Persisto`). Install to AE's 
 automatically; otherwise `npm run tauri dev` works and the plug-in's launch
 no-ops.
 
-## The next three things, in order
+## Next steps for a fresh session
 
-1. **Run the self-test in AE** and settle the four unconfirmed executors —
-   especially whether the 2025 command ids hold on 2026.
-2. **Per-slot context gating** (`requires`), so slots grey out honestly.
-3. **The settings UI**, as a clickable wheel, with a test-fire button per binding.
+Roughly in order. The first two are cheap and close open measurements; the third
+is the real remaining feature work.
 
-Then: script bootstrap, the real Effects search, and the macOS port.
+1. **Finish the menu-name table.** Run `Window > pieFX Self-Test (AE Commands)`
+   and read the resolution list. Fold whatever resolves into the `DEFAULTS` in
+   `poc/overlay/src/hexwheel.js` — specifically `Save Frame As...`,
+   `Center in View` and the new `Comp` slot. Delete candidates that never
+   resolve.
+2. **Per-slot context gating (`requires`).** Add `requires: "selection" | "comp"`
+   to the action schema, have the summon grey slots that cannot apply, and use
+   the selection context the plug-in already sends (`hasSelection`,
+   `layerCount`). This is the last thing making the wheel feel dishonest.
+3. **The settings UI**, as a large clickable wheel with an inspector: label,
+   action kind, kind-specific fields, and a **test-fire button per binding** —
+   which is the practical safety net for menu ids and names alike. Wire it to
+   `load_settings` / `save_settings`, which already exist and are unused.
+
+After that: the real Effects search (filter over the S5 catalogue), script
+bootstrap, then the macOS port. `ARCHITECTURE.md` is still accurate; the Mac side
+needs the two-pipe transport and the `ready` handshake replicated.
+
+**Before handing over any build, run `poc/pipe_test.ps1`.** It drives the real
+overlay binary with no AE involved and has caught every transport bug in this
+project — the freeze, the startup race, and the swapped launch flags.
+
