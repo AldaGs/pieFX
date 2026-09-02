@@ -38,6 +38,11 @@ the offline harness (`poc/pipe_test.ps1`).
 | `ae-command` **from the gesture**, via `app.executeCommand` | **live** — Null and Adjustment Layer appeared |
 | Menu names resolved by `findMenuCommandId` | **live** — corrected three ids the map had wrong |
 | Error toast, anchored below the summon | harness |
+| `Comp > Save Frame as PNG` (saveFrameToPng at 1:1, save dialog) | **live** |
+| `Comp > Comp Settings` (2007) and `Comp > Queue to Render` (2161) | **live** |
+| `Create > Comp` (`New Composition...`, 2000) | **live** |
+| `Layer > Pre-comp` (2071) and `Layer > Split + Dup` (2158) | **live** |
+| Dark-glass palette | **live**, and the user's call |
 | Overlay dies with AE (death hook, plus an `--owner-pid` watchdog) | **not yet** — written, built, unwatched |
 
 Two menu commands to run after any install, both under `Window`:
@@ -67,7 +72,7 @@ were "code, not facts" for too long.
   `hexwheel.js`. `armMode` likewise defaults to `"center"` in code.
 - **The Effects search widget is a mock.** It draws and fires nothing. S5 found
   519 installed effects, so its real form is a filter field over the catalogue.
-- **Per-slot context gating is written but not watched in AE.** The schema now
+- **Per-slot context gating is still not watched in AE.** The schema now
   has `requires: "selection" | "comp"`, the plug-in sends `hasComp` alongside
   `hasSelection`, and the overlay draws un-appliable slots dead, refuses to fire
   them and says why in a toast. Verified only by a headless harness over
