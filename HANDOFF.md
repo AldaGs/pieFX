@@ -57,7 +57,8 @@ the offline harness (`poc/pipe_test.ps1`).
 | A settings file changes what the wheel fires | harness — a rebound `S` fired the rebound command |
 | The whole harness still passes after the frontend was split into modules | harness |
 | The plug-in's walk writes `effects.json` inside AE | **live** — 522 walked, 522 claimed |
-| Presets in the search: folder walk, one list, `applyPreset` | harness fixture + browser preview — **unwatched in AE** |
+| The preset walk finds AE's own presets and the user's | **live** — 621 shipped + 1 in Documents |
+| A preset APPLIED from the search (`layer.applyPreset`) | harness fixture + browser preview — **unwatched in AE** |
 | The Effects search: window opens in front of AE, filters, Enter applies | **live** — the user's own session |
 | `layerCount` counts LAYERS, not selected things | **live** — `layers=1` with a layer's properties selected |
 | `copy-frame`: the frame reaches the Windows clipboard and pastes | **live** — pasted out of AE |
@@ -145,9 +146,10 @@ were "code, not facts" for too long.
   shipped `Support Files/Presets`, located from the plug-in's own module path,
   plus every `Documents/Adobe/After Effects*/User Presets`) and APPLIES them
   through the scripting DOM's `layer.applyPreset`, under one undo group because
-  a preset can add half a dozen effects at once. What is unwatched: whether the
-  walk finds AE's ~620 shipped presets on a real install, and whether
-  `applyPreset` lands.
+  a preset can add half a dozen effects at once. **The walk is watched: 621
+  shipped presets plus one saved in Documents, in one list with the effects.**
+  What is still unwatched is the other half - whether `applyPreset` actually
+  lands on the layer, and whether one undo takes it all back.
 - **The shipped-presets root is found by CLIMBING, not by counting levels**, and
   the first version counted. It went two folders up from the .aex on the
   assumption that a plug-in sits directly in `Plug-ins` - and the author's sits
