@@ -411,7 +411,7 @@ the mistake THIS platform actually made: it reads the staged `.aex` and refuses
 to package it unless it contains `pieFX (Show/Hide)` and does not contain
 `Anchor to Center`. Both directions of that check are tested.
 
-### Signing — decide this before shipping, it is not the macOS answer
+### Signing — decided: no certificate, on either platform
 
 On macOS, signing was measured NOT to be a gate: AE ships
 `com.apple.security.cs.disable-library-validation`, and a quarantined plug-in
@@ -419,18 +419,26 @@ loaded fine. **Windows comes out the other way round.** A downloaded unsigned
 `.exe` gets SmartScreen's full-screen "Windows protected your PC" panel with the
 Run button hidden behind "More info" — and a plain `.zip` of the same files does
 not. So an unsigned installer trades "copy three things into a folder" for
-"convince the user to click past a malware warning". Options, in the order to
-consider them:
+"convince the user to click past a malware warning".
 
-1. **OV certificate** (~$200-400/yr) — warning clears once reputation accrues.
-2. **EV certificate** (~$400-600/yr, hardware token) — instant reputation.
-3. **Ship unsigned + publish to winget.** `winget install pieFX` skips the
-   browser-download path entirely, and it composes with the installer rather
-   than competing with it.
-4. **Ship unsigned with a "More info -> Run anyway" screenshot in the README.**
+**The decision, made 2026-09-03: pieFX ships unsigned and stays unsigned.** It
+is free and there is no revenue, so an OV certificate (~$200-400/yr) or an EV
+one (~$400-600/yr, hardware token) has nothing to pay for it. This is not a
+deferred TODO — do not re-open it, and do not list signing as a gap. Free
+software being unsigned is unremarkable and users have seen that dialog before.
 
-Adding a certificate later is one `signtool` call at the end of
-`build_installer.ps1` and nothing else changes.
+What is left is making the prompt cheaper, and both halves are free:
+
+1. **Publish to winget.** `winget install pieFX` skips the browser-download path
+   entirely, so SmartScreen never appears. It composes with the installer rather
+   than competing with it, and it costs a manifest PR. This is the one item here
+   still worth doing.
+2. **A "More info -> Run anyway" screenshot in the README.** For anyone who
+   takes the direct-download path anyway. The README already says the words; a
+   picture makes it a five-second step instead of a decision.
+
+If this is ever revisited — it should not be — adding a certificate is one
+`signtool` call at the end of `build_installer.ps1` and nothing else changes.
 
 ### What the installer has and has not been through
 
@@ -618,11 +626,14 @@ because the harness ends at the pipe. It needs a real AE to confirm, with a
 large comp, and the log line `copy-frame: complete PNG after Nms` is what says
 it worked.
 
-### 2. Two five-minute items that get worse if they wait
+### 2. One five-minute item that gets worse if it waits
 
-- **A LICENSE file.** The README has said "license not yet chosen" since Phase
-  0. Until one exists the default is all rights reserved, so "open source, free"
-  is not true yet and nobody can legally fork or contribute.
+- **A LICENSE file — DONE, 2026-09-03.** `LICENSE` at the root is MIT,
+  copyright Aldair Gonzalez, with a note that it covers the pieFX source only
+  and not the Adobe SDK, which is licensed separately and is not redistributed
+  here. Before it existed the default was all rights reserved, so "open source,
+  free" was not true and nobody could legally fork or contribute. Do not vendor
+  SDK headers into the repo — they are not yours to relicense.
 - **A version constant.** `poc/native/pieFX.h` has none: `0.1.0` exists only as
   an argument to `Win/build_installer.ps1`. So a bug report cannot say which
   build it came from and an upgrade cannot say what it replaced. Put it in the
@@ -645,15 +656,17 @@ the caller of half that list anyway, so it is cheapest to do them together.
 
 ### 4. Distribution, the rest of it
 
-- **Windows signing.** See "Signing" above for the options and the prices. Not a
-  gate for handing a colleague a file; a real one for a public link, because a
-  downloaded unsigned `.exe` gets SmartScreen's full-screen panel where a `.zip`
-  does not. `winget` is the cheap way round it and composes with the installer.
+- **Publish to winget.** Signing itself is **decided and closed** — see
+  "Signing" above; pieFX is free and stays unsigned. What remains is the free
+  way round SmartScreen: a `winget` manifest, so `winget install pieFX` never
+  hits the browser-download path. It composes with the installer.
 - **A macOS installer.** Today it is `sudo cp -R`. A `.pkg` has to cope with AE
   being open, several AE versions side by side, and uninstalling — the same
   three problems `Win/pieFX.iss` already solves, so read it first.
-- **`Mac/sign_product.sh` has never been run.** There is no certificate in that
-  keychain. Read its header before trusting it.
+- **`Mac/sign_product.sh` has never been run**, and under the no-certificate
+  decision it never will be — there is no certificate in that keychain and none
+  is being bought. Signing was measured not to be a gate on macOS anyway. The
+  script is kept because it documents the steps, not because it is pending.
 
 ### 5. Then: the machines nobody has
 

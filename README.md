@@ -31,9 +31,9 @@ finds your After Effects versions in the registry, installs into each one's own
 Effects only ever loads plug-ins from under `C:\Program Files`, so there is no
 unprivileged install to offer.
 
-It is **unsigned**, so a downloaded copy trips SmartScreen: click *More info*,
-then *Run anyway*. See `docs/HANDOFF.md` for why that has not been fixed yet and
-what fixing it costs.
+It is **unsigned** — pieFX is free, and a code-signing certificate costs more
+per year than the project takes in — so a downloaded copy trips SmartScreen:
+click *More info*, then *Run anyway*. See `docs/HANDOFF.md` for the decision.
 
 Then start AE and turn it on: **Window > pieFX (Show/Hide)**. It stays armed
 across launches.
@@ -61,6 +61,7 @@ approaches that are known **not** to work. Worth reading before changing anythin
 ## Layout
 
     README.md             this file — the only .md at the root
+    LICENSE               MIT, plus the note on the Adobe SDK
     docs/                 everything else; docs/README.md is the index
 
     poc/native/           THE PRODUCT plug-in (pieFX.cpp/.h, Win/, mac/)
@@ -133,12 +134,19 @@ their own Xcode project via `./Mac/build_and_install.sh`. See
 - **Every macOS observation is from a Spanish AE.** That has been an asset — it
   exposed two defects that were not about localisation at all — but the English
   path on macOS is the untested one, which is an unusual way round.
-- **The Windows installer is unsigned**, and a certificate is a real cost, not a
-  formality. `docs/HANDOFF.md` has the options and the prices.
+- **The Windows installer is unsigned, and will stay that way.** pieFX is free
+  and does not earn the ~$200-600/yr a certificate costs, so a downloaded copy
+  trips SmartScreen once: *More info*, then *Run anyway*. A `winget` package is
+  the planned way to skip that path entirely.
 - **A failed `copy-frame` freezes AE for up to 15 seconds.** It waits on AE's UI
   thread. Only reached when AE never finishes writing the frame; making it
   asynchronous is the real answer.
 
 ## License
 
-Open source, free. License not yet chosen — see the roadmap.
+**MIT** — see `LICENSE`. pieFX is free, and there is nothing to buy.
+
+That licence covers the pieFX source only. The After Effects SDK it builds
+against is Adobe's, under Adobe's own terms; none of it is included here or
+redistributed, which is why the build instructions tell you to bring your own
+copy.
