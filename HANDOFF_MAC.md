@@ -71,7 +71,10 @@ Watched working in AE, or measured by a harness against the real binaries.
   the overlay included — but only arm64 has ever run, and every observation in
   this port is from an es_ES install, so the ENGLISH path is the untested one.
   Both are one machine away and neither can be checked here.
-- **Windows, at all, since this port began.** See "What to do next".
+- **Windows, RUN, since this port began.** It now COMPILES there (Debug and
+  Release, x64, no warnings), and the overlay harness passes against a
+  Windows build carrying the placement fix — but no .aex from this port has
+  been loaded into a running After Effects on Windows. See "What to do next".
 - **Anything on an English macOS AE.** Every observation here is from an es_ES
   install. That is mostly an asset — see the traps below — but it does mean the
   English path on macOS is the untested one, which is an unusual way round.
@@ -146,35 +149,39 @@ Then, with AE open:
 second screen and confirm the wheel appears under the cursor. It is the last
 coordinate question outstanding.
 
-### 2. A Windows build
+### 2. ~~A Windows build~~ — DONE, and clean
 
-The largest un-repaid debt in the project, and it has been growing all through
-step 5. **None of the Windows code changed in this port has been compiled**,
-because there is no Windows toolchain on this machine. What changed there:
-`PieFX_ConfigPath`, `PieFX_LegacyToUtf8`, `FrameFileSize`, `PngIsComplete` and
-the `WaitForFrameFile` rewrite, `EmitPreset`, and the
-`DirOpen`/`DirNext`/`DirClose` iterator that `WalkPresetFolder` and
-`WritePresets` were rebuilt on.
+The largest un-repaid debt in the project, paid on 2026-09-03 on the Windows
+machine. `Win/pieFX.sln` builds **Debug and Release, x64, with no warnings and
+no errors**, so every shared body this port rewrote —  `PieFX_ConfigPath`,
+`PieFX_LegacyToUtf8`, `FrameFileSize`, `PngIsComplete` and the
+`WaitForFrameFile` rewrite, `EmitPreset`, and the `DirOpen`/`DirNext`/`DirClose`
+iterator that `WalkPresetFolder` and `WritePresets` were rebuilt on — has now
+been compiled by MSVC as well as clang. It compiled on the first attempt; the
+sharing was sound.
 
-Every one of those was a deliberate choice to share a body rather than
-duplicate it, and each is defensible on its own. The accumulated risk is not:
-the Windows product is SHIPPING, and it currently ships on code that has only
-ever been compiled for macOS. A build — even one that only compiles and loads —
-should come before the next Windows release.
-
-Two of those changes are also FIXES for Windows, which is the other half of the
-argument: `WaitForFrameFile`'s timing guess and the effect-name encoding are
-both latent there.
+What that does NOT cover: the .aex was built, not installed and not loaded into
+a running AE, and none of those bodies has been EXERCISED on Windows since the
+port. Compiling is the floor, not the proof. The two changes that are also
+Windows fixes — `WaitForFrameFile`'s timing guess and the effect-name encoding —
+are still unwatched there, and `copy-frame` plus the preset walk are the two
+things to run first on the next Windows session.
 
 ### Also outstanding
 
-- **`.center()` on Windows.** The settings and search windows still call it
-  there, and it centers on the primary monitor on Windows too — so the bug the
-  hand-check found on macOS is latent on the shipping platform. It was left
-  alone rather than fixed blind: there is no Windows toolchain on this machine,
-  and per-monitor DPI makes the Windows version of this arithmetic its own
-  question. It is the fourth defect in this port that turned out not to be
-  about macOS.
+- ~~**`.center()` on Windows.**~~ **DONE**, on the Windows machine and not
+  blind. `win_place_on_cursor_screen` is the mirror of the macOS function and
+  both windows now use it; `.center()` is gone from both platforms, and both
+  build `.visible(false)` so the window is placed before it is seen. Windows is
+  the easier half — the virtual desktop is one coordinate space in physical
+  pixels, so nothing is divided by a per-monitor scale — but it has a trap macOS
+  does not: crossing to a monitor with a different scale factor RESIZES the
+  window, which invalidates the centring just computed. The function measures
+  the size again after the move and re-centres once. Watched working in the
+  harness (the search window placed on the cursor's monitor, log line and all)
+  on a SINGLE-monitor machine; the second-display case is exactly as unproven on
+  Windows as it was on macOS before the hand-check, and wants the same hand-check.
+  The mixed-DPI re-centre is reasoned, not measured.
 - **A 15s freeze on a failed copy-frame.** `WaitForFrameFile` runs on AE's UI
   thread, and its budget went from 4s to 15s when the check became exact. That
   is only reached when AE never finishes writing the frame — but when it is

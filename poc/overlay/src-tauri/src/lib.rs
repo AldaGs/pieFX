@@ -572,6 +572,94 @@ fn mac_place_on_cursor_screen(win: &tauri::WebviewWindow) {
     mac_set_top_left_point(win, x, y);
 }
 
+// The same job as `mac_place_on_cursor_screen`, on the platform where the bug
+// was found second. `.center()` centers on the PRIMARY monitor here too, so a
+// user working on their second display summoned the wheel under the cursor and
+// then got its settings or search window on the other screen. Settings could be
+// dragged back; search is undecorated by design and could not be moved at all.
+//
+// Windows is the easier half of this arithmetic, and deliberately so. The
+// virtual desktop IS one coordinate space in physical pixels — the per-monitor
+// scale trap that `screens_in_points` exists to undo on macOS has no equivalent
+// here — so cursor, monitor and window are all compared in physical px and
+// nothing is divided by anything.
+//
+// The WORK AREA, not the monitor size: a window centred against the full
+// display on a monitor with a taskbar sits a taskbar's height too low, and on
+// the small-display case below that is the difference between reaching the
+// bottom edge and hanging off it.
+//
+// Clamped rather than merely centred, for the reason macOS has: a 1180x760
+// settings window centred on a small laptop display would otherwise hang off
+// two edges at once.
+#[cfg(windows)]
+fn win_place_on_cursor_screen(win: &tauri::WebviewWindow) {
+    let cursor = match win.cursor_position() {
+        Ok(p) => p,
+        Err(e) => {
+            dlog(&format!("  no cursor position; not placed: {}", e));
+            return;
+        }
+    };
+    // The monitor under the cursor; failing that, the window's current one.
+    // Never a guessed nearest — a window placed on a monitor nobody asked for
+    // is the bug being fixed, not a recovery from it.
+    let mon = match win.monitor_from_point(cursor.x, cursor.y) {
+        Ok(Some(m)) => m,
+        _ => match win.current_monitor() {
+            Ok(Some(m)) => m,
+            _ => {
+                dlog("  no monitor for the cursor; not placed");
+                return;
+            }
+        },
+    };
+    let wa = mon.work_area();
+    let (sx, sy) = (wa.position.x as f64, wa.position.y as f64);
+    let (sw, sh) = (wa.size.width as f64, wa.size.height as f64);
+
+    let (ww, wh) = match win.outer_size() {
+        Ok(sz) => (sz.width as f64, sz.height as f64),
+        Err(e) => {
+            dlog(&format!("  no outer_size; not placed: {}", e));
+            return;
+        }
+    };
+
+    let x = (sx + (sw - ww) / 2.0).max(sx).min(sx + (sw - ww).max(0.0));
+    let y = (sy + (sh - wh) / 2.0).max(sy).min(sy + (sh - wh).max(0.0));
+
+    dlog(&format!(
+        "  placing on the cursor's screen: cursor ({:.0}, {:.0}) work area ({:.0}, {:.0}) {}x{}",
+        cursor.x, cursor.y, sx, sy, sw, sh
+    ));
+    if let Err(e) = win.set_position(tauri::PhysicalPosition::new(x as i32, y as i32)) {
+        dlog(&format!("  set_position failed: {}", e));
+        return;
+    }
+
+    // Moving between monitors of different scale factors RESIZES the window:
+    // Windows sends WM_DPICHANGED with a suggested rect, and the window that
+    // was 1180x760 physical on a 100% display becomes 1770x1140 on a 150% one.
+    // The centring above was computed against the old size, so on a mixed-DPI
+    // desktop the window lands off-centre — and, on the small-display case, off
+    // the edge. Measured once and corrected once: the second move is on the
+    // monitor it is already on, so it cannot change the DPI again and cannot
+    // loop.
+    if let Ok(sz) = win.outer_size() {
+        let (nw, nh) = (sz.width as f64, sz.height as f64);
+        if (nw - ww).abs() > 1.0 || (nh - wh).abs() > 1.0 {
+            let x2 = (sx + (sw - nw) / 2.0).max(sx).min(sx + (sw - nw).max(0.0));
+            let y2 = (sy + (sh - nh) / 2.0).max(sy).min(sy + (sh - nh).max(0.0));
+            dlog(&format!(
+                "  DPI changed the window to {}x{}; re-centred",
+                sz.width, sz.height
+            ));
+            let _ = win.set_position(tauri::PhysicalPosition::new(x2 as i32, y2 as i32));
+        }
+    }
+}
+
 // Move the overlay onto the screen holding the summon point, and report that
 // screen's top-left origin so the frontend can convert.
 //
@@ -847,20 +935,21 @@ fn show_settings(app: &tauri::AppHandle) {
         .skip_taskbar(false)
         .focused(true);
 
-    // `.center()` centers on the PRIMARY monitor, and on macOS it is applied
-    // again when the window becomes visible — so it does not merely start the
-    // window in the wrong place, it silently UNDOES an explicit move made
+    // `.center()` centers on the PRIMARY monitor — on BOTH platforms, which is
+    // why neither of them uses it any more. On macOS it is additionally applied
+    // again when the window becomes visible, so there it does not merely start
+    // the window in the wrong place, it silently UNDOES an explicit move made
     // before the window was shown. That cost a debugging round: the log said
     // the frame had been set to the second screen, and CGWindowList said the
     // window was centered on the first. It stays only where nothing better
     // replaces it.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     let b = b.center();
 
-    // Built hidden on macOS so it can be placed BEFORE it is seen. Without
-    // this the window appears centred on the primary display and then jumps,
-    // which is a worse bug than the one being fixed. `raise()` shows it.
-    #[cfg(target_os = "macos")]
+    // Built hidden so it can be placed BEFORE it is seen. Without this the
+    // window appears centred on the primary display and then jumps, which is a
+    // worse bug than the one being fixed. `raise()` shows it.
+    #[cfg(any(target_os = "macos", windows))]
     let b = b.visible(false);
 
     match b.build() {
@@ -870,6 +959,8 @@ fn show_settings(app: &tauri::AppHandle) {
         Ok(w) => {
             #[cfg(target_os = "macos")]
             mac_place_on_cursor_screen(&w);
+            #[cfg(windows)]
+            win_place_on_cursor_screen(&w);
             raise(&w);
             dlog("  settings window opened and raised");
         }
@@ -904,6 +995,8 @@ fn show_search(app: &tauri::AppHandle) {
         // happened to be working before. It should follow them.
         #[cfg(target_os = "macos")]
         mac_place_on_cursor_screen(&w);
+        #[cfg(windows)]
+        win_place_on_cursor_screen(&w);
         let _ = w.show();
         raise(&w);
         let _ = app.emit("piefx-search-shown", "");
@@ -930,23 +1023,26 @@ fn show_search(app: &tauri::AppHandle) {
         .skip_taskbar(true)
         .focused(true);
 
-    // `.center()` centers on the PRIMARY monitor, and on macOS it is applied
-    // again when the window becomes visible — so it does not merely start the
-    // window in the wrong place, it silently UNDOES an explicit move made
+    // `.center()` centers on the PRIMARY monitor — on BOTH platforms, which is
+    // why neither of them uses it any more. On macOS it is additionally applied
+    // again when the window becomes visible, so there it does not merely start
+    // the window in the wrong place, it silently UNDOES an explicit move made
     // before the window was shown. That cost a debugging round: the log said
     // the frame had been set to the second screen, and CGWindowList said the
     // window was centered on the first. It stays only where nothing better
     // replaces it.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     let b = b.center();
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     let b = b.visible(false);
 
     match b.build() {
         Ok(w) => {
             #[cfg(target_os = "macos")]
             mac_place_on_cursor_screen(&w);
+            #[cfg(windows)]
+            win_place_on_cursor_screen(&w);
             raise(&w);
             dlog("  search window opened and raised");
         }
