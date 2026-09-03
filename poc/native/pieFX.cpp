@@ -984,6 +984,58 @@ MouseProc(int code, WPARAM wParam, LPARAM lParam)
 // ---------------------------------------------------------------------------
 //	selection context (safe here in idle), and the deferred anchor action
 // ---------------------------------------------------------------------------
+//	Which LAYER a selected thing belongs to.
+//
+//	The comp selection is not a list of layers: a mask, an effect, a property, a
+//	keyframe and a mask vertex are all selectable, and every one of them carries
+//	the layer that contains it. Counting collection ITEMS therefore counts one
+//	layer many times over - twirl a layer down, click its Position and one of its
+//	keyframes, and a count of items says three layers are selected when one is.
+//
+//	Every type but STREAMREF names its owner, so the walk resolves each item to a
+//	layer handle and the caller counts DISTINCT handles. STREAMREF carries no
+//	union at all and is skipped rather than guessed at.
+static AEGP_LayerH
+LayerOfCollectionItem(const AEGP_CollectionItemV2 *itemP)
+{
+	if (!itemP) { return NULL; }
+
+	switch (itemP->type) {
+		case AEGP_CollectionItemType_LAYER:
+			return itemP->u.layer.layerH;
+		case AEGP_CollectionItemType_MASK:
+			return itemP->u.mask.layerH;
+		case AEGP_CollectionItemType_EFFECT:
+			return itemP->u.effect.layerH;
+		case AEGP_CollectionItemType_MASK_VERTEX:
+			return itemP->u.mask_vertex.mask_sel.layerH;
+		case AEGP_CollectionItemType_STREAM:
+			switch (itemP->u.stream.type) {
+				case AEGP_StreamCollectionItemType_LAYER:
+					return itemP->u.stream.u.layer_stream.layerH;
+				case AEGP_StreamCollectionItemType_MASK:
+					return itemP->u.stream.u.mask_stream.mask.layerH;
+				case AEGP_StreamCollectionItemType_EFFECT:
+					return itemP->u.stream.u.effect_stream.effect.layerH;
+				default:
+					return NULL;
+			}
+		case AEGP_CollectionItemType_KEYFRAME:
+			switch (itemP->u.keyframe.stream_coll.type) {
+				case AEGP_StreamCollectionItemType_LAYER:
+					return itemP->u.keyframe.stream_coll.u.layer_stream.layerH;
+				case AEGP_StreamCollectionItemType_MASK:
+					return itemP->u.keyframe.stream_coll.u.mask_stream.mask.layerH;
+				case AEGP_StreamCollectionItemType_EFFECT:
+					return itemP->u.keyframe.stream_coll.u.effect_stream.effect.layerH;
+				default:
+					return NULL;
+			}
+		default:
+			return NULL;
+	}
+}
+
 static void
 RefreshSelectionContext(AEGP_SuiteHandler &suites)
 {
@@ -1008,8 +1060,33 @@ RefreshSelectionContext(AEGP_SuiteHandler &suites)
 			if (!err && collH) {
 				A_u_long n = 0;
 				ERR2(suites.CollectionSuite2()->AEGP_GetCollectionNumItems(collH, &n));
-				count = (A_long)n;
 				hasSel = (n > 0);
+
+				//	Distinct layers, not items. The cap is not a limit on the
+				//	selection, only on how many handles are remembered: every
+				//	consumer of this number asks "one, or more than one", so an
+				//	undercount above the cap cannot change an answer.
+				AEGP_LayerH		seen[64];
+				A_long			nseen = 0;
+
+				for (A_u_long i = 0; i < n; i++) {
+					AEGP_CollectionItemV2	item;
+					AEGP_LayerH				layerH = NULL;
+
+					memset(&item, 0, sizeof(item));
+					ERR2(suites.CollectionSuite2()->AEGP_GetCollectionItemByIndex(collH, i, &item));
+					layerH = LayerOfCollectionItem(&item);
+					if (!layerH) { continue; }
+
+					A_Boolean known = FALSE;
+					for (A_long k = 0; k < nseen; k++) {
+						if (seen[k] == layerH) { known = TRUE; break; }
+					}
+					if (!known && nseen < (A_long)(sizeof(seen) / sizeof(seen[0]))) {
+						seen[nseen++] = layerH;
+					}
+				}
+				count = nseen;
 				ERR2(suites.CollectionSuite2()->AEGP_DisposeCollection(collH));
 			}
 		}

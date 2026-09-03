@@ -301,7 +301,14 @@ typing. That has not changed; it has been designed around.
                refuses instead of opening: the plug-in applies through
                AEGP_GetActiveLayer, which returns a layer only when exactly
                one is selected, so a search opened there would take a query
-               and an Enter and then apply nothing. Nothing in the panel is
+               and an Enter and then apply nothing. `layerCount` is DISTINCT
+               LAYERS, not collection items - the comp selection also holds
+               masks, effects, properties and keyframes, every one of which
+               carries its containing layer, so counting items reported three
+               layers for one layer with a property and a keyframe clicked.
+               The miscount was reported from a live run; the DISTINCT-layer
+               walk that replaces it is unwatched, and the summon log line
+               (`layers=`) is where to check it. Nothing in the panel is
                highlighted, because a hot row
                would promise that releasing fires that row and releasing opens
                a window. Releasing outside the dead zone opens it; the centre
