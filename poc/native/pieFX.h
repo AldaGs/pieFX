@@ -59,7 +59,12 @@
 #define PIEFX_PRESET_MAX	4000
 
 //	Arm/disarm the whole thing.
-#define PIEFX_MENU_NAME		"pieFX (Wheel: OFF/ON)"
+#define PIEFX_MENU_NAME		"pieFX (Show/Hide)"
+
+//	The two self-tests are developer instruments, not product. They stay
+//	compiled - they are how the executor paths and the command map get checked -
+//	but 0 keeps them out of the Window menu a user sees.
+#define PIEFX_SHOW_SELFTESTS	0
 
 //	Fires one of EVERY executor kind in sequence, so the paths that the wheel
 //	can reach but nobody has yet exercised stop being guesses. Needs one
@@ -102,6 +107,14 @@
 //	summon - which is exactly what a single duplex pipe did here. Splitting the
 //	directions means no handle ever has both a read and a write outstanding, and
 //	it keeps both sides on plain synchronous I/O.
+//	How long the UI thread will wait on one write to the overlay. An overlay
+//	that has stopped reading used to hang AE outright: the write was synchronous
+//	and unbounded, so disarming - which writes a cancel - froze After Effects
+//	until pieFX-overlay.exe was killed by hand. The TX pipe is overlapped now
+//	and every write is bounded by this; a write that runs out declares the
+//	overlay dead rather than waiting on it.
+#define PIEFX_PIPE_WRITE_MS	1000
+
 #define PIEFX_PIPE_TX		"\\\\.\\pipe\\pieFX"		// native -> overlay (events)
 #define PIEFX_PIPE_RX		"\\\\.\\pipe\\pieFX-cmd"	// overlay -> native (actions)
 

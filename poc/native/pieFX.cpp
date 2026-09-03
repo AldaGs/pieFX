@@ -303,9 +303,37 @@ PipeWrite(const char *jsonZ)
 	}
 	EnterCriticalSection(&S_pipe_cs);
 	if (S_pipe_connected && S_pipe != INVALID_HANDLE_VALUE) {
-		DWORD written = 0;
-		size_t len = strlen(jsonZ);
-		BOOL ok = WriteFile(S_pipe, jsonZ, (DWORD)len, &written, NULL);
+		//	OVERLAPPED, and waited on with a deadline, because this runs on AE's
+		//	UI thread. A synchronous WriteFile to an overlay that has stopped
+		//	reading never returns, and AE is frozen for exactly as long as that
+		//	lasts - which was until someone killed pieFX-overlay.exe by hand.
+		OVERLAPPED	ov;
+		DWORD		written	= 0;
+		size_t		len		= strlen(jsonZ);
+		BOOL		ok		= FALSE;
+
+		ZeroMemory(&ov, sizeof(ov));
+		ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+		if (ov.hEvent) {
+			if (WriteFile(S_pipe, jsonZ, (DWORD)len, &written, &ov)) {
+				ok = TRUE;
+			} else if (GetLastError() == ERROR_IO_PENDING) {
+				if (WaitForSingleObject(ov.hEvent, PIEFX_PIPE_WRITE_MS) == WAIT_OBJECT_0) {
+					ok = GetOverlappedResult(S_pipe, &ov, &written, FALSE);
+				} else {
+					//	Cancel, then wait for the cancel to land: the buffer is
+					//	on this stack, and the kernel has to be done with it
+					//	before we leave the frame.
+					CancelIoEx(S_pipe, &ov);
+					GetOverlappedResult(S_pipe, &ov, &written, TRUE);
+					Log("  pipe: write timed out after %ums, treating the overlay as gone\n",
+						(unsigned)PIEFX_PIPE_WRITE_MS);
+				}
+			}
+			CloseHandle(ov.hEvent);
+		}
+
 		if (!ok || written != len) {
 			//	Client went away. Let the bg thread recycle the instance.
 			S_pipe_connected = FALSE;
@@ -598,6 +626,46 @@ HandleOverlayLine(const char *lineZ)
 // ---------------------------------------------------------------------------
 //	pipe: server thread (accept + read + re-accept)
 // ---------------------------------------------------------------------------
+//	Wait for the overlay on the overlapped TX pipe. The wait watches the stop
+//	event too, so a disarm gets this thread moving without depending on the
+//	poke-connect in StopPipeServer.
+static BOOL
+ConnectTxOverlapped(HANDLE tx)
+{
+	OVERLAPPED	ov;
+	BOOL		ok	= FALSE;
+
+	ZeroMemory(&ov, sizeof(ov));
+	ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	if (!ov.hEvent) {
+		return FALSE;
+	}
+
+	if (ConnectNamedPipe(tx, &ov)) {
+		ok = TRUE;
+	} else {
+		DWORD e = GetLastError();
+
+		if (e == ERROR_PIPE_CONNECTED) {
+			ok = TRUE;
+		} else if (e == ERROR_IO_PENDING) {
+			HANDLE	waits[2]	= { ov.hEvent, S_pipe_stop_evt };
+			DWORD	n			= 0;
+			DWORD	w			= WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+
+			if (w == WAIT_OBJECT_0) {
+				ok = GetOverlappedResult(tx, &ov, &n, FALSE);
+			} else {
+				CancelIoEx(tx, &ov);
+				GetOverlappedResult(tx, &ov, &n, TRUE);
+			}
+		}
+	}
+
+	CloseHandle(ov.hEvent);
+	return ok;
+}
+
 static DWORD WINAPI
 PipeServerThread(LPVOID)
 {
@@ -606,9 +674,13 @@ PipeServerThread(LPVOID)
 		//	open them back to back. TX is outbound only and is the handle the UI
 		//	thread writes to; RX is inbound only and is the one this thread parks
 		//	on. Neither handle ever carries both directions - see PIEFX_PIPE_TX.
+		//	FILE_FLAG_OVERLAPPED on TX only. It is the handle the UI thread
+		//	writes to, and only an overlapped handle can have a write given a
+		//	deadline - see PipeWrite. RX stays synchronous: it is read on this
+		//	thread, where blocking is the point.
 		HANDLE tx = CreateNamedPipeA(
 			S_tx_name,
-			PIPE_ACCESS_OUTBOUND,
+			PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED,
 			PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
 			1, 4096, 4096, 0, NULL);
 
@@ -625,8 +697,7 @@ PipeServerThread(LPVOID)
 			return 1;
 		}
 
-		BOOL tx_ok = ConnectNamedPipe(tx, NULL)
-			? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+		BOOL tx_ok = ConnectTxOverlapped(tx);
 		BOOL rx_ok = tx_ok && (ConnectNamedPipe(rx, NULL)
 			? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED));
 
@@ -2614,8 +2685,10 @@ UpdateMenuHook(AEGP_GlobalRefcon, AEGP_UpdateMenuRefcon, AEGP_WindowType)
 	//	Always available - arming is a global mode, not a per-comp action.
 	suites.CommandSuite1()->AEGP_EnableCommand(S_toggle_cmd);
 	suites.CommandSuite1()->AEGP_EnableCommand(S_settings_cmd);
+#if PIEFX_SHOW_SELFTESTS
 	suites.CommandSuite1()->AEGP_EnableCommand(S_selftest_cmd);
 	suites.CommandSuite1()->AEGP_EnableCommand(S_cmdprobe_cmd);
+#endif
 	return A_Err_NONE;
 }
 
@@ -2710,7 +2783,21 @@ Disarm(AEGP_SuiteHandler &suites, A_Boolean announce)
 	CancelHoldTimer();
 	if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
 	SendCancel();
+
+	//	Same order as the death hook, for the same reason: ask the overlay to
+	//	quit while the pipe it is reading is still whole, THEN tear the pipes
+	//	down. Disarm used to leave the overlay running against pipes that had
+	//	just been closed, so it sat there un-dead - and that wreckage is what
+	//	AE's next write hung on. Arm() launches a fresh one, so turning pieFX
+	//	back on costs nothing.
+	SendQuit();
+	if (S_overlay_proc) {
+		DWORD w = WaitForSingleObject(S_overlay_proc, 2000);
+		Log("  overlay: asked to quit -> %s\n",
+			w == WAIT_OBJECT_0 ? "gone" : "still up after 2s");
+	}
 	StopPipeServer();
+	StopOverlay();
 	Log("=== pieFX disarmed ===\n");
 	if (announce) {
 		suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, "pieFX: OFF.");
@@ -2810,6 +2897,7 @@ CommandHook(AEGP_GlobalRefcon, AEGP_CommandRefcon, AEGP_Command command,
 		}
 		OpenSettings(suites);
 		*handledPB = TRUE;
+#if PIEFX_SHOW_SELFTESTS
 	} else if (command == S_cmdprobe_cmd) {
 		if (!S_log_path[0]) {
 			ResolveLogPath();
@@ -2822,6 +2910,7 @@ CommandHook(AEGP_GlobalRefcon, AEGP_CommandRefcon, AEGP_Command command,
 		}
 		RunSelfTest(suites);
 		*handledPB = TRUE;
+#endif
 	}
 	return A_Err_NONE;
 }
@@ -2855,6 +2944,10 @@ EntryPointFunc(
 	ERR(suites.CommandSuite1()->AEGP_InsertMenuCommand(S_settings_cmd, PIEFX_SETTINGS_NAME,
 														AEGP_Menu_WINDOW, AEGP_MENU_INSERT_SORTED));
 
+	//	The self-tests are developer instruments. They stay compiled - flip
+	//	PIEFX_SHOW_SELFTESTS in the header to get them back - but a user's
+	//	Window menu is not where they belong.
+#if PIEFX_SHOW_SELFTESTS
 	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_cmdprobe_cmd));
 	ERR(suites.CommandSuite1()->AEGP_InsertMenuCommand(S_cmdprobe_cmd, PIEFX_CMDPROBE_NAME,
 														AEGP_Menu_WINDOW, AEGP_MENU_INSERT_SORTED));
@@ -2862,6 +2955,7 @@ EntryPointFunc(
 	ERR(suites.CommandSuite1()->AEGP_GetUniqueCommand(&S_selftest_cmd));
 	ERR(suites.CommandSuite1()->AEGP_InsertMenuCommand(S_selftest_cmd, PIEFX_SELFTEST_NAME,
 														AEGP_Menu_WINDOW, AEGP_MENU_INSERT_SORTED));
+#endif
 
 	ERR(suites.RegisterSuite5()->AEGP_RegisterCommandHook(S_my_id, AEGP_HP_BeforeAE,
 														AEGP_Command_ALL, CommandHook, 0));
