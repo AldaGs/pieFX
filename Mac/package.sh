@@ -43,12 +43,16 @@ mkdir -p "${STAGE}/pieFX-mac"
 cp "${HERE}/report.sh" "${STAGE}/pieFX-mac/report.sh"
 
 cat > "${STAGE}/pieFX-mac/READ ME.txt" <<'TXT'
-pieFX for macOS — test build
-============================
+pieFX for macOS
+===============
 
-This build is universal (Apple Silicon and Intel) and is NOT signed by a
-developer certificate. That is expected. After Effects allows unsigned
-plug-ins, and a quarantined copy has been tested and loads normally.
+A cursor-anchored radial menu for After Effects. Free, MIT licensed.
+Source and full documentation: github.com/AldaGs/pieFX
+
+This build is universal — Apple Silicon and Intel. It is NOT signed by a
+developer certificate, and that is expected: pieFX is free and does not earn
+one. After Effects allows unsigned plug-ins, and a quarantined copy has been
+tested and loads normally, so there is no Gatekeeper step to work around.
 
 
 INSTALL
@@ -59,7 +63,11 @@ INSTALL
 
      /Applications/Adobe After Effects <year>/Plug-ins/
 
-   The Finder will ask for your password: that folder is owned by the system.
+   Replace <year> with your version. In the Finder, press Shift-Command-G and
+   paste that path to get there. macOS will ask for your password: that folder
+   is owned by the system.
+
+   If you run several versions of After Effects, copy it into each one.
 
 3. Start After Effects. `pieFX (Show/Hide)` appears in the Window menu.
    It arms itself on launch, so there is usually nothing to click.
@@ -73,28 +81,22 @@ release. A short right-click still opens After Effects' normal context menu.
 
 The centre hexagon is cancel — release there and nothing fires.
 
+The top hexagon opens the effect search: type a name, press Return, and it is
+applied to your selection.
 
-WHAT WOULD BE USEFUL TO KNOW
-----------------------------
-This build has only ever run on one machine: an Apple Silicon Mac with a
-SPANISH After Effects. So the interesting questions are the ordinary ones.
+A slot that needs a layer selection or a comp you do not have is drawn dead
+and will not fire, so nothing happens silently.
 
-  * Does the wheel appear at all, under the cursor?
-  * If you have two displays, does it appear on the one you are using?
-  * Do the items fire? Try Comp Settings, and Master Null.
-  * Open the effect search (the top hexagon) and type an effect name.
-    Does the list look right?
-  * Settings live in Window > pieFX Settings. Does that window open on the
-    display you are working on?
-
-Anything that looks odd is worth mentioning even if it still worked.
+Rebind any of it in Window > pieFX Settings.
 
 
-SENDING BACK A REPORT
----------------------
-After using it for a minute, open Terminal, drag `report.sh` into the window,
-press Return, and send back what it prints. It collects versions,
-architectures and the logs — no personal data, and you can read it first.
+IF SOMETHING GOES WRONG
+-----------------------
+`report.sh` collects versions, architectures and the logs into one block of
+text you can paste into a bug report. Open Terminal, drag `report.sh` into the
+window, press Return. It gathers no personal data and you can read it first.
+
+Issues: github.com/AldaGs/pieFX/issues
 
 
 UNINSTALL
