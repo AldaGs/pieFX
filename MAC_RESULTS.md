@@ -602,6 +602,95 @@ symlink. The first attempt did use a symlink in `$TMPDIR`, and the sandbox the
 build runs in refused to exec through it (`EACCES`, while `access(X_OK)` said
 yes) — which is how bug 1 came to light.
 
+---
+
+# The gesture — MAC_PORT.md step 4
+
+Moved out of the frozen Phase 0 spike into a product-shaped module,
+`poc/native/mac/pieFX_gesture.mm`. The mechanism is not new work — S4 measured
+it at 23 holds out of 23, swallow and replay included, with no Accessibility
+permission — so this is proven code changing address, with the product's
+semantics attached.
+
+**Not yet inside the plug-in.** `Mac/pieFXMac.xcodeproj` still builds the Phase
+0 spike rather than `poc/native/pieFX.cpp`, and standing up a macOS target for
+the product plug-in is its own job. What exists now is the module, armed and
+exercised in a host that is not After Effects.
+
+## The state machine is the Windows one, deliberately
+
+DOWN starts a clock and is swallowed; a press that outlives the threshold is
+ours; a press that does not is handed back. Ported call for call from
+`MouseProc`, including the parts that are easy to lose:
+
+- **Raw cursor only, de-duplicated.** The overlay owns the wheel geometry and
+  does its own hit-testing; this side deliberately has no opinion about which
+  slot is under the cursor.
+- **The release decides nothing.** The overlay knows which slot the cursor is
+  on and sends back a finished action. Deciding here as well would fire twice.
+- **Drags are swallowed too**, not just the DOWN and UP: while a press is ours,
+  AE must not see the drag either.
+
+What differs is every mechanism underneath, and each one is argued where it is
+made: a local monitor instead of `SetWindowsHookEx`, `dispatch_after` with a
+generation counter instead of `SetTimer`/`KillTimer` (a dispatch block cannot
+be cancelled, so a stale one is invalidated rather than stopped), and the
+original `NSEvent` re-posted instead of `SendInput`.
+
+Two Phase 0 findings are carried in as code rather than as comments:
+
+- **Swallow is not optional**, so there is no toggle for it. AE's context menu,
+  once open, eats the mouse-UP before any local monitor sees it — 23 DOWNs and
+  exactly 1 UP. Swallowing the DOWN prevents the menu, which prevents the
+  tracking loop, which is what makes the UP visible at all.
+- **The replay guard is a deadline, not a count.** A count of 2 desyncs for the
+  same reason: the replayed UP usually never comes back, the count sticks at 1,
+  and the next real press is silently eaten as if it were ours.
+
+## Coordinates: converted once, and checked against something else
+
+AppKit hands out bottom-left points; the protocol is top-left. The flip happens
+once, in `ToTopLeft`, against the PRIMARY screen's height — screens[0], the one
+with the menu bar — because the top-left space is anchored to its top-left
+corner. Not the screen the cursor is on, which would make the origin move with
+the mouse.
+
+Verified against an independent source rather than by restating the formula:
+`CGEvent` reports the cursor in the top-left space directly.
+
+```
+screens[0] height (points): 982.0
+NSEvent.mouseLocation (bottom-left): (898.94, 355.86)
+CGEvent location     (top-left):     (898.94, 626.14)
+my ToTopLeft formula (top-left):     (899.0,  626.0)
+MATCH (within rounding)
+```
+
+## Why this one needs a window
+
+The transport could be proven headlessly. This cannot: a local monitor sees
+only events destined for its own application — the very property that makes it
+work without an Accessibility grant is what makes it untestable from outside.
+So `poc/native/mac/gesture_test.mm` supplies an application.
+
+Its window carries a **context menu**, on purpose. That is AE's behaviour in
+miniature, and it makes both halves visible rather than merely logged:
+
+| | expected | what it proves |
+|---|---|---|
+| a SHORT right-click | the menu OPENS | the DOWN was swallowed and handed back |
+| a right-click HELD | the menu does NOT open, a hold is reported | the DOWN never reached the app |
+
+If the menu opens on a hold, the swallow is broken. If it never opens on a
+short click, the replay is broken. **Neither shows up in a log that only
+records what the monitor saw** — which is the same shape as the Phase 0 finding
+that a silent discard and a correct replay produce identical logs.
+
+```bash
+./poc/native/mac/build_gesture_test.sh
+poc/overlay/src-tauri/target/release/pieFX_gesture_test
+```
+
 ## Carried forward
 
 **The Unicode accessors.** This AE runs in Spanish, and `AEGP_GetEffectName` /

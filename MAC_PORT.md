@@ -69,9 +69,9 @@ self-tests — is portable untouched. What is not:
 | Windows | macOS replacement | State |
 |---|---|---|
 | `CreateNamedPipe` / `ConnectNamedPipe` (7 calls) | `mkfifo` pair, or Unix domain sockets | **written and proven** in `poc/native/mac/pieFX_fifo.cpp`, against the real overlay with no AE |
-| `SetWindowsHookEx(WH_MOUSE)` | `addLocalMonitorForEventsMatchingMask` | **written and proven** in `pieFXMac.mm` |
-| `SetTimer` / `KillTimer` | `dispatch_after` on the main queue | **written and proven** |
-| `SendInput` replay | `[NSApp postEvent:atStart:NO]`, DOWN then UP | **written and proven** |
+| `SetWindowsHookEx(WH_MOUSE)` | `addLocalMonitorForEventsMatchingMask` | proven in `pieFXMac.mm`; **now a product module**, `poc/native/mac/pieFX_gesture.mm` |
+| `SetTimer` / `KillTimer` | `dispatch_after` + a generation counter (blocks cannot be cancelled) | **ported**, same module |
+| `SendInput` replay | `[NSApp postEvent:atStart:NO]`, DOWN then UP | **ported**, same module |
 | `CreateProcess` + job object + `--owner-pid` watchdog | `fork`/`exec` into its own process GROUP, plus `kqueue` `NOTE_EXIT` on the owner pid | **written and proven** in `poc/native/mac/pieFX_launch.cpp`; the job object splits in two, and neither half covers both cases |
 | Clipboard: `OpenClipboard` + WIC + three formats (~230 lines) | `NSPasteboard` + `NSPasteboardTypePNG` | to write, and it gets SMALLER |
 | `GetTempPath`, `%APPDATA%` | `$TMPDIR`, `~/Library/Application Support/pieFX` | to write; the overlay's `dlog` already falls back to `TMPDIR`, the rest of the overlay's `APPDATA` paths do not |
@@ -155,11 +155,13 @@ is what the mixed-DPI coordinate bug looked like from the outside.
    both halves, proven offline in `poc/native/mac/fifo_test.cpp` (19
    assertions, no AE). Send POINTS, top-left origin, from `NSEvent`; the
    overlay converts nothing.
-4. **The gesture**, moved out of the frozen spike into the product plug-in. This
-   is proven code changing address, not new work. ← next. It is also the point
-   at which a macOS TARGET for the product plug-in has to exist: everything
-   built so far compiles standalone, and `Mac/pieFXMac.xcodeproj` still builds
-   the Phase 0 spike rather than `poc/native/pieFX.cpp`.
+4. **The gesture** — **module written**
+   (`poc/native/mac/pieFX_gesture.mm`), armed and exercised in a host that is
+   not AE. What remains is not the gesture: it is the macOS **target** for the
+   product plug-in. Everything built so far compiles standalone, and
+   `Mac/pieFXMac.xcodeproj` still builds the Phase 0 spike rather than
+   `poc/native/pieFX.cpp`. ← next, and it is the integration step the whole
+   port has been deferring.
 5. **Paths, clipboard, Unicode accessors.**
 6. **Localisation of menu ids** — its own investigation.
 
