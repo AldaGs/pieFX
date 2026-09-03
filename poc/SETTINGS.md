@@ -11,7 +11,7 @@ product can ever do is one of six action kinds:
 
 | Kind | Payload | Executed by |
 |---|---|---|
-| `builtin` | `name` (`anchor-grid`, `effect-search`), plus per-tool args | pieFX's own native code and custom widget |
+| `builtin` | `name` (`anchor-grid`, `effect-search`, `copy-frame`), plus per-tool args | pieFX's own native code and custom widget |
 | `ae-command` | `name` (preferred), `id` (fallback) | `app.executeCommand(findMenuCommandId(name))` |
 | `script-snippet` | ExtendScript source | `AEGP_ExecuteScript` |
 | `script-file` | path to a `.jsx` | `AEGP_ExecuteScript` wrapping `$.evalFile` |
@@ -214,6 +214,35 @@ decoder is ~30 lines and cannot be surprised by user input.
 `script-file` paths are additionally normalised to forward slashes before being
 wrapped in `$.evalFile("…")` — ExtendScript accepts them, and it removes the
 backslash-escaping question entirely.
+
+## `copy-frame`: the current frame on the clipboard
+
+`Comp > Copy to Clipboard`. The sibling of `Save Frame as PNG` - same frame,
+same forced 1:1 resolution - with no file dialog and no file for the user to
+manage.
+
+It is a **builtin** rather than a snippet because the work is split across the
+two things neither side can do alone: ExtendScript can write a PNG
+(`saveFrameToPng`) and can do nothing at all with the clipboard, and the
+plug-in owns the clipboard but would have to take on the whole render API to
+produce a frame. So the frame goes out through `%TEMP%\pieFX_clipboard_frame.png`
+and comes straight back in as pixels, decoded with WIC. The file is left there
+and overwritten by the next copy.
+
+**Three clipboard formats go on, and the reason is alpha.** A comp frame can be
+transparent and the classic `CF_DIB` cannot say so:
+
+    "PNG"      the original file bytes. What Photoshop, Chrome, Figma and Slack
+               reach for first, and exactly the frame AE wrote.
+    CF_DIBV5   32bpp with a real alpha mask, for consumers that read it.
+    CF_DIB     the same pixels forced opaque - the universal fallback. A
+               transparent frame pasted through this one shows whatever was
+               behind the alpha, usually black. That is the format, not a bug.
+
+The toast reports `Copied Frame 1234 from <Comp>`, and the frame number is the
+one the TIMELINE shows: `displayStartFrame` is added, because a comp that starts
+at 1001 must not report frame 0 - a number the user cannot find in their own
+timeline is worse than no number.
 
 ## The effect search: two files beside the settings
 

@@ -21,7 +21,7 @@
 // ring; it may ALSO carry an action, which is its default (fired when you flick
 // to it and release without drilling in).
 //
-//   builtin        { name: "anchor-grid" | "effect-search" }
+//   builtin        { name: "anchor-grid" | "effect-search" | "copy-frame" }
 //   ae-command     { name: "Add to Render Queue", id: 2161 }  name first, id is fallback
 //   script-snippet { code: "_mn.addMasterNull(false)" }
 //   script-file    { path: "D:/…/ag_masterNull.jsx" }
@@ -164,7 +164,15 @@ const DEFAULTS = {
             label: "Comp Settings",
             action: { kind: "ae-command", name: "Composition Settings...", id: 2007 },
           },
-          null,
+          {
+            // The sibling of Save Frame as PNG, and it sits next to it on
+            // purpose: same frame, same full resolution, no file dialog. The
+            // plug-in writes the PNG to %TEMP% and puts the pixels on the
+            // clipboard itself, because ExtendScript can write an image and
+            // can do nothing whatsoever with the clipboard.
+            label: "Copy to Clipboard",
+            action: { kind: "builtin", name: "copy-frame" },
+          },
           {
             // NOT the menu command. "Save Frame As" (2233, and the spelling
             // really does drop the ellipsis the menu shows) only queues the

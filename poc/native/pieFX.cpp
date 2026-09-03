@@ -86,7 +86,8 @@ enum PieKind {
 	PK_SNIPPET,		//	ExtendScript source
 	PK_FILE,		//	path to a .jsx, run through $.evalFile
 	PK_EFFECT,		//	install-by-match-name (S5)
-	PK_ANCHOR		//	builtin: the 3x3 anchor grid
+	PK_ANCHOR,		//	builtin: the 3x3 anchor grid
+	PK_COPY_FRAME	//	builtin: current frame -> the clipboard
 };
 
 struct PieAction {
@@ -566,7 +567,14 @@ HandleOverlayLine(const char *lineZ)
 		if (!JsonStr(lineZ, "\"name\":", name, sizeof(name))) {
 			return;
 		}
-		if (strcmp(name, "anchor-grid")) {
+		if (!strcmp(name, "copy-frame")) {
+			a.kind = PK_COPY_FRAME;
+		} else if (!strcmp(name, "anchor-grid")) {
+			long cell = -1;
+			JsonNum(lineZ, "\"cell\":", &cell);
+			a.kind = PK_ANCHOR;
+			a.cell = (int)cell;
+		} else {
 			//	Silence is the worst answer: the wheel offers the slot, the
 			//	user flicks to it, and nothing whatsoever happens.
 			char t[160];
@@ -575,11 +583,6 @@ HandleOverlayLine(const char *lineZ)
 			SendToast("info", t);
 			return;
 		}
-
-		long cell = -1;
-		JsonNum(lineZ, "\"cell\":", &cell);
-		a.kind = PK_ANCHOR;
-		a.cell = (int)cell;
 	} else {
 		return;
 	}
@@ -1302,6 +1305,339 @@ WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 	}
 }
 
+// ---------------------------------------------------------------------------
+//	Current frame -> the clipboard.
+//
+//	Why a file is in the middle of this: ExtendScript can write a PNG
+//	(`saveFrameToPng`) and can do NOTHING with the clipboard, and this side can
+//	own the clipboard and cannot render a frame without taking on the whole
+//	render-queue API. So the frame goes out through a temp PNG and comes straight
+//	back in as pixels. The file is written, read and left in %TEMP%, overwritten
+//	by the next copy.
+//
+//	THREE formats go on the clipboard, and the reason is alpha. A comp frame can
+//	be transparent, and the classic CF_DIB cannot say so - every consumer reads
+//	its fourth byte differently, and most read it as nothing. So:
+//	  "PNG"       the original file bytes. Photoshop, Chrome, Figma, Slack and
+//	              anything modern take this first, and it is exactly the frame.
+//	  CF_DIBV5    32bpp with a real alpha mask, for consumers that understand it.
+//	  CF_DIB      the same pixels forced opaque, as the universal fallback. A
+//	              transparent frame pasted through THIS one shows whatever was
+//	              behind the alpha, which is usually black - that is a property
+//	              of the format, not a bug here.
+//	Order is a preference hint, not a rule; the consumer chooses.
+static A_Boolean
+ReadWholeFile(const char *pathZ, BYTE **bufPP, DWORD *sizeP)
+{
+	FILE	*fp = NULL;
+	long	 n	= 0;
+
+	*bufPP = NULL;
+	*sizeP = 0;
+
+	if (fopen_s(&fp, pathZ, "rb") || !fp) { return FALSE; }
+	fseek(fp, 0, SEEK_END);
+	n = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+
+	if (n <= 0) { fclose(fp); return FALSE; }
+
+	BYTE *buf = (BYTE *)malloc((size_t)n);
+	if (!buf) { fclose(fp); return FALSE; }
+
+	size_t got = fread(buf, 1, (size_t)n, fp);
+	fclose(fp);
+
+	if (got != (size_t)n) { free(buf); return FALSE; }
+
+	*bufPP = buf;
+	*sizeP = (DWORD)n;
+	return TRUE;
+}
+
+//	Copy a block into a GMEM_MOVEABLE handle, ready to hand to the clipboard.
+//	Ownership passes to the clipboard on success, so nothing here is freed after
+//	a successful SetClipboardData - freeing it is exactly how a paste turns into
+//	garbage some seconds later.
+static HGLOBAL
+GlobalFrom(const void *srcP, size_t bytes)
+{
+	HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+
+	if (!h) { return NULL; }
+
+	void *p = GlobalLock(h);
+	if (!p) { GlobalFree(h); return NULL; }
+	memcpy(p, srcP, bytes);
+	GlobalUnlock(h);
+	return h;
+}
+
+static A_Boolean
+PngFileToClipboard(const char *pathZ, char *errZ, size_t err_max)
+{
+	IWICImagingFactory	*factoryP	= NULL;
+	IWICBitmapDecoder	*decoderP	= NULL;
+	IWICBitmapFrameDecode *frameP	= NULL;
+	IWICFormatConverter	*convP		= NULL;
+	BYTE				*pngP		= NULL;
+	BYTE				*pixP		= NULL;
+	DWORD				 pngBytes	= 0;
+	UINT				 w = 0, h = 0;
+	A_Boolean			 ok			= FALSE;
+	HRESULT				 hr			= S_OK;
+
+	errZ[0] = 0;
+
+	//	AE's UI thread is already in an apartment; asking again is how you find
+	//	out without assuming. S_FALSE means "already initialised by us",
+	//	RPC_E_CHANGED_MODE means "already initialised differently" - both are
+	//	fine to work in, and only the first of them owes a CoUninitialize.
+	HRESULT coHr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+	A_Boolean weInitedCom = (coHr == S_OK || coHr == S_FALSE);
+
+	if (!ReadWholeFile(pathZ, &pngP, &pngBytes)) {
+		strcpy_s(errZ, err_max, "the frame file could not be read back");
+		goto done;
+	}
+
+	hr = CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
+						  IID_PPV_ARGS(&factoryP));
+	if (FAILED(hr)) { sprintf_s(errZ, err_max, "WIC unavailable (0x%08lx)", (unsigned long)hr); goto done; }
+
+	{
+		//	Decoded from MEMORY, not from the path a second time: the file has
+		//	already been read for the "PNG" clipboard format, and reading it
+		//	twice invites the two copies to disagree.
+		IWICStream *streamP = NULL;
+
+		hr = factoryP->CreateStream(&streamP);
+		if (SUCCEEDED(hr)) { hr = streamP->InitializeFromMemory(pngP, pngBytes); }
+		if (SUCCEEDED(hr)) {
+			hr = factoryP->CreateDecoderFromStream(streamP, NULL,
+												   WICDecodeMetadataCacheOnLoad, &decoderP);
+		}
+		if (streamP) { streamP->Release(); }
+		if (FAILED(hr)) { sprintf_s(errZ, err_max, "the frame PNG could not be decoded (0x%08lx)", (unsigned long)hr); goto done; }
+	}
+
+	hr = decoderP->GetFrame(0, &frameP);
+	if (SUCCEEDED(hr)) { hr = factoryP->CreateFormatConverter(&convP); }
+	if (SUCCEEDED(hr)) {
+		hr = convP->Initialize(frameP, GUID_WICPixelFormat32bppBGRA,
+							   WICBitmapDitherTypeNone, NULL, 0.0,
+							   WICBitmapPaletteTypeCustom);
+	}
+	if (SUCCEEDED(hr)) { hr = convP->GetSize(&w, &h); }
+	if (FAILED(hr) || !w || !h) { sprintf_s(errZ, err_max, "the frame has no pixels (0x%08lx)", (unsigned long)hr); goto done; }
+
+	{
+		const UINT stride = w * 4;
+		const size_t bytes = (size_t)stride * h;
+
+		pixP = (BYTE *)malloc(bytes);
+		if (!pixP) { strcpy_s(errZ, err_max, "out of memory reading the frame"); goto done; }
+
+		hr = convP->CopyPixels(NULL, stride, (UINT)bytes, pixP);
+		if (FAILED(hr)) { sprintf_s(errZ, err_max, "the frame could not be read (0x%08lx)", (unsigned long)hr); goto done; }
+
+		//	DIBs are bottom-up. Flipping here rather than asking WIC to do it
+		//	keeps one representation in play.
+		for (UINT y = 0; y < h / 2; y++) {
+			BYTE *a = pixP + (size_t)y * stride;
+			BYTE *b = pixP + (size_t)(h - 1 - y) * stride;
+
+			for (UINT i = 0; i < stride; i++) {
+				BYTE t = a[i]; a[i] = b[i]; b[i] = t;
+			}
+		}
+
+		//	CF_DIBV5: alpha kept, and the channel masks spelled out so a reader
+		//	does not have to guess which byte is which.
+		size_t v5Bytes = sizeof(BITMAPV5HEADER) + bytes;
+		BYTE *v5P = (BYTE *)malloc(v5Bytes);
+		//	CF_DIB: the same pixels, forced opaque.
+		size_t dibBytes = sizeof(BITMAPINFOHEADER) + bytes;
+		BYTE *dibP = (BYTE *)malloc(dibBytes);
+
+		if (!v5P || !dibP) {
+			free(v5P); free(dibP);
+			strcpy_s(errZ, err_max, "out of memory building the clipboard image");
+			goto done;
+		}
+
+		BITMAPV5HEADER *v5 = (BITMAPV5HEADER *)v5P;
+		memset(v5, 0, sizeof(*v5));
+		v5->bV5Size			= sizeof(BITMAPV5HEADER);
+		v5->bV5Width		= (LONG)w;
+		v5->bV5Height		= (LONG)h;
+		v5->bV5Planes		= 1;
+		v5->bV5BitCount		= 32;
+		v5->bV5Compression	= BI_BITFIELDS;
+		v5->bV5SizeImage	= (DWORD)bytes;
+		v5->bV5RedMask		= 0x00FF0000;
+		v5->bV5GreenMask	= 0x0000FF00;
+		v5->bV5BlueMask		= 0x000000FF;
+		v5->bV5AlphaMask	= 0xFF000000;
+		v5->bV5CSType		= LCS_WINDOWS_COLOR_SPACE;
+		v5->bV5Intent		= LCS_GM_IMAGES;
+		memcpy(v5P + sizeof(BITMAPV5HEADER), pixP, bytes);
+
+		BITMAPINFOHEADER *bi = (BITMAPINFOHEADER *)dibP;
+		memset(bi, 0, sizeof(*bi));
+		bi->biSize			= sizeof(BITMAPINFOHEADER);
+		bi->biWidth			= (LONG)w;
+		bi->biHeight		= (LONG)h;
+		bi->biPlanes		= 1;
+		bi->biBitCount		= 32;
+		bi->biCompression	= BI_RGB;
+		bi->biSizeImage		= (DWORD)bytes;
+		memcpy(dibP + sizeof(BITMAPINFOHEADER), pixP, bytes);
+		{
+			BYTE *q = dibP + sizeof(BITMAPINFOHEADER);
+			for (size_t i = 3; i < bytes; i += 4) { q[i] = 0xFF; }
+		}
+
+		HGLOBAL hPng = GlobalFrom(pngP, pngBytes);
+		HGLOBAL hV5  = GlobalFrom(v5P, v5Bytes);
+		HGLOBAL hDib = GlobalFrom(dibP, dibBytes);
+
+		free(v5P);
+		free(dibP);
+
+		if (!hPng || !hV5 || !hDib) {
+			if (hPng) { GlobalFree(hPng); }
+			if (hV5)  { GlobalFree(hV5); }
+			if (hDib) { GlobalFree(hDib); }
+			strcpy_s(errZ, err_max, "out of memory handing the image to Windows");
+			goto done;
+		}
+
+		//	NULL owner: this process has no window of its own on AE's thread,
+		//	and the clipboard does not require one.
+		if (!OpenClipboard(NULL)) {
+			GlobalFree(hPng); GlobalFree(hV5); GlobalFree(hDib);
+			sprintf_s(errZ, err_max, "another app is holding the clipboard (err %lu)",
+					  (unsigned long)GetLastError());
+			goto done;
+		}
+		EmptyClipboard();
+
+		UINT cfPng = RegisterClipboardFormatA("PNG");
+		A_Boolean placed = FALSE;
+
+		if (cfPng && SetClipboardData(cfPng, hPng)) { placed = TRUE; } else { GlobalFree(hPng); }
+		if (SetClipboardData(CF_DIBV5, hV5))		{ placed = TRUE; } else { GlobalFree(hV5); }
+		if (SetClipboardData(CF_DIB, hDib))			{ placed = TRUE; } else { GlobalFree(hDib); }
+
+		CloseClipboard();
+
+		if (!placed) {
+			strcpy_s(errZ, err_max, "Windows refused every clipboard format");
+			goto done;
+		}
+		ok = TRUE;
+	}
+
+done:
+	if (convP)		{ convP->Release(); }
+	if (frameP)		{ frameP->Release(); }
+	if (decoderP)	{ decoderP->Release(); }
+	if (factoryP)	{ factoryP->Release(); }
+	free(pixP);
+	free(pngP);
+	if (weInitedCom) { CoUninitialize(); }
+	return ok;
+}
+
+static void
+CopyFrameToClipboard(AEGP_SuiteHandler &suites)
+{
+	char	dir[MAX_PATH]	= { 0 };
+	char	path[MAX_PATH]	= { 0 };
+	char	fwd[MAX_PATH]	= { 0 };
+	DWORD	len				= GetTempPathA(MAX_PATH, dir);
+
+	if (!len || len > MAX_PATH - 32) {
+		SendToast("error", "pieFX: no temp folder to write the frame to");
+		return;
+	}
+	strcpy_s(path, MAX_PATH, dir);
+	strcat_s(path, MAX_PATH, "pieFX_clipboard_frame.png");
+
+	strcpy_s(fwd, MAX_PATH, path);
+	for (char *p = fwd; *p; p++) {
+		if (*p == '\\') { *p = '/'; }
+	}
+
+	//	The frame number is the one the TIMELINE shows, which is not
+	//	time/frameDuration: a comp can start at any frame, and reporting 0 for a
+	//	comp whose first frame is 1001 would be a number the user cannot find.
+	//	resolutionFactor is forced to 1:1 and restored for the same reason
+	//	`Save Frame as PNG` does it - copying at Half because that is how you
+	//	happened to be previewing is a silent wrong answer.
+	char code[1600];
+
+	sprintf_s(code, sizeof(code),
+		"(function(){"
+		"var c=app.project.activeItem;"
+		"if(!(c&&c instanceof CompItem))return'pieFX: no comp is active';"
+		"if(typeof c.saveFrameToPng!=='function')return'pieFX: this AE has no saveFrameToPng';"
+		"var f=new File(\"%s\");"
+		"if(f.exists)f.remove();"
+		"var res=c.resolutionFactor;"
+		"try{c.resolutionFactor=[1,1];c.saveFrameToPng(c.time,f);}"
+		"finally{c.resolutionFactor=res;}"
+		"if(!f.exists)return'pieFX: AE wrote no frame';"
+		"var off=(typeof c.displayStartFrame==='number')?c.displayStartFrame"
+		":Math.round(c.displayStartTime/c.frameDuration);"
+		"var fr=Math.round(c.time/c.frameDuration)+off;"
+		"return'ok|'+fr+'|'+c.name;"
+		"})()", fwd);
+
+	S_last_result[0] = 0;
+	RunScript(suites, code, "copy-frame");
+
+	//	RunScript has already toasted anything it threw. What is left to check is
+	//	the RETURNED value, which is how the script reports the failures that are
+	//	not exceptions.
+	if (0 != strncmp(S_last_result, "ok|", 3)) {
+		if (!strncmp(S_last_result, "pieFX: ", 7)) {
+			SendToast("error", S_last_result + 7);
+		}
+		Log("  copy-frame: script said \"%s\"\n", S_last_result);
+		return;
+	}
+
+	char	frame[32]	= { 0 };
+	char	comp[200]	= { 0 };
+	const char *p = S_last_result + 3;
+	const char *bar = strchr(p, '|');
+
+	if (bar) {
+		size_t n = (size_t)(bar - p);
+		if (n >= sizeof(frame)) { n = sizeof(frame) - 1; }
+		memcpy(frame, p, n);
+		frame[n] = 0;
+		strcpy_s(comp, sizeof(comp), bar + 1);
+	}
+
+	char err[200] = { 0 };
+
+	if (!PngFileToClipboard(path, err, sizeof(err))) {
+		char t[280];
+		sprintf_s(t, sizeof(t), "Frame not copied: %s", err[0] ? err : "unknown error");
+		Log("  copy-frame: %s\n", t);
+		SendToast("error", t);
+		return;
+	}
+
+	char t[280];
+	sprintf_s(t, sizeof(t), "Copied Frame %s from %s", frame[0] ? frame : "?", comp);
+	Log("  copy-frame: %s\n", t);
+	SendToast("info", t);
+}
+
 //	S5's lookup: walk the installed catalogue for an exact match name.
 static A_Boolean
 FindEffectKeyByMatchName(
@@ -1514,7 +1850,7 @@ RunSelfTest(AEGP_SuiteHandler &suites)
 	suites.LayerSuite9()->AEGP_GetActiveLayer(&layerH);
 
 	Append(summary, sizeof(summary),
-		layerH ? "One layer selected - all five probes can run.\n\n"
+		layerH ? "One layer selected - all six probes can run.\n\n"
 			   : "NO single layer selected: the ae-command, effect and anchor\n"
 				 "probes will report failure for that reason alone.\n\n");
 
@@ -1574,14 +1910,23 @@ RunSelfTest(AEGP_SuiteHandler &suites)
 	ExecuteAction(suites, &a);
 	Append(summary, sizeof(summary), "5. anchor-grid     -> did the anchor snap to the layer centre?\n");
 
+	//	6. builtin copy-frame - the only executor that leaves After Effects
+	//	   entirely. The toast reports success, but the only real check is a
+	//	   paste, so the summary asks for one.
+	ZeroMemory(&a, sizeof(a));
+	a.kind = PK_COPY_FRAME;
+	ExecuteAction(suites, &a);
 	Append(summary, sizeof(summary),
-		"\nJudge 3, 4 and 5 BY EYE - the log records what was attempted, not\n"
+		"6. copy-frame      -> paste into Photoshop or Paint: is it this frame?\n");
+
+	Append(summary, sizeof(summary),
+		"\nJudge 3, 4, 5 and 6 BY EYE - the log records what was attempted, not\n"
 		"what you saw. Undo a few times to put everything back.\n\nLog: ");
 	Append(summary, sizeof(summary), S_log_path);
 
 	Log("=== self-test done ===\n");
 	WriteReport(suites, "pieFX_selftest.txt", summary,
-		"pieFX: executor self-test done. Judge 3, 4 and 5 by eye, then undo.");
+		"pieFX: executor self-test done. Judge 3, 4, 5 and 6 by eye, then undo.");
 }
 
 // ---------------------------------------------------------------------------

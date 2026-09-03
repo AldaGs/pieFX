@@ -64,6 +64,10 @@ $summon = '{"type":"summon","x":800,"y":500,"hasSelection":true,"layerCount":1}'
 # turns to N instead, to `Comp Settings`, which nothing else can produce.
 Fire "S > Queue to Render " @($summon, '{"type":"cursor","x":800,"y":600}')
 Fire "S > Comp Settings   " @($summon, '{"type":"cursor","x":800,"y":800}', '{"type":"cursor","x":800,"y":200}')
+# S then NE: `Comp > Copy to Clipboard`. It is a builtin like the anchor grid,
+# so what crosses the pipe is a name and nothing else - the frame, the PNG and
+# the clipboard all happen on the plug-in side, where the clipboard is.
+Fire "Comp > Copy Frame   " @($summon, '{"type":"cursor","x":800,"y":800}', '{"type":"cursor","x":973,"y":400}')
 Fire "NE > Area Center    " @($summon, '{"type":"cursor","x":887,"y":450}')
 Fire "NE drill -> N     " @($summon, '{"type":"cursor","x":1060,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}')
 Fire "NW anchor c0      " @($summon, '{"type":"cursor","x":540,"y":350}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":760,"y":460}')

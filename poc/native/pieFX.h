@@ -37,6 +37,15 @@
 #include <string.h>
 #include <stdarg.h>
 
+#ifdef AE_OS_WIN
+	//	WIC, for the one thing ExtendScript cannot do: put an IMAGE on the
+	//	clipboard. It can write a PNG and nothing more, so the frame goes out
+	//	through a file and comes back in here as pixels.
+	#include <wincodec.h>
+	#pragma comment(lib, "windowscodecs.lib")
+	#pragma comment(lib, "ole32.lib")
+#endif
+
 //	Arm/disarm the whole thing.
 #define PIEFX_MENU_NAME		"pieFX (Wheel: OFF/ON)"
 

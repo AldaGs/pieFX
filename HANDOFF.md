@@ -56,6 +56,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | The settings window opens IN FRONT of AE | **live** — after the `raise()` fix |
 | A settings file changes what the wheel fires | harness — a rebound `S` fired the rebound command |
 | The whole harness still passes after the frontend was split into modules | harness |
+| `Comp > Copy to Clipboard` sends the right builtin down the pipe | harness — the clipboard half is native and needs AE |
 | Releasing on `Effects` opens the search window, and nothing crosses the pipe | harness — a real window, raised, and the overlay still answers `quit` |
 | The search window filters, ranks and keyboard-navigates a catalogue | harness fixture + browser preview |
 
@@ -102,6 +103,14 @@ were "code, not facts" for too long.
   long expired by the time anyone clicks the menu. A test that passes before
   and after the fix is worse than no test, so it was not kept. Confirming this
   one needs a real AE.
+- **`copy-frame` is built and UNWATCHED IN AE.** `Comp > Copy to Clipboard`
+  writes the frame to `%TEMP%\pieFX_clipboard_frame.png` through
+  `saveFrameToPng` at 1:1, decodes it with WIC and puts three formats on the
+  clipboard ("PNG", CF_DIBV5, CF_DIB - see SETTINGS.md for why three). What the
+  harness proves is only that the gesture sends the right message; the frame,
+  the decode, the clipboard and the `Copied Frame 1234 from <Comp>` toast are
+  all native. **pieFX Self-Test (Executors)** now fires it as probe 6, so the
+  check is "run the self-test, then paste somewhere".
 - **The Effects search is built and UNWATCHED IN AE.** What the harness proves:
   a release on `Effects` opens the search window (raised, and the overlay still
   answers `quit` afterwards) and sends nothing down the pipe, and the window
