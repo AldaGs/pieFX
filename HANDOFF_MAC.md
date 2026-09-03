@@ -54,14 +54,14 @@ Watched working in AE, or measured by a harness against the real binaries.
 | **copy-frame pastes the WHOLE frame** | in AE, on the 6656x2270 comp that originally failed |
 | **settings and search open on the cursor’s display** | `CGWindowListCopyWindowInfo` from outside the process, then in AE on the second display |
 | **the effect catalogue, with its accents** | in AE: 456 of 456, valid UTF-8, 189 non-ASCII entries correct |
-| **the preset walk** | `pieFX_presets_test` against the real AE install: 621 found, every path opens |
+| **the preset walk** | `pieFX_presets_test` against the real AE install: 621 found, every path opens — and the list checked against AE's own by hand |
 
 ## What is NOT proven
 
-- **Presets, inside After Effects.** `pieFX_presets_test` walks the real
-  install and finds 621 with every path openable, but nothing has APPLIED one
-  from the wheel — the `.ffx` path crossing to ExtendScript and coming back as
-  an applied preset is untested on macOS.
+- **APPLYING a preset from the wheel.** The catalogue is confirmed in AE — the
+  list matches — but the `.ffx` path crossing to ExtendScript and coming back
+  as an applied preset has not been watched on macOS. Reading the list and
+  firing one are different code paths and only the first is settled.
 - **The settings round trip.** That `ReadSettings` honours a `holdMs` written
   by the settings window has never been watched. It is the last thing in step 5
   with no observation behind it at all.
