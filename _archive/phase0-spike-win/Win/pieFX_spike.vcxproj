@@ -67,7 +67,7 @@
   <PropertyGroup>
     <_ProjectFileVersion>10.0.40219.1</_ProjectFileVersion>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(AE_PLUGIN_BUILD_DIR)\AEGP\</OutDir>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">..\..\..\..\..\_build_out\AEGP</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">..\..\..\..\..\..\..\_build_out\AEGP</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\</IntDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">$(Platform)\$(Configuration)\</IntDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\</IntDir>
@@ -88,6 +88,10 @@
     <CodeAnalysisRuleAssemblies Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'" />
     <CodeAnalysisRuleAssemblies Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
     <CodeAnalysisRuleAssemblies Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'" />
+    <!-- pieFX_spike, NOT pieFX. This project and the product project both
+         emitted pieFX.aex into the same folder, and the last one built won.
+         The names cannot collide any more. -->
+    <TargetName>pieFX_spike</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.aex</TargetExt>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">.aex</TargetExt>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.aex</TargetExt>
@@ -111,7 +115,7 @@
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>..\..\..\Headers;..\..\..\Headers\SP;..\..\..\Headers\Win;..\..\..\Resources;..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\..\Headers;..\..\..\..\..\Headers\SP;..\..\..\..\..\Headers\Win;..\..\..\..\..\Resources;..\..\..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MSWindows;WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <StructMemberAlignment>Default</StructMemberAlignment>
@@ -163,7 +167,7 @@
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>..\..\..\Headers;..\..\..\Headers\SP;..\..\..\Headers\Win;..\..\..\Resources;..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\..\Headers;..\..\..\..\..\Headers\SP;..\..\..\..\..\Headers\Win;..\..\..\..\..\Resources;..\..\..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MSWindows;WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <StructMemberAlignment>Default</StructMemberAlignment>
@@ -215,7 +219,7 @@
     </Midl>
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
-      <AdditionalIncludeDirectories>..\..\..\Headers;..\..\..\Headers\SP;..\..\..\Headers\Win;..\..\..\Resources;..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\..\Headers;..\..\..\..\..\Headers\SP;..\..\..\..\..\Headers\Win;..\..\..\..\..\Resources;..\..\..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MSWindows;WIN32;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <StructMemberAlignment>Default</StructMemberAlignment>
@@ -268,7 +272,7 @@
     </Midl>
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
-      <AdditionalIncludeDirectories>..\..\..\Headers;..\..\..\Headers\SP;..\..\..\Headers\Win;..\..\..\Resources;..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\..\Headers;..\..\..\..\..\Headers\SP;..\..\..\..\..\Headers\Win;..\..\..\..\..\Resources;..\..\..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MSWindows;WIN32;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <StructMemberAlignment>Default</StructMemberAlignment>
@@ -310,42 +314,42 @@
     </Bscmake>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="..\pieFX.h" />
-    <ClInclude Include="..\..\..\Headers\A.h" />
-    <ClInclude Include="..\..\..\Headers\AE_Effect.h" />
-    <ClInclude Include="..\..\..\Headers\AE_EffectCB.h" />
-    <ClInclude Include="..\..\..\Headers\AE_EffectCBSuites.h" />
-    <ClInclude Include="..\..\..\Headers\AE_EffectSuites.h" />
-    <ClInclude Include="..\..\..\Headers\AE_EffectUI.h" />
-    <ClInclude Include="..\..\..\Headers\AE_GeneralPlug.h" />
-    <ClInclude Include="..\..\..\Headers\AE_GeneralPlugOld.h" />
-    <ClInclude Include="..\..\..\Headers\AE_IO.h" />
-    <ClInclude Include="..\..\..\Util\AEGP_SuiteHandler.h" />
-    <ClInclude Include="..\..\..\Util\entry.h" />
-    <ClInclude Include="..\..\..\Headers\FIEL_Public.h" />
-    <ClInclude Include="..\..\..\Headers\PF_Masks.h" />
-    <ClInclude Include="..\..\..\Headers\PR_Public.h" />
+    <ClInclude Include="..\pieFX_spike.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\A.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\AE_Effect.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\AE_EffectCB.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\AE_EffectCBSuites.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\AE_EffectSuites.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\AE_EffectUI.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\AE_GeneralPlug.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\AE_GeneralPlugOld.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\AE_IO.h" />
+    <ClInclude Include="..\..\..\..\..\Util\AEGP_SuiteHandler.h" />
+    <ClInclude Include="..\..\..\..\..\Util\entry.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\FIEL_Public.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\PF_Masks.h" />
+    <ClInclude Include="..\..\..\..\..\Headers\PR_Public.h" />
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="..\pieFX_PiPL.r">
+    <CustomBuild Include="..\pieFX_spike_PiPL.r">
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling the PiPL</Message>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compiling the PiPL</Message>
       <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling the PiPL</Message>
       <Message Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compiling the PiPL</Message>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">cl /I "$(ProjectDir)..\..\..\Headers" /EP ".."\\"%(Filename).r" &gt; "$(IntDir)"\\"%(Filename).rr"
-"$(ProjectDir)..\..\..\Resources\PiPLTool" "$(IntDir)%(Filename).rr" "$(IntDir)%(Filename).rrc"
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">cl /I "$(ProjectDir)..\..\..\..\..\Headers" /EP ".."\\"%(Filename).r" &gt; "$(IntDir)"\\"%(Filename).rr"
+"$(ProjectDir)..\..\..\..\..\Resources\PiPLTool" "$(IntDir)%(Filename).rr" "$(IntDir)%(Filename).rrc"
 cl /D "MSWindows" /EP $(IntDir)%(Filename).rrc &gt;               "$(ProjectDir)"\\"%(Filename)"_temp.rc
 </Command>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">cl /I "$(ProjectDir)..\..\..\Headers" /EP ".."\\"%(Filename).r" &gt; "$(IntDir)"\\"%(Filename).rr"
-"$(ProjectDir)..\..\..\Resources\PiPLTool" "$(IntDir)%(Filename).rr" "$(IntDir)%(Filename).rrc"
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">cl /I "$(ProjectDir)..\..\..\..\..\Headers" /EP ".."\\"%(Filename).r" &gt; "$(IntDir)"\\"%(Filename).rr"
+"$(ProjectDir)..\..\..\..\..\Resources\PiPLTool" "$(IntDir)%(Filename).rr" "$(IntDir)%(Filename).rrc"
 cl /D "MSWindows" /EP $(IntDir)%(Filename).rrc &gt;               "$(ProjectDir)"\\"%(Filename)"_temp.rc
 </Command>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">cl /I "$(ProjectDir)..\..\..\Headers" /EP ".."\\"%(Filename).r" &gt; "$(IntDir)"\\"%(Filename).rr"
-"$(ProjectDir)..\..\..\Resources\PiPLTool" "$(IntDir)%(Filename).rr" "$(IntDir)%(Filename).rrc"
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">cl /I "$(ProjectDir)..\..\..\..\..\Headers" /EP ".."\\"%(Filename).r" &gt; "$(IntDir)"\\"%(Filename).rr"
+"$(ProjectDir)..\..\..\..\..\Resources\PiPLTool" "$(IntDir)%(Filename).rr" "$(IntDir)%(Filename).rrc"
 cl /D "MSWindows" /EP $(IntDir)%(Filename).rrc &gt;               "$(ProjectDir)"\\"%(Filename)"_temp.rc
 </Command>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">cl /I "$(ProjectDir)..\..\..\Headers" /EP ".."\\"%(Filename).r" &gt; "$(IntDir)"\\"%(Filename).rr"
-"$(ProjectDir)..\..\..\Resources\PiPLTool" "$(IntDir)%(Filename).rr" "$(IntDir)%(Filename).rrc"
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">cl /I "$(ProjectDir)..\..\..\..\..\Headers" /EP ".."\\"%(Filename).r" &gt; "$(IntDir)"\\"%(Filename).rr"
+"$(ProjectDir)..\..\..\..\..\Resources\PiPLTool" "$(IntDir)%(Filename).rr" "$(IntDir)%(Filename).rrc"
 cl /D "MSWindows" /EP $(IntDir)%(Filename).rrc &gt;               "$(ProjectDir)"\\"%(Filename)"_temp.rc
 </Command>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(ProjectDir)%(Filename)_temp.rc;%(Outputs)</Outputs>
@@ -355,12 +359,12 @@ cl /D "MSWindows" /EP $(IntDir)%(Filename).rrc &gt;               "$(ProjectDir)
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="pieFX_PiPL.rc" />
+    <ResourceCompile Include="pieFX_spike_PiPL.rc" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\..\Util\AEGP_SuiteHandler.cpp" />
-    <ClCompile Include="..\..\..\Util\MissingSuiteError.cpp" />
-    <ClCompile Include="..\pieFX.cpp" />
+    <ClCompile Include="..\..\..\..\..\Util\AEGP_SuiteHandler.cpp" />
+    <ClCompile Include="..\..\..\..\..\Util\MissingSuiteError.cpp" />
+    <ClCompile Include="..\pieFX_spike.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

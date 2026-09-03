@@ -30,18 +30,26 @@ The three findings that shaped everything:
 
 ## Layout
 
-    pieFX.cpp        Windows spikes: S1, S2 (hook + swallow), S3, S5
-    pieFX.h
-    pieFX_PiPL.r
-    Win/                  Visual Studio project
-    S3B_Overlay.cpp       Throwaway .exe: the S3 overlay from a separate process
+    poc/native/           THE PRODUCT plug-in (pieFX.cpp/.h, Win/, mac/)
+    poc/overlay/          the Tauri overlay: the wheel, settings, effect search
+    poc/scripts/          ExtendScript that ships with pieFX
 
-    pieFXMac.mm      macOS spikes: S1, S3, S4, S5  (NEVER COMPILED)
+    _archive/phase0-spike-win/   The Windows Phase 0 spike, retired but kept.
+                          S1, S2 (hook + swallow), S3, S5 in one self-contained
+                          file, plus S3B_Overlay.cpp (the S3 overlay from a
+                          SEPARATE process) and Win/pieFX_spike.sln. It is the
+                          floor: the smallest thing that loads as an AEGP and
+                          hooks the mouse. Read its README before using it —
+                          it used to build pieFX.aex over the product's.
+
+    pieFXMac.mm      macOS spikes: S1, S3, S4, S5
     pieFXMac_PiPL.r
-    Mac/                  Info.plist  (no Xcode project yet — see MAC_SESSION.md)
+    Mac/                  the Xcode project for the spikes, and the product's
+                          build/package/sign scripts
 
     SPIKES.md             The spike log. The actual deliverable of Phase 0.
     MAC_SESSION.md        Ordered checklist for the first macOS session.
+    MAC_RESULTS.md        What that session found.
 
 ## Building
 
@@ -50,8 +58,15 @@ Needs the After Effects SDK. Drop this directory into
 include paths and expect that depth.
 
 **Windows.** Set `AE_PLUGIN_BUILD_DIR` to a writable directory, then build
-`Win/pieFX.sln` (`Debug|x64`). Output lands in `$(AE_PLUGIN_BUILD_DIR)\AEGP\`.
-Close After Effects first — it locks the loaded `.aex`.
+`poc/native/Win/pieFX.sln` (`Debug|x64`). Output lands in
+`$(AE_PLUGIN_BUILD_DIR)\AEGP\pieFX.aex`. Close After Effects first — it locks
+the loaded `.aex`.
+
+The archived spike under `_archive/` builds `pieFX_spike.aex` from its own
+solution. The two used to share a filename, which is a mistake worth not
+repeating: check AE's Window menu after installing. The product is
+`pieFX (Show/Hide)` and `pieFX Settings`; the spike is `pieFX S1 (Anchor to
+Center)` and friends.
 
 Install to After Effects' **own** `Support Files/Plug-ins/` directory, *not* the
 shared MediaCore path used for effect plugins: MediaCore is shared with Premiere,
@@ -66,8 +81,9 @@ signature drifted — it takes five parameters, and the `Commando` SDK sample
 still shows a stale seven-parameter form that compiles and links silently.
 Model AEGP work on `Persisto` instead.
 
-**macOS.** Not yet buildable — the Xcode project has to be created first.
-`MAC_SESSION.md` has the recipe and the test order.
+**macOS.** `./Mac/build_product.sh [--install]` builds the product; the Phase 0
+spikes have their own Xcode project via `./Mac/build_and_install.sh`. See
+`HANDOFF_MAC.md`.
 
 ## License
 

@@ -17,7 +17,7 @@
 	needs a real id.
 */
 
-#include "pieFX.h"
+#include "pieFX_spike.h"
 
 static AEGP_Command		S_anchor_cmd	= 0L;
 static AEGP_Command		S_probe_cmd		= 0L;

@@ -161,21 +161,21 @@ iterator that `WalkPresetFolder` and `WritePresets` were rebuilt on — has now
 been compiled by MSVC as well as clang. It compiled on the first attempt; the
 sharing was sound.
 
-**The trap, and it bit once.** There are TWO Windows projects in this tree and
-they write to the SAME output, `C:\AE_SDK\_build_out\AEGP\pieFX.aex`:
+**The trap, and it bit once — now closed.** There used to be TWO Windows
+projects writing to the SAME output, `C:\AE_SDK\_build_out\AEGP\pieFX.aex`: the
+product's, and the Phase 0 spike's at the repo root. Whichever built last won,
+and the first attempt at this build was the spike — which compiles just as
+cleanly and installs just as happily, and is only caught by opening AE's Window
+menu and finding `pieFX S1 (Anchor to Center)`.
 
-- `Win/pieFX.sln`, which compiles the ROOT `pieFX.cpp` — the Phase 0 SPIKE, 1592
-  lines, whose Window menu is `pieFX S1 (Anchor to Center)`, `S2A`, `S2B` …
-- `poc/native/Win/pieFX.sln`, which compiles `poc/native/pieFX.cpp` — the
-  PRODUCT, 3622 lines, whose Window menu is `pieFX (Show/Hide)` and
-  `pieFX Settings`.
+The spike now lives in `_archive/phase0-spike-win/`, is named `pieFX_spike`
+throughout, and builds `pieFX_spike.aex`. Nothing can overwrite the product any
+more. It was kept rather than deleted — it is the floor, and
+`_archive/phase0-spike-win/README.md` says what it is for.
 
-Whichever was built LAST is the .aex on disk, and the first attempt at this
-build was the spike one — which compiles just as cleanly and installs just as
-happily, and is only caught by opening AE's Window menu. Build the product one.
-The .aex was verified afterwards by reading its strings: `pieFX (Show/Hide)`
-present, no `Anchor to Center`, no `pieFX S1`. (`Self-Test` is absent on purpose
-— `PIEFX_SHOW_SELFTESTS` is 0.)
+The product .aex was verified by reading its strings rather than by trusting the
+build log: `pieFX (Show/Hide)` present, no `Anchor to Center`, no `pieFX S1`.
+(`Self-Test` is absent on purpose — `PIEFX_SHOW_SELFTESTS` is 0.)
 
 What that does NOT cover: the .aex was built, not installed and not loaded into
 a running AE, and none of those bodies has been EXERCISED on Windows since the

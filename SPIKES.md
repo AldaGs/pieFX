@@ -2,6 +2,10 @@
 
 One line per spike, written down *before* moving on. See the roadmap for the gate.
 
+The code these spikes were run against is archived, not gone: the Windows one is
+`_archive/phase0-spike-win/` (it builds `pieFX_spike.aex`, and its README says why
+the name changed), the macOS one is `pieFXMac.mm` with `Mac/pieFXMac.xcodeproj`.
+
 | Spike | Question | Outcome |
 |---|---|---|
 | S1 | AEGP loads, menu command registers, ExtendScript dispatch works | **PASS** (2026-08-27, AE 2026) |

@@ -260,6 +260,27 @@ Worth reading before changing the transport or the launch path.
 Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
 `%TEMP%\pieFX_poc.txt`. Together they show which side stopped.
 
+### The spike that shipped itself
+
+The Phase 0 Windows spike and the product were two Visual Studio projects that
+both emitted **`pieFX.aex` into the same folder**, `$(AE_PLUGIN_BUILD_DIR)\AEGP\`.
+Whichever built last won. The spike compiles as cleanly as the product and
+installs as happily, so the build says nothing; the only symptom is AE's Window
+menu reading `pieFX S1 (Anchor to Center)`, `S2A (Probe Window Under Cursor)`
+and the rest of the spike list. It cost a session — a "clean Windows build" that
+was a clean build of the wrong plug-in.
+
+Fixed structurally rather than by remembering: the spike moved to
+`_archive/phase0-spike-win/`, everything in it is now named `pieFX_spike`, and
+its target is `pieFX_spike.aex`. The two artifacts cannot collide. It was NOT
+deleted — it is the floor, the smallest thing that loads as an AEGP and hooks
+the mouse, and it is what to reach for when the question is "is this us, or is
+this AE?". Its own README says so.
+
+The check that catches this class of mistake, if it ever recurs: read the
+strings out of the built .aex. The product contains `pieFX (Show/Hide)` and does
+not contain `Anchor to Center`.
+
 ## Design decisions that are settled
 
 - **Behavior B (drill-down), not paging.** A pager breaks positional constancy,
@@ -305,9 +326,13 @@ Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
     MAC_RESULTS.md       What the macOS bench found
     MAC_PORT.md          What porting the PRODUCT would take, and in what order
 
-    pieFX.cpp/.h         FROZEN Phase 0 spikes (S1,S2,S3,S5) — reference only
-    Win/                 spike VS project
-    pieFXMac.mm, Mac/    macOS spikes
+    _archive/            retired, kept on purpose. See its own README.
+      phase0-spike-win/  the FROZEN Windows Phase 0 spike (S1,S2,S3,S5): its
+                         sources, S3B_Overlay.cpp, and Win/pieFX_spike.sln.
+                         Builds pieFX_SPIKE.aex — it used to build pieFX.aex,
+                         over the top of the product's.
+    pieFXMac.mm, Mac/    macOS spikes (still at the root: they build
+                         pieFXMac.plugin, which collides with nothing)
 
     poc/README.md        Build + run + verification steps
     poc/SETTINGS.md      The action model and settings format
@@ -327,15 +352,9 @@ Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
 ## Building
 
 **Native:** set `AE_PLUGIN_BUILD_DIR`, build `poc/native/Win/pieFX.sln`
-`Debug|x64`. **That path, and not the one at the repo root.** `Win/pieFX.sln`
-still exists and still builds the Phase 0 SPIKE (the root `pieFX.cpp`), and both
-projects link to the SAME `pieFX.aex` — so the wrong one compiles cleanly,
-installs happily, and is only caught by opening AE's Window menu and finding
-`pieFX S1 (Anchor to Center)` where `pieFX (Show/Hide)` should be. It has
-already cost one session. Verify the built .aex if in any doubt: it must contain
-the string `pieFX (Show/Hide)` and must not contain `Anchor to Center`.
-
-Then verify with `dumpbin /EXPORTS` that `EntryPointFunc` is **un-mangled**
+`Debug|x64`. There is exactly one project that builds `pieFX.aex` now, and this
+is it — see "The spike that shipped itself" below for why that sentence had to
+be written down. Then verify with `dumpbin /EXPORTS` that `EntryPointFunc` is **un-mangled**
 (the entry point takes FIVE parameters; `Commando` shows a stale seven-param form
 that links silently and fails to load — model on `Persisto`). Install to AE's own
 `Support Files/Plug-ins/`, not MediaCore.
