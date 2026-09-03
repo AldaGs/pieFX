@@ -1,0 +1,16 @@
+{
+  "_comment": "A hand-made stand-in for the catalogue the plug-in writes at %APPDATA%\\pieFX\\effects.json. The harness passes it with --effects so the search window can be driven with a KNOWN list instead of whatever this machine has installed. It is deliberately small AND deliberately nasty: it carries one of each of the catalogue's three sharp edges, so a filter that ignores them fails here rather than in front of a user. Levels appears twice, once live and once _Obsolete, which is a real collision in AE's own list; ADBE Pseudo/ and the empty category are the internal entries; and ADBE Bilateral Blur Vertical Radius is 31 characters, the truncation cap.",
+  "effects": [
+    { "name": "Gaussian Blur", "match": "ADBE Gaussian Blur 2", "category": "Blur & Sharpen" },
+    { "name": "Fast Box Blur", "match": "ADBE Box Blur2", "category": "Blur & Sharpen" },
+    { "name": "Bilateral Blur", "match": "ADBE Bilateral Blur Vertical Rad", "category": "Blur & Sharpen" },
+    { "name": "Levels", "match": "ADBE Easy Levels2", "category": "Color Correction" },
+    { "name": "Levels", "match": "ADBE Easy Levels", "category": "_Obsolete" },
+    { "name": "Glow", "match": "ADBE Glo2", "category": "Stylize" },
+    { "name": "Fill", "match": "ADBE Fill", "category": "Generate" },
+    { "name": "Master Rig", "match": "Pseudo/ADBE Master Rig", "category": "" },
+    { "name": "Camera Mapper", "match": "ADBE CM Mapper", "category": "" }
+  ],
+  "walked": 9,
+  "claimed": 9
+}

@@ -291,8 +291,74 @@ fn show_settings(app: &tauri::AppHandle) {
 // Asked for by the plug-in's `Window > pieFX Settings` menu item, which arrives
 // down the events pipe like any other message.
 #[tauri::command]
-fn open_settings(app: tauri::AppHandle) {
-    show_settings(&app);
+async fn open_settings(app: tauri::AppHandle) {
+    let h = app.clone();
+    let _ = app.run_on_main_thread(move || show_settings(&h));
+}
+
+// The effect search. A THIRD window, built the same way and for the same
+// reason: it needs a keyboard, and nothing else in pieFX can take a keystroke.
+// The overlay is click-through and unfocused by construction, the plug-in
+// hooks WH_MOUSE only, and the gesture is a press-and-hold — so the search
+// field cannot live on the wheel, and this is the one input path the project
+// has already watched working in AE. `raise()` is what makes it come to the
+// front from a process AE owns the foreground of; without it the window opens
+// behind After Effects, which is indistinguishable from not opening at all.
+fn show_search(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("search") {
+        // Dismissing the search HIDES it rather than closing it, so a second
+        // summon is instant and the field is already alive. A hidden window
+        // cannot be raised into view, so show it before asking for the front.
+        let _ = w.show();
+        raise(&w);
+        let _ = app.emit("piefx-search-shown", "");
+        dlog("  search window refocused");
+        return;
+    }
+    match WebviewWindowBuilder::new(app, "search", WebviewUrl::App("search.html".into()))
+        .title("pieFX — Apply Effect")
+        .inner_size(560.0, 560.0)
+        .min_inner_size(420.0, 360.0)
+        .resizable(true)
+        .decorations(true)
+        .transparent(false)
+        .always_on_top(false)
+        .skip_taskbar(false)
+        .focused(true)
+        .center()
+        .build()
+    {
+        Ok(w) => {
+            raise(&w);
+            dlog("  search window opened and raised");
+        }
+        Err(e) => dlog(&format!("  search window FAILED: {}", e)),
+    }
+}
+
+#[tauri::command]
+// ASYNC, and posting to the main thread rather than building the window here.
+// Both halves are load-bearing, and the harness found out why by wedging.
+//
+// A SYNC #[tauri::command] runs ON the main thread, so building the window
+// inside it means asking the event loop to create a webview from inside the
+// event loop's own IPC handler - and `run_on_main_thread` from the main thread
+// waits for a turn that will never come. Either way the process goes deaf: no
+// window, no error, no reply to the next `quit`, which is precisely the shape
+// of the un-dead-overlay bug this project has already paid for once.
+//
+// An `async` command runs OFF the main thread, so run_on_main_thread dispatches
+// and returns, and the window is built by the loop on its own turn. The pipe
+// path had this right all along (it hands show_settings to run_on_main_thread
+// from the pipe thread); the JS command path did not, because until the search
+// existed nothing had ever invoked one.
+async fn open_search(app: tauri::AppHandle) {
+    dlog("  open_search requested");
+    let h = app.clone();
+    match app.run_on_main_thread(move || show_search(&h)) {
+        Ok(()) => dlog("  open_search queued on the main thread"),
+        Err(e) => dlog(&format!("  open_search could not be queued: {}", e)),
+    }
 }
 
 // `--settings <path>` overrides where settings come from, and `--settings none`
@@ -350,6 +416,78 @@ fn save_settings(app: tauri::AppHandle, json: String) -> Result<(), String> {
     std::fs::write(&p, json).map_err(|e| e.to_string())?;
     dlog(&format!("  settings saved -> {}", p.display()));
     let _ = app.emit("piefx-settings", "saved");
+    Ok(())
+}
+
+// The installed-effects catalogue, written by the plug-in once per session
+// (see WriteEffectCatalogue in the native side). Read, never written, here.
+//
+// `--effects <path>` is the harness's way in, for the same reason `--settings`
+// exists: the search UI can then be driven with a KNOWN catalogue instead of
+// whatever this machine happens to have installed. `--effects none` means "no
+// catalogue", which is also what a machine that has never armed pieFX looks
+// like, and the window has to say so rather than showing an empty list that
+// reads as "no effects installed".
+fn effects_arg() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|a| a == "--effects")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+fn effects_path() -> Option<PathBuf> {
+    match effects_arg() {
+        Some(v) if v == "none" => None,
+        Some(v) => Some(PathBuf::from(v)),
+        None => {
+            let base = std::env::var_os("APPDATA")?;
+            Some(PathBuf::from(base).join("pieFX").join("effects.json"))
+        }
+    }
+}
+
+#[tauri::command]
+fn load_effects() -> String {
+    let s = effects_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    dlog(&format!("  load_effects: {} bytes", s.len()));
+    s
+}
+
+// Recents live in their own file rather than in settings.json, because the
+// settings window writes that file WHOLE: a search window saving a recent
+// while the settings window is open would be a lost-update race between two
+// windows of the same process. A separate file has one writer.
+fn recents_path() -> Option<PathBuf> {
+    match settings_arg() {
+        Some(v) if v == "none" => None,
+        Some(v) => Some(PathBuf::from(v).with_file_name("recents.json")),
+        None => {
+            let base = std::env::var_os("APPDATA")?;
+            Some(PathBuf::from(base).join("pieFX").join("recents.json"))
+        }
+    }
+}
+
+#[tauri::command]
+fn load_recents() -> String {
+    let s = recents_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    dlog(&format!("  load_recents: {} bytes", s.len()));
+    s
+}
+
+#[tauri::command]
+fn save_recents(json: String) -> Result<(), String> {
+    let p = recents_path().ok_or("recents are disabled (--settings none)")?;
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&p, json).map_err(|e| e.to_string())?;
+    dlog(&format!("  recents saved -> {}", p.display()));
     Ok(())
 }
 
@@ -430,6 +568,10 @@ pub fn run() {
             load_settings,
             save_settings,
             open_settings,
+            open_search,
+            load_effects,
+            load_recents,
+            save_recents,
             quit_overlay
         ])
         .setup(|app| {

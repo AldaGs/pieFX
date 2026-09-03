@@ -265,26 +265,59 @@ function drawAnchorWidget() {
 }
 
 // --- search widget --------------------------------------------------------
-// Effects cannot be a ring: S5 found 519 installed effects. Its level 2 is a
-// filter field, which is the other reason "widget" exists as a kind. Static
-// mock for now — the real one is fed by the plug-in's catalogue.
-const SEARCH_MOCK = ["Gaussian Blur", "Glow", "Curves", "Fill", "Displacement Map"];
+// Effects cannot be a ring: S5 found 519 installed effects. Nor can its level 2
+// be a filter field, because NOTHING IN pieFX CAN TAKE A KEYSTROKE — the
+// overlay is click-through and unfocused, the plug-in hooks the mouse only, and
+// the gesture is a press-and-hold. So the panel is not an input: it is the
+// recents list, which is the part of a search that needs no typing, and a
+// release opens the real focused window (search.js) for everything else.
 const W_W = 360;
 const W_H = 232;
 
+// Filled from `recents.json`, which the search window writes. Refreshed on each
+// summon rather than watched: a summon is user-paced, one read is free, and a
+// list that is one flick stale is the one thing this panel must not be.
+let RECENTS = [];
+
+function refreshRecents() {
+  if (!(window.__TAURI__ && window.__TAURI__.core)) return;
+  window.__TAURI__.core.invoke("load_recents").then(
+    (txt) => {
+      try {
+        const a = JSON.parse((txt || "[]").replace(/^﻿/, ""));
+        RECENTS = Array.isArray(a) ? a.slice(0, 5) : [];
+      } catch (e) {
+        RECENTS = [];
+      }
+    },
+    () => {}
+  );
+}
+
+// The catalogue carries the display names; the panel only has match names. AE's
+// match names are readable enough to be worth showing as-is rather than holding
+// a second copy of a 519-entry list in the wheel just to prettify five lines:
+// "ADBE Gaussian Blur 2" reads as Gaussian Blur once the vendor tag is off.
+function shortMatch(m) {
+  return String(m)
+    .replace(/^ADBE\s+/, "")
+    .replace(/\s+\d+$/, "");
+}
 
 function drawSearchWidget() {
   const x = S.cx - W_W / 2;
   const y = S.cy - W_H / 2;
   glassPanel(x, y, W_W, W_H, 16);
 
-  // filter field
+  // The field is a picture of where you are going, not a field: it says what
+  // the release will do. Drawing a caret here would promise typing that cannot
+  // happen.
   ctx.save();
   roundRect(x + 14, y + 14, W_W - 28, 34, 9);
   ctx.fillStyle = "rgba(12,13,16,0.45)";
   ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.16)";
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = hotPalette(ACCENT).accent;
+  ctx.lineWidth = 1.2;
   ctx.stroke();
   ctx.restore();
 
@@ -292,26 +325,23 @@ function drawSearchWidget() {
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   ctx.fillStyle = C.ink;
-  ctx.fillText("blur", x + 26, y + 31);
-  ctx.fillStyle = hotPalette(ACCENT).accent;
-  ctx.fillRect(x + 26 + ctx.measureText("blur").width + 2, y + 22, 1.5, 18);
+  ctx.fillText("Release to search…", x + 26, y + 31);
 
-  SEARCH_MOCK.forEach((name, i) => {
+  const rows = RECENTS.length ? RECENTS.map(shortMatch) : ["No recent effects yet"];
+
+  // Nothing here is highlighted, deliberately. A hot row would say "release
+  // fires this", and release opens the window; the rows are what you will find
+  // waiting in it, not slots. Making one of them fireable is a real idea and a
+  // separate one — it needs hit-testing inside the panel.
+  ctx.save();
+  ctx.globalAlpha = RECENTS.length ? 0.82 : 0.45;
+  rows.forEach((name, i) => {
     const ry = y + 58 + i * 33;
-    if (i === 0) {
-      ctx.save();
-      roundRect(x + 14, ry, W_W - 28, 29, 8);
-      ctx.fillStyle = "rgba(199,79,214,0.16)";
-      ctx.fill();
-      ctx.strokeStyle = hotPalette(ACCENT).accent;
-      ctx.lineWidth = 1.4;
-      ctx.stroke();
-      ctx.restore();
-    }
     ctx.font = "500 13.5px system-ui, 'Segoe UI', sans-serif";
-    ctx.fillStyle = i === 0 ? hotPalette(ACCENT).inkHot : C.ink;
+    ctx.fillStyle = C.ink;
     ctx.fillText(name, x + 26, ry + 15);
   });
+  ctx.restore();
 
   ctx.font = "600 13px system-ui, 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
@@ -491,6 +521,7 @@ requestAnimationFrame(draw);
 
 // --- gesture state machine ------------------------------------------------
 function summon(x, y, ctxMsg) {
+  refreshRecents();
   if (ctxMsg) {
     CTX.hasSelection = ctxMsg.hasSelection !== false;
     // Older plug-in builds send no hasComp; a selection can only exist inside
@@ -580,7 +611,18 @@ function release() {
 
   // Every branch below is guarded by canFire(): the grey is a promise, and a
   // slot that looks dead must not fire if the cursor happens to be over it.
-  if (S.node.widget === "anchor") {
+  if (S.node.widget === "search") {
+    // The search widget has nothing to hit-test: it is a panel, and what a
+    // release on it means is "open the search window". The dead zone still
+    // cancels, so an aborted gesture does not put a window in front of AE —
+    // which is the whole reason settings were kept off the wheel too.
+    if (S.hot >= 0 && canFire(S.parent)) {
+      action = S.parent.action;
+      label = S.parent.label;
+    } else if (S.hot >= 0 && S.parent.action) {
+      unavailable = S.parent;
+    }
+  } else if (S.node.widget === "anchor") {
     if (S.armed && S.hot >= 0 && canFire(S.parent)) {
       action = S.parent.action;
       cell = S.hot;

@@ -14,8 +14,11 @@ with one level of drill-down. Releasing on a slot fires a real action — an AE 
 command, a user's ExtendScript, an effect by match name, or the built-in anchor
 grid. **All five executor kinds are proven live from the gesture.** A settings
 window and auto-arm-on-launch are now written but **have not been watched inside
-AE** — that is the first thing the next session should do. The remaining known
-gap is the Effects search, which is still a mock. The tables below are the
+AE** — that is the first thing the next session should do. The Effects search is no longer a mock: releasing on `Effects`
+opens a focused window with a real filter over the plug-in's own catalogue,
+and Enter applies the effect. It is proven against the offline harness and
+**has not been watched inside AE** - neither has the catalogue walk that feeds
+it, which is the one piece that can only be tested there. The tables below are the
 honest line between what has been watched working and what has merely been
 written.
 
@@ -53,6 +56,8 @@ the offline harness (`poc/pipe_test.ps1`).
 | The settings window opens IN FRONT of AE | **live** — after the `raise()` fix |
 | A settings file changes what the wheel fires | harness — a rebound `S` fired the rebound command |
 | The whole harness still passes after the frontend was split into modules | harness |
+| Releasing on `Effects` opens the search window, and nothing crosses the pipe | harness — a real window, raised, and the overlay still answers `quit` |
+| The search window filters, ranks and keyboard-navigates a catalogue | harness fixture + browser preview |
 
 Two menu commands to run after any install, both under `Window`:
 **pieFX Self-Test (Executors)** fires one of every action kind, and
@@ -97,10 +102,15 @@ were "code, not facts" for too long.
   long expired by the time anyone clicks the menu. A test that passes before
   and after the fix is worse than no test, so it was not kept. Confirming this
   one needs a real AE.
-- **The Effects search widget is a mock.** Measured, not assumed: flicking to
-  `Effects` at any distance, in any arming mode, fires **nothing** — the panel
-  draws a fake query ("blur") and five hard-coded results and returns no action
-  at all. It is the next piece of work and it has its own briefing below.
+- **The Effects search is built and UNWATCHED IN AE.** What the harness proves:
+  a release on `Effects` opens the search window (raised, and the overlay still
+  answers `quit` afterwards) and sends nothing down the pipe, and the window
+  filters, ranks and keyboard-navigates a fixture catalogue. What only AE can
+  prove: that the plug-in's walk actually writes `effects.json` there, that the
+  window comes to the front of AE rather than behind it, and that Enter applies
+  the effect to the selected layers. The pieces are separately proven — the walk
+  is S5's, ported; the raise is the settings window's; the apply is the `effect`
+  kind that put Gaussian Blur on a layer — but the assembly is not.
 - Per-slot context gating is **done and watched live**: `requires` is in the
   schema, the plug-in sends `hasComp` alongside `hasSelection`, and the greying
   reads correctly with nothing selected.
@@ -238,8 +248,10 @@ Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
     poc/scripts/         ExtendScript that SHIPS with pieFX; install beside the
                          .aex. ag_masterNull.jsx is a vendored fork of the
                          author's, with the __pieFXHeadless guard added.
-    poc/overlay/         the Tauri app. src/hexwheel.js is the live wheel and
-                         src/settings.js the settings window; the two share
+    poc/overlay/         the Tauri app. src/hexwheel.js is the live wheel,
+                         src/settings.js the settings window and src/search.js
+                         the effect search (with its fixture,
+                         src/effects-sample.json); they share
                          menu.js (the slot tree), hexdraw.js (the glass
                          renderer) and actions.js (firing), so what you
                          configure is drawn and fired by the same code that
@@ -258,108 +270,89 @@ that links silently and fails to load — model on `Persisto`). Install to AE's 
 automatically; otherwise `npm run tauri dev` works and the plug-in's launch
 no-ops.
 
-## The Effects search — a briefing for the next session
+## The Effects search — what was built, and what is not yet true
 
-This is the last known feature gap, and it is not a drawing job. Read this
-before opening `drawSearchWidget()`, because the hard part is not the panel.
+The input model was chosen with the user before anything was drawn: **release to
+open a focused window**, of the three candidates the previous handoff laid out.
+The reason it won is the reason it was recommended — it is the only one whose
+machinery this project had already watched working inside AE — and the reason
+the other two lost is worth keeping: nothing in pieFX can receive a keystroke.
+The overlay window is created click-through and `focus: false`, the plug-in
+installs `WH_MOUSE` and no keyboard hook, and the gesture is a press-and-hold,
+so a filter field on the wheel would need a new input path AND one-handed
+typing. That has not changed; it has been designed around.
 
-### What already exists, and where
+### The shape it took
 
-- **Applying an effect is DONE and proven live.** `ApplyEffectByMatchName` and
-  `FindEffectKeyByMatchName` are in the shipped plug-in
-  (`poc/native/pieFX.cpp`), the `effect` action kind crosses the pipe
-  base64-encoded, and Gaussian Blur has been watched appearing on a layer. Once
-  a match name is chosen, the firing path needs nothing.
-- **A user can already bind ONE named effect to a hexagon today**, through the
-  settings window's `effect` kind. What is missing is the *ad-hoc* case: reach
-  any of 519 without having bound it first.
-- **Enumeration is proven but lives in the FROZEN spike, not in the product.**
-  `pieFX.cpp` at the repo root (Phase 0, reference only) walks
-  `AEGP_GetNextInstalledEffect` and dumps category / display name / match name
-  to `%TEMP%\pieFX_S5_effects.txt`. 519 walked, 519 claimed, third-party
-  plug-ins all present. **The shipped plug-in cannot enumerate anything** — it
-  only looks up a match name it was given. Porting that walk is step one.
-- **`ae-commands-2025.json` is not a shortcut.** Its 296 negative ids are AE
-  2025 *display* names, not match names, and not this machine's installed set.
+    plug-in    WriteEffectCatalogue() — S5A's walk, ported out of the frozen
+               spike, writing %APPDATA%\pieFX\effects.json once per session on
+               the first idle AFTER arming. Everything walked is written,
+               obsolete and uncategorised included: filtering is the UI's call.
+               `walked` and `claimed` both go in the file, because S5's real
+               assertion was never the count, it was whether the two agree.
 
-### The hard part: there is no keyboard
+    wheel      The `search` widget no longer draws a fake query and five
+               hard-coded results. It draws the RECENTS list and "Release to
+               search…", and nothing in it is highlighted, because a hot row
+               would promise that releasing fires that row and releasing opens
+               a window. Releasing outside the dead zone opens it; the centre
+               still cancels, so an aborted gesture never puts a window in
+               front of AE.
 
-A filter field needs typing, and **nothing in pieFX can receive a keystroke.**
-Three facts, all verified in the source rather than assumed:
+    window     search.html / search.js / search.css — a third window in the
+               overlay process, built and raised exactly like the settings
+               window. Substring filter over display name then match name,
+               prefix matches ranked first, arrows to walk, Enter to apply,
+               Esc to dismiss. Dismissing HIDES it, so the next summon is
+               instant.
 
-- The overlay window is created click-through (`set_ignore_cursor_events(true)`)
-  and `focus: false`. It cannot take keyboard input, and giving it focus would
-  take focus away from After Effects mid-gesture.
-- The plug-in installs `WH_MOUSE` only. There is no keyboard hook anywhere in
-  the product.
-- The gesture is a **press-and-hold**. Even with a hook, the user would be
-  typing one-handed with the right mouse button held down.
+    recents    %APPDATA%\pieFXecents.json, its own file rather than a key in
+               settings.json: the settings window writes that file whole, and
+               two windows of one process saving the same file is a lost
+               update waiting to happen. The wheel re-reads it on each summon.
 
-So "add a text field" is not a small change, and the design has to be chosen
-before any code. Three candidates, with what each really costs:
+`--effects <path>` / `--effects none` mirror `--settings`, and the harness uses
+them: `overlay/src/effects-sample.json` is a nine-entry fixture carrying one of
+each of the catalogue's sharp edges (a display name that collides across
+categories, an `_Obsolete` entry, two internal ones, a match name at the
+31-character cap), so a filter that ignores them fails in the harness instead of
+in front of a user. It doubles as the browser preview's data.
 
-1. **Release to open (recommended starting point).** Releasing on `Effects`
-   opens a real, focused window with a search field — exactly what the settings
-   window already is, including the `raise()` that makes a window come to the
-   front from a process that does not own the foreground. Enter applies to the
-   selected layers. It gives up the "one unbroken gesture" ideal, and it is the
-   only option whose machinery is already built and proven in AE.
-2. **Type during the hold.** A `WH_KEYBOARD` hook on AE's UI thread, swallowing
-   keys while the wheel is up and forwarding characters over the pipe. The
-   mouse hook proves the pattern works, but swallowing input is what made S2
-   hard, and a swallowed keystroke that escapes into a comp is worse than a
-   slow search. One-handed typing remains.
-3. **No typing at all.** Browse instead: the widget shows effect *categories*,
-   and the cursor picks one, then an effect. Keeps the gesture pure and needs
-   no new input path. Whether 519 effects across ~25 categories is navigable
-   this way is an honest open question, and the answer is probably "with a
-   recents list in front of it".
+### The bug this cost, which is a rule about Tauri commands
 
-A **recents/favourites list**, persisted in settings, makes the common case
-zero-typing under any of the three, and is worth building first whichever wins.
+The search release fired nothing, silently, and the overlay then ignored `quit`
+— the exact signature of the un-dead overlay this project has already paid for
+once. A **sync `#[tauri::command]` runs on the main thread**, so building a
+webview window inside one asks the event loop to do work from inside its own IPC
+handler, and `run_on_main_thread` called from the main thread waits for a turn
+that never comes. Either way the process goes deaf: no window, no error, no
+reply to the next message. `open_search` is `async` and posts the build to the
+main thread; `open_settings` was the same shape and is fixed with it — it had
+never been invoked from JS, so nothing had found it. **The harness found this,
+not AE**, and only because the assertion was "the log says a window was built"
+rather than "nothing came down the pipe" — silence was also what the mock did.
 
-### Three things the catalogue will do to you
+### What is left
 
-`SPIKES.md` records these in full; they are repeated here because they decide
-the data model, not just the UI:
-
-- **Match names are truncated at 31 characters** (`PF_MAX_EFFECT_NAME_LEN`), and
-  seven shipped effects sit exactly at the cap. A match name copied from
-  documentation will not equal what the API returns — always round-trip through
-  the API's own strings.
-- **50 entries are obsolete** and collide with live effects on display name
-  ("Levels", "Noise", "Box Blur" each appear twice). Filter on category or the
-  search will happily offer the dead one.
-- **107 entries have an empty category** — pseudo-effects and preset control
-  rigs, not things anyone picks from a menu. Empty category and the `Pseudo/`
-  match-name prefix are the two flags.
-
-Display name is therefore **not a unique key**. Search on it, carry the match
-name as identity, show the category to disambiguate.
-
-### How the catalogue reaches the overlay
-
-Undecided. The overlay owns the UI and the plug-in owns the AEGP calls, so the
-list has to cross. Either the plug-in writes it once at arm time (a JSON file
-beside the settings, which the overlay reads like any other) or it sends it
-down the events pipe on request. The file is simpler and survives a disarm; the
-pipe avoids a stale list when plug-ins change. Enumerating 519 entries is not
-free, so do it once per session, not per summon.
-
-### Suggested order
-
-1. Port the S5 walk from the frozen spike into the shipped plug-in and get the
-   catalogue out of AE in some form — that is the piece nothing else can be
-   built without, and it is the piece already known to work.
-2. Decide the input model from the three above, with the user, before drawing
-   anything.
-3. Build the recents list, which is useful under every model.
-4. Then the search UI itself.
+1. **Watch it in AE.** In order: does `%APPDATA%\pieFX\effects.json` appear
+   after arming, and does `walked` equal `claimed`? Does the window come to the
+   FRONT of AE? Does Enter apply to the selected layers?
+2. **Recents are unproven end to end** — written by the window, read by the
+   wheel, and the panel drawing them has never been seen with anything in it.
+3. **A recent is not fireable from the wheel.** The panel lists them; it does
+   not hit-test them. Making the first recent a one-flick re-apply is the
+   obvious next move and is a real design decision, not a tidy-up: it needs
+   hit-testing inside the panel and it changes what a release on `Effects`
+   means depending on where the cursor is.
+4. **Nothing has been done about the 31-character truncation on the way IN.**
+   The window only ever hands back a match name the API itself produced, which
+   is the rule, but a hand-typed `effect` binding in the settings window can
+   still name a string AE will never return.
 
 ## Next steps for a fresh session
 
-Roughly in order. The first two are cheap and close open measurements; the third
-is the real remaining feature work.
+Roughly in order. Both are measurements that only a running After Effects can
+make; the code they are measuring is written and passes the harness.
 
 1. **Watch the new `distance` arming rule in After Effects.** It is measured
    against the state machine and passes the harness, but the thing it is meant
@@ -375,8 +368,12 @@ is the real remaining feature work.
 that opens a save dialog and calls `saveFrameToPng` at 1:1, restoring the comp's
 resolutionFactor afterwards. Unwatched in AE.
 
-After that: the **Effects search** — see its briefing above; the input model
-has to be chosen before any of it is drawn — and then the macOS port. `ARCHITECTURE.md` is still accurate; the Mac side
+2. **Watch the Effects search in AE**, in the order its section above gives:
+   the catalogue file first (it is the piece everything else stands on), then
+   the window's z-order, then the apply. Nothing else in the feature can be
+   judged until the walk has been seen producing a file.
+
+After that: the macOS port. `ARCHITECTURE.md` is still accurate; the Mac side
 needs the two-pipe transport and the `ready` handshake replicated.
 
 **Before handing over any build, run `poc/pipe_test.ps1`.** It drives the real

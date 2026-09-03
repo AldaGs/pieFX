@@ -215,6 +215,46 @@ decoder is ~30 lines and cannot be surprised by user input.
 wrapped in `$.evalFile("…")` — ExtendScript accepts them, and it removes the
 backslash-escaping question entirely.
 
+## The effect search: two files beside the settings
+
+`builtin` / `effect-search` is the one action kind that never reaches the
+plug-in. It opens a **focused window** in the overlay process, because a search
+field needs a keyboard and nothing in the gesture can take one: the overlay is
+click-through and unfocused, the plug-in hooks `WH_MOUSE` only, and the gesture
+is a press-and-hold. Applying the effect the user picks is an ordinary
+`effect` fire from that window, so nothing new crosses the pipe.
+
+Two files sit beside `settings.json` in `%APPDATA%\pieFX\`:
+
+    effects.json   WRITTEN BY THE PLUG-IN, read by the overlay. The installed
+                   catalogue, walked once per session on the first idle after
+                   arming:
+                   { "effects": [ { "name", "match", "category" }, ... ],
+                     "walked": 519, "claimed": 519 }
+                   `walked` vs `claimed` is the honesty check S5 used - a
+                   disagreement means the enumeration is incomplete.
+                   Everything walked is written, obsolete and uncategorised
+                   entries included: filtering is the search UI's decision,
+                   and the plug-in owes it the API's own strings unedited.
+
+    recents.json   WRITTEN BY THE SEARCH WINDOW, read by it and by the wheel.
+                   A plain array of match names, most recent first. Its own
+                   file rather than a key in settings.json, because the
+                   settings window writes that file WHOLE - two windows of one
+                   process saving the same file is a lost update waiting to
+                   happen.
+
+`--effects <path>` overrides where the catalogue is read from, and
+`--effects none` means there is none. It exists for the same reason
+`--settings none` does: the harness drives the search against a known fixture
+(`src/effects-sample.json`, which carries one of each of the catalogue's sharp
+edges) rather than against whatever the developer has installed.
+
+**Display name is not a unique key.** Match names truncate at 31 characters, 50
+entries live in `_Obsolete` and collide with live effects on display name, and
+107 have no category at all. Search on the display name, carry the **match
+name** as identity, show the category to disambiguate.
+
 ## Ownership: overlay decides, native executes
 
 The overlay already owns the wheel geometry and hit-testing (it draws them), so

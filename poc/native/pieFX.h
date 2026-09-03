@@ -100,6 +100,14 @@
 //	in the file belongs to the overlay, which owns the slot tree.
 #define PIEFX_SETTINGS_REL	"pieFX\\settings.json"
 
+//	Where the installed-effects catalogue is dropped for the overlay to read.
+//	The plug-in owns the AEGP walk and the overlay owns the search UI, so the
+//	list has to cross; a file beside the settings is the simplest crossing that
+//	survives a disarm, and the overlay reads it the way it reads any other file
+//	it did not write. Written ONCE per session - 519 entries is not free, and
+//	the installed set does not change while AE is running.
+#define PIEFX_EFFECTS_REL	"pieFX\\effects.json"
+
 //	Wheel geometry, in screen px. Used only by the legacy 3x3 POC path; the
 //	hexagon wheel does its hit-testing overlay-side (it owns the geometry it
 //	draws) and sends back a finished action, so this duplication ends there.

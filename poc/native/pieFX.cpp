@@ -45,6 +45,7 @@ static A_Boolean		S_arm_on_launch	= TRUE;
 static UINT				S_hold_ms		= PIEFX_HOLD_MS;
 static A_Boolean		S_settings_read	= FALSE;
 static A_Boolean		S_launch_armed	= FALSE;	// the auto-arm has had its one go
+static A_Boolean		S_effects_dumped = FALSE;	// the catalogue walk has had its one go
 
 //	Defined with the rest of the lifecycle, below; the idle hook needs them.
 static void			ResolveLogPath(void);
@@ -1105,6 +1106,125 @@ RunAnchorAction(AEGP_SuiteHandler &suites, int cell)
 	free(script);
 }
 
+//	Effect names come from third-party plug-ins as well as Adobe, so they are
+//	NOT ours the way the toast strings are, and stripping a quote out of one
+//	would silently change an identity the overlay then cannot look up. This is
+//	the one place in the native side that escapes rather than strips.
+static void
+JsonEscapeInto(const char *srcZ, char *outZ, size_t out_max)
+{
+	size_t o = 0;
+
+	for (const unsigned char *p = (const unsigned char *)srcZ; *p; p++) {
+		char esc[8];
+		size_t n;
+
+		if (*p == '"')       { strcpy_s(esc, sizeof(esc), "\\\""); }
+		else if (*p == '\\') { strcpy_s(esc, sizeof(esc), "\\\\"); }
+		else if (*p < 0x20)  { sprintf_s(esc, sizeof(esc), "\\u%04x", (unsigned)*p); }
+		else                 { esc[0] = (char)*p; esc[1] = 0; }
+
+		n = strlen(esc);
+		if (o + n >= out_max) { break; }
+		memcpy(outZ + o, esc, n);
+		o += n;
+	}
+	outZ[o] = 0;
+}
+
+//	The S5A walk, ported out of the frozen spike and pointed at a file the
+//	overlay can read instead of a human-readable dump.
+//
+//	Everything walked is written, obsolete and uncategorised entries included.
+//	The three sharp edges the catalogue has (31-character match names, 50
+//	`_Obsolete` entries that collide with live ones on display name, 107 with no
+//	category at all) are FILTERING decisions, and filtering is the search UI's
+//	job - the overlay owns what the user sees. What the plug-in owes it is the
+//	API's own strings, unedited, with the category that makes them separable.
+//
+//	`claimed` is written beside the count for the same reason S5A reported it:
+//	the interesting number is not how many there are, it is whether walking the
+//	list agrees with what AE says is in it.
+static void
+WriteEffectCatalogue(AEGP_SuiteHandler &suites)
+{
+	A_Err	err		= A_Err_NONE;
+	A_long	claimed	= 0;
+	char	dir[MAX_PATH];
+	char	path[MAX_PATH];
+	DWORD	len;
+	FILE	*fp		= NULL;
+
+	len = GetEnvironmentVariableA("APPDATA", dir, MAX_PATH);
+	if (!len || len >= MAX_PATH - (DWORD)strlen(PIEFX_EFFECTS_REL) - 2) {
+		Log("  effects: no APPDATA; catalogue not written\n");
+		return;
+	}
+	strcpy_s(path, MAX_PATH, dir);
+	strcat_s(path, MAX_PATH, "\\pieFX");
+	//	The settings window may never have run on this machine, so the folder is
+	//	not a given. An existing one is not an error.
+	CreateDirectoryA(path, NULL);
+
+	strcpy_s(path, MAX_PATH, dir);
+	strcat_s(path, MAX_PATH, "\\");
+	strcat_s(path, MAX_PATH, PIEFX_EFFECTS_REL);
+
+	if (fopen_s(&fp, path, "wb") || !fp) {
+		Log("  effects: cannot write %s\n", path);
+		return;
+	}
+
+	ERR(suites.EffectSuite4()->AEGP_GetNumInstalledEffects(&claimed));
+
+	//	No BOM, ever. The overlay's JSON.parse rejects one outright, and a
+	//	settings file with a BOM is exactly how this project already lost a
+	//	session once.
+	fprintf(fp, "{\n  \"effects\": [\n");
+
+	AEGP_InstalledEffectKey	key		= AEGP_InstalledEffectKey_NONE;
+	A_long					walked	= 0;
+
+	while (!err) {
+		ERR(suites.EffectSuite4()->AEGP_GetNextInstalledEffect(key, &key));
+
+		if (err || AEGP_InstalledEffectKey_NONE == key) {
+			break;
+		}
+
+		A_char	name[AEGP_MAX_EFFECT_NAME_SIZE]			= { 0 };
+		A_char	match[AEGP_MAX_EFFECT_MATCH_NAME_SIZE]	= { 0 };
+		A_char	cat[AEGP_MAX_EFFECT_CATEGORY_NAME_SIZE]	= { 0 };
+		char	e_name[AEGP_MAX_EFFECT_NAME_SIZE * 6];
+		char	e_match[AEGP_MAX_EFFECT_MATCH_NAME_SIZE * 6];
+		char	e_cat[AEGP_MAX_EFFECT_CATEGORY_NAME_SIZE * 6];
+
+		ERR(suites.EffectSuite4()->AEGP_GetEffectName(key, name));
+		ERR(suites.EffectSuite4()->AEGP_GetEffectMatchName(key, match));
+		ERR(suites.EffectSuite4()->AEGP_GetEffectCategory(key, cat));
+
+		if (err) { break; }
+
+		JsonEscapeInto(name,  e_name,  sizeof(e_name));
+		JsonEscapeInto(match, e_match, sizeof(e_match));
+		JsonEscapeInto(cat,   e_cat,   sizeof(e_cat));
+
+		fprintf(fp, "%s    { \"name\": \"%s\", \"match\": \"%s\", \"category\": \"%s\" }",
+				walked ? ",\n" : "", e_name, e_match, e_cat);
+		walked++;
+	}
+
+	fprintf(fp, "\n  ],\n  \"walked\": %ld,\n  \"claimed\": %ld\n}\n", walked, claimed);
+	fclose(fp);
+
+	Log("  effects: wrote %ld entries (AE claims %ld)%s -> %s\n",
+		walked, claimed, (walked == claimed) ? "" : "  *** MISMATCH ***", path);
+
+	if (err) {
+		Log("  effects: enumeration stopped early with AEGP error %d\n", (int)err);
+	}
+}
+
 //	S5's lookup: walk the installed catalogue for an exact match name.
 static A_Boolean
 FindEffectKeyByMatchName(
@@ -1576,6 +1696,16 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 		} else {
 			Log("  armOnLaunch off; waiting for the menu item\n");
 		}
+	}
+
+	//	The effects catalogue, once, on an idle AFTER arming rather than inside
+	//	it. Walking 519 entries is not free and arming already launches a
+	//	process and installs a hook; an idle later costs the user nothing and
+	//	still lands long before the first right-hold. Once per session, because
+	//	the installed set does not change while AE is running.
+	if (S_active && !S_effects_dumped) {
+		S_effects_dumped = TRUE;
+		WriteEffectCatalogue(suites);
 	}
 
 	//	Backstop for a press whose UP we never saw. The thread-local WH_MOUSE hook

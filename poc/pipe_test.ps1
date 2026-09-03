@@ -11,8 +11,15 @@ $rx = New-Object System.IO.Pipes.NamedPipeServerStream("pieFX-cmd-test99", [Syst
 # fail according to whatever the developer happens to have configured - and a
 # failure would read as a transport bug, which is the one thing this script
 # exists to catch.
+# `--effects` is the same idea for the effect catalogue: the search window opens
+# on a fixture with one of each of the catalogue's sharp edges in it (a display
+# name that collides across categories, an `_Obsolete` entry, two internal ones,
+# a match name at the 31-character cap) rather than on whatever this machine has
+# installed. Under `--settings none` the recents file is disabled too, so a run
+# of this script cannot write into the developer's own recents.
+$fixture = Join-Path $PSScriptRoot "overlay\src\effects-sample.json"
 $args = @("--events", "\\.\pipe\pieFX-test99", "--actions", "\\.\pipe\pieFX-cmd-test99",
-          "--settings", "none")
+          "--settings", "none", "--effects", $fixture)
 $proc = Start-Process -FilePath $exe -PassThru -ArgumentList $args
 Write-Output "overlay pid $($proc.Id) (custom pipe names)"
 
@@ -106,6 +113,28 @@ Expect "no-sel S  (Render Queue, live)" @($noSel, '{"type":"cursor","x":800,"y":
 Expect "no-sel SE>S (Comp, live)      " @($noSel, '{"type":"cursor","x":1060,"y":650}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":800}') "fire"
 Expect "no-comp SE>N (Solid, dead)    " @($noComp, '{"type":"cursor","x":1060,"y":650}', '{"type":"cursor","x":802,"y":502}', '{"type":"cursor","x":800,"y":200}') "silence"
 Expect "no-comp S (Render Queue, dead)" @($noComp, '{"type":"cursor","x":800,"y":800}') "silence"
+
+# --- the effect search ------------------------------------------------------
+# N is `Effects`, and it is the one slot whose release does NOT cross the pipe:
+# it opens a focused window in this process, because a search needs a keyboard
+# and nothing in pieFX can take a keystroke. So silence on the action pipe is
+# only half the assertion - silence is also what a slot that fires nothing
+# looks like, which is exactly what this widget WAS. The other half is the
+# overlay's own log saying the window was built.
+#
+# It really does open a window, and it really does take the foreground for a
+# moment. That is the feature.
+Write-Output "effect search:"
+$log = Join-Path $env:TEMP "piefx_overlay.log"
+$before = if (Test-Path $log) { (Select-String -Path $log -Pattern "search window" -SimpleMatch).Count } else { 0 }
+Expect "N Effects (nothing on the pipe)" @($summon, '{"type":"cursor","x":800,"y":200}') "silence"
+Start-Sleep -Milliseconds 1200
+$after = if (Test-Path $log) { (Select-String -Path $log -Pattern "search window" -SimpleMatch).Count } else { 0 }
+if ($after -gt $before) {
+    Write-Output "  search window opened (overlay log)  -> PASS"
+} else {
+    Write-Output "  search window opened (overlay log)  -> FAIL (no log line; the release fired nothing)"
+}
 
 # toast channel: nothing comes back, it is one-way to the user
 $w.WriteLine('{"type":"toast","level":"error","text":"_mn is undefined"}')

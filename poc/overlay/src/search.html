@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pieFX — Apply Effect</title>
+    <link rel="stylesheet" href="settings.css" />
+    <link rel="stylesheet" href="search.css" />
+  </head>
+  <body>
+    <header>
+      <input
+        id="q"
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="Search effects — Enter applies, Esc closes"
+      />
+    </header>
+
+    <main>
+      <p class="note" id="note" hidden></p>
+      <ul id="list" class="results"></ul>
+    </main>
+
+    <footer>
+      <span class="hint" id="count"></span>
+      <div class="spacer"></div>
+      <label class="toggle">
+        <input id="showHidden" type="checkbox" />
+        Show obsolete and internal
+      </label>
+    </footer>
+
+    <script type="module" src="search.js"></script>
+  </body>
+</html>

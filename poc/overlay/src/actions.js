@@ -117,6 +117,26 @@ function sendFire(action, cell) {
       m = { type: "fire", kind: "effect", b64: b64(action.matchName) };
       break;
     case "builtin":
+      // The effect search never reaches the plug-in as an action: it is a
+      // WINDOW this process opens, and the effect it eventually applies is
+      // fired from there as an ordinary `effect`. Intercepted here rather than
+      // in the wheel so that a test-fire from the settings window opens it too
+      // — a binding you cannot try is a binding you cannot trust.
+      if (action.name === "effect-search") {
+        if (!(window.__TAURI__ && window.__TAURI__.core)) {
+          return Promise.reject(new Error("not running under Tauri"));
+        }
+        return window.__TAURI__.core.invoke("open_search").then(
+          () => ({ type: "open", name: "effect-search" }),
+          (e) => {
+            // Said out loud on the way past. A window that fails to open is
+            // indistinguishable from a slot that fires nothing, which is
+            // exactly what this slot used to be.
+            if (window.__PIEFX_SAY__) window.__PIEFX_SAY__("open_search FAILED " + e);
+            throw e;
+          }
+        );
+      }
       m = {
         type: "fire",
         kind: "builtin",
