@@ -19,6 +19,7 @@
 //	    ./poc/native/mac/build_fifo_test.sh && $TMPDIR/pieFX_fifo_test
 //
 #include "pieFX_fifo.h"
+#include "pieFX_launch.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -302,6 +303,90 @@ main(int argc, char **argv)
 	SleepMs(1500);
 	KillTree(ov);
 	ov = -1;
+
+	// --- 8. launching it ourselves ------------------------------------------
+	//	Everything above launched the overlay by hand. This is the production
+	//	path: found beside us with dladdr, spawned into its own process group,
+	//	told whose lifetime to follow.
+	printf("== launch (the production path) ==\n");
+	{
+		//	Start from DISCONNECTED, or the connect assertion below proves
+		//	nothing. It passed vacuously once already, on a stale connection
+		//	the previous section had left behind — the overlay it claimed to
+		//	have launched had in fact failed to exec.
+		Ok(WaitConnected(0, 5000), "nothing is connected before we launch", NULL);
+
+		int	launched = PieFX_LaunchOverlay(events, actions, 0, OnLog, NULL);
+
+		Ok(launched, "the overlay was found beside us and launched", NULL);
+		if (launched) {
+			long first = PieFX_OverlayPid();
+
+			Ok(WaitConnected(1, 15000), "and connected", NULL);
+
+			//	Arm -> disarm -> arm launched a second overlay every time on
+			//	Windows, leaving the earlier ones spinning on a pipe they would
+			//	never be given.
+			PieFX_LaunchOverlay(events, actions, 0, OnLog, NULL);
+			Ok(PieFX_OverlayPid() == first,
+			   "a second launch did NOT start a second overlay", NULL);
+
+			//	Ask first, force second — the order the death hook proved.
+			PieFX_PipeWrite("{\"type\":\"quit\"}\n");
+			SleepMs(1200);
+			PieFX_EndOverlay(2000);
+			Ok(!PieFX_OverlayAlive(), "and it is gone, with no zombie left", NULL);
+		}
+	}
+
+	// --- 9. the watchdog: AE crashes ----------------------------------------
+	//	The half a process group cannot cover. If AE dies without running its
+	//	death hook, nothing is left to tell the overlay to go — so the overlay
+	//	watches the owner pid with kqueue and leaves on its own.
+	//
+	//	The owner here is a disposable child rather than this process, for the
+	//	obvious reason.
+	printf("== watchdog (owner dies without warning) ==\n");
+	{
+		pid_t owner = fork();
+
+		if (owner == 0) {
+			//	A stand-in for After Effects: exists, does nothing, and is
+			//	killed without being given the chance to tidy up.
+			for (;;) {
+				pause();
+			}
+			_exit(0);
+		}
+
+		Ok(WaitConnected(0, 5000), "nothing is connected before we launch", NULL);
+
+		int launched = PieFX_LaunchOverlay(events, actions, (long)owner, OnLog, NULL);
+
+		Ok(launched, "an overlay owned by another process launched", NULL);
+		if (launched) {
+			Ok(WaitConnected(1, 15000), "and connected", NULL);
+
+			kill(owner, SIGKILL);
+			waitpid(owner, NULL, 0);
+
+			//	No quit message is sent. Nothing asks it to go. It has to
+			//	notice by itself.
+			int gone = 0;
+
+			for (long deadline = NowMs() + 8000; NowMs() < deadline; ) {
+				if (!PieFX_OverlayAlive()) {
+					gone = 1;
+					break;
+				}
+				SleepMs(50);
+			}
+			Ok(gone, "the overlay noticed its owner die and quit unprompted", NULL);
+			if (!gone) {
+				PieFX_EndOverlay(2000);
+			}
+		}
+	}
 
 	printf("== stop ==\n");
 	PieFX_StopPipeServer();

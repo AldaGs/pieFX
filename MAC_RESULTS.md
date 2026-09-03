@@ -503,18 +503,104 @@ asserts it, by launching the overlay with no `--events`/`--actions` at all.
 
 FIFOs are also removed on stop. Windows gets that for free.
 
-## Open, and belonging to the next half
+## A phantom connection, and a hypothesis that was wrong
 
 After the overlay exits, a reader reappears on the events FIFO about a second
-later, and the server accepts it as a connection. The likely cause — not yet
-confirmed — is a WebKit child inheriting the overlay's read fd and outliving
-its parent, which would make the transport believe an overlay is connected when
-none is.
+later, and the server accepts it as a connection.
 
-It is the macOS shape of what the Windows **job object** prevents, and it
-belongs to launch-and-lifetime, which is not written yet. Whatever ends the
-overlay has to end its children too; `MAC_PORT.md` already names `NSTask` /
-`posix_spawn` and a `kqueue` on the parent pid for that job.
+The first guess was a WebKit child inheriting the read fd and outliving its
+parent — the macOS shape of what the Windows job object prevents. **That guess
+was wrong, and it is recorded here because it was written down before it was
+checked.** Measured: nothing survives the overlay's exit — `lsof` shows no
+holder of the FIFO, `pgrep` finds no process — and Rust's `File::open` sets
+`O_CLOEXEC` anyway, so no child could have inherited it in the first place.
+
+What is left is the dying overlay's own reconnect loop briefly reopening events
+on its way out. It is benign: the next liveness probe, at most 250ms later,
+finds no reader and drops the connection again.
+
+It is not harmless to a TEST, though, and that is the part worth keeping. A
+connection assertion that runs while a phantom is up passes without proving
+anything — which is exactly what happened, and it hid a launch that had failed
+outright. See below.
+
+---
+
+# Launch and lifetime — MAC_PORT.md step 3, second half
+
+The overlay is now started and stopped by the plug-in side
+(`poc/native/mac/pieFX_launch.cpp`), and it outlives nothing. Nineteen
+assertions in `fifo_test`, stable across repeated runs.
+
+## The job object splits in two
+
+Windows leans on ONE mechanism: a job object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. It covers both ways After Effects can
+go — quitting properly and crashing — because the kernel kills the job when
+the last handle closes, and process exit closes handles either way.
+
+macOS has no equivalent, so the guarantee is assembled from two halves that
+cover one case each, and **neither is sufficient alone** — which is worth
+saying because either one looks sufficient in isolation:
+
+| | covers | mechanism |
+|---|---|---|
+| process **group** | a deliberate teardown | `setsid` before `exec`, then `kill(-pid)` takes the WebKit children too |
+| `--owner-pid` | AE **crashing** | the overlay watches that pid with `kqueue` and exits unprompted |
+
+`setsid` runs in the child BEFORE `exec`, for the same reason Windows creates
+the process suspended and assigns it to the job before resuming it: a child
+born before the grouping is established is outside it, and outside it is the
+leak the whole mechanism exists to stop.
+
+## The watchdog, measured
+
+`watch_owner` was a `#[cfg(not(windows))]` no-op stub. It is now `kqueue` with
+`EVFILT_PROC` / `NOTE_EXIT`.
+
+Windows waits on a process HANDLE, which is a thing you can hold. A unix pid is
+not — it can be reused the moment it is reaped — so the equivalent has to be a
+subscription registered with the kernel, which fires once for that specific
+process. Registration failing with `ESRCH` means the owner is already gone:
+not an error, just the answer arriving early.
+
+Asserted by killing the owner with `SIGKILL` — no death hook, no message, no
+warning — and watching the overlay leave on its own:
+
+```
+owner pid 7989
+owner 7989 exited -> quitting
+```
+
+## Two bugs the test found in the code that was testing it
+
+**1. A launch that failed reported success.** `fork()` succeeding says nothing
+about the program starting. The child only discovers `execl` has failed after
+the parent has moved on, and `_exit(127)` into the void is indistinguishable
+from a healthy launch — so `PieFX_LaunchOverlay` returned 1 for an overlay that
+did not exist. `access(X_OK)` passing beforehand is not proof the exec will.
+
+Fixed with a `FD_CLOEXEC` status pipe: a successful exec closes it and the
+parent reads EOF, a failure writes `errno` into it first. The parent now knows
+which happened, and reaps the corpse either way.
+
+**2. The connect assertions were vacuous.** They ran while the phantom
+connection above was still up, so they passed without a fresh overlay ever
+existing — which is what concealed bug 1 for a full debugging pass. Each now
+asserts DISCONNECTED first, and only then launches.
+
+Both are the same failure in different clothes: something reported success
+without being asked to prove it.
+
+## An environment note, not a product one
+
+The test binary is built BESIDE the overlay, in `target/release`, rather than
+into `$TMPDIR`. `PieFX_LaunchOverlay` finds the overlay next to the binary that
+contains it — `dladdr`, the macOS answer to `GetModuleFileName` — so building
+it there makes that lookup the real one instead of something faked with a
+symlink. The first attempt did use a symlink in `$TMPDIR`, and the sandbox the
+build runs in refused to exec through it (`EACCES`, while `access(X_OK)` said
+yes) — which is how bug 1 came to light.
 
 ## Carried forward
 

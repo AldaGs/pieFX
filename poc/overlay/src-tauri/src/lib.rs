@@ -116,7 +116,83 @@ fn watch_owner(pid: u32) {
     });
 }
 
-#[cfg(not(windows))]
+// macOS: the same job, through kqueue.
+//
+// Windows waits on a process HANDLE, which is a thing you can hold. A unix pid
+// is not — it can be reused the moment it is reaped — so the equivalent has to
+// be a subscription registered with the kernel: EVFILT_PROC with NOTE_EXIT,
+// which fires once when that specific process ends. Registration failing with
+// ESRCH means the owner is ALREADY gone, which is not an error here; it is the
+// answer, arriving early.
+//
+// Declared by hand rather than pulling in a crate for two calls, the same way
+// the AppKit calls above are.
+#[cfg(target_os = "macos")]
+fn watch_owner(pid: u32) {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct KEvent {
+        ident: usize,
+        filter: i16,
+        flags: u16,
+        fflags: u32,
+        data: isize,
+        udata: *mut c_void,
+    }
+
+    const EVFILT_PROC: i16 = -5;
+    const EV_ADD: u16 = 0x0001;
+    const EV_ENABLE: u16 = 0x0004;
+    const NOTE_EXIT: u32 = 0x8000_0000;
+
+    extern "C" {
+        fn kqueue() -> i32;
+        fn kevent(
+            kq: i32,
+            changelist: *const KEvent,
+            nchanges: i32,
+            eventlist: *mut KEvent,
+            nevents: i32,
+            timeout: *const c_void,
+        ) -> i32;
+    }
+
+    thread::spawn(move || unsafe {
+        let kq = kqueue();
+        if kq < 0 {
+            dlog("  kqueue failed; no watchdog");
+            return;
+        }
+        let change = KEvent {
+            ident: pid as usize,
+            filter: EVFILT_PROC,
+            flags: EV_ADD | EV_ENABLE,
+            fflags: NOTE_EXIT,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        if kevent(kq, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) < 0 {
+            // ESRCH: it has already exited. Same outcome, no waiting.
+            dlog(&format!("  owner {} not watchable (already gone?) -> quitting", pid));
+            std::process::exit(0);
+        }
+        let mut out = KEvent {
+            ident: 0,
+            filter: 0,
+            flags: 0,
+            fflags: 0,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        // Blocks until the owner exits. A NULL timeout is the INFINITE wait.
+        kevent(kq, std::ptr::null(), 0, &mut out, 1, std::ptr::null());
+        dlog(&format!("  owner {} exited -> quitting", pid));
+        std::process::exit(0);
+    });
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn watch_owner(_pid: u32) {}
 
 // macOS: the window LEVEL, and the two things it decides at once.

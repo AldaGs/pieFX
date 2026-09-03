@@ -72,7 +72,7 @@ self-tests — is portable untouched. What is not:
 | `SetWindowsHookEx(WH_MOUSE)` | `addLocalMonitorForEventsMatchingMask` | **written and proven** in `pieFXMac.mm` |
 | `SetTimer` / `KillTimer` | `dispatch_after` on the main queue | **written and proven** |
 | `SendInput` replay | `[NSApp postEvent:atStart:NO]`, DOWN then UP | **written and proven** |
-| `CreateProcess` + job object + `--owner-pid` watchdog | `NSTask` / `posix_spawn`, `kqueue` on the parent pid | to write; the `quit` MESSAGE path is already portable |
+| `CreateProcess` + job object + `--owner-pid` watchdog | `fork`/`exec` into its own process GROUP, plus `kqueue` `NOTE_EXIT` on the owner pid | **written and proven** in `poc/native/mac/pieFX_launch.cpp`; the job object splits in two, and neither half covers both cases |
 | Clipboard: `OpenClipboard` + WIC + three formats (~230 lines) | `NSPasteboard` + `NSPasteboardTypePNG` | to write, and it gets SMALLER |
 | `GetTempPath`, `%APPDATA%` | `$TMPDIR`, `~/Library/Application Support/pieFX` | to write; the overlay's `dlog` already falls back to `TMPDIR`, the rest of the overlay's `APPDATA` paths do not |
 | Screen coordinates in physical px | **points, top-left origin**, straight from `NSEvent` | settled by step 1; the overlay expects points and divides by nothing |
@@ -151,14 +151,15 @@ is what the mixed-DPI coordinate bug looked like from the outside.
    screens instead of spanning them.
 2. ~~**The offline harness**, driving FIFOs~~ — **DONE**, `poc/pipe_test.py`,
    written before the transport and passing.
-3. **Transport** in the plug-in — **DONE** and proven offline
-   (`poc/native/mac/fifo_test.cpp`) — then **launch and lifetime**. ← next.
-   Send POINTS, top-left origin, from `NSEvent`; the overlay converts nothing.
-   Lifetime has one finding waiting for it already: a child of the overlay
-   appears to outlive it holding the events FIFO open, which is what the
-   Windows job object exists to prevent. See `MAC_RESULTS.md`.
+3. ~~**Transport** in the plug-in, then **launch and lifetime**~~ — **DONE**,
+   both halves, proven offline in `poc/native/mac/fifo_test.cpp` (19
+   assertions, no AE). Send POINTS, top-left origin, from `NSEvent`; the
+   overlay converts nothing.
 4. **The gesture**, moved out of the frozen spike into the product plug-in. This
-   is proven code changing address, not new work.
+   is proven code changing address, not new work. ← next. It is also the point
+   at which a macOS TARGET for the product plug-in has to exist: everything
+   built so far compiles standalone, and `Mac/pieFXMac.xcodeproj` still builds
+   the Phase 0 spike rather than `poc/native/pieFX.cpp`.
 5. **Paths, clipboard, Unicode accessors.**
 6. **Localisation of menu ids** — its own investigation.
 
