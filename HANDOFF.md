@@ -57,6 +57,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | A settings file changes what the wheel fires | harness — a rebound `S` fired the rebound command |
 | The whole harness still passes after the frontend was split into modules | harness |
 | The plug-in's walk writes `effects.json` inside AE | **live** — 522 walked, 522 claimed |
+| Presets in the search: folder walk, one list, `applyPreset` | harness fixture + browser preview — **unwatched in AE** |
 | The Effects search: window opens in front of AE, filters, Enter applies | **live** — the user's own session |
 | `layerCount` counts LAYERS, not selected things | **live** — `layers=1` with a layer's properties selected |
 | `copy-frame`: the frame reaches the Windows clipboard and pastes | **live** — pasted out of AE |
@@ -137,6 +138,24 @@ were "code, not facts" for too long.
   still prints 0 at the start of a comp. The one case still untried is a comp
   whose first frame is NOT 0, which is the only thing `displayStartFrame`
   contributes.
+- **Animation presets are in the search, and UNWATCHED IN AE.** AE's own
+  Effects & Presets panel lists effects and presets together, so a search that
+  offered only effects answered half the question. Presets have no AEGP
+  enumeration and no AEGP apply: the plug-in FINDS them by walking folders (the
+  shipped `Support Files/Presets`, located from the plug-in's own module path,
+  plus every `Documents/Adobe/After Effects*/User Presets`) and APPLIES them
+  through the scripting DOM's `layer.applyPreset`, under one undo group because
+  a preset can add half a dozen effects at once. What is unwatched: whether the
+  walk finds AE's ~620 shipped presets on a real install, and whether
+  `applyPreset` lands. The walk needs the .aex to be installed in AE's
+  `Support Files/Plug-ins` - one loaded from a build folder finds no Presets
+  folder beside it, says so in the log, and offers effects only.
+- **Documents is not `%USERPROFILE%\Documents`.** Measured while writing that
+  walk: on the author's machine it is `C:\Users\aldai\OneDrive\Documentos` -
+  redirected to OneDrive AND localised. `SHGetFolderPath(CSIDL_PERSONAL)`
+  follows both; the hand-built path would have found zero user presets and
+  reported that as "you have none", which is the same silent-wrong-answer shape
+  as the BOM and the swapped pipe flags.
 - **The Effects search works end to end in AE**, watched by the user: the
   catalogue file appears, the window comes to the front, the filter finds
   effects and Enter applies one. The multi-layer refusal and the

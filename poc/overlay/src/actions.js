@@ -116,6 +116,13 @@ function sendFire(action, cell) {
     case "effect":
       m = { type: "fire", kind: "effect", b64: b64(action.matchName) };
       break;
+    // An animation preset is a FILE, applied through the scripting DOM's
+    // layer.applyPreset — there is no AEGP call for it, which is also why
+    // presets have to be found by scanning folders instead of enumerated. The
+    // path crosses base64-encoded like every other free text.
+    case "preset":
+      m = { type: "fire", kind: "preset", b64: b64(action.path) };
+      break;
     case "builtin":
       // The effect search never reaches the plug-in as an action: it is a
       // WINDOW this process opens, and the effect it eventually applies is

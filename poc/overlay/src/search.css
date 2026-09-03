@@ -95,6 +95,20 @@ main {
   font-family: ui-monospace, Consolas, monospace;
 }
 
+/* A preset has no match name to show — its identity is a long absolute path,
+   which tells a reader nothing at a glance. The column says what KIND it is
+   instead, because that is the thing they cannot otherwise see, and effects
+   and presets apply in different ways. */
+.kind {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  background: rgba(199, 79, 214, 0.16);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
 .toggle {
   display: flex;
   align-items: center;

@@ -1,4 +1,5 @@
 {
+  "_comment2": "The presets below carry their own edges: a name that collides with an EFFECT search term (\"Blurry Fade In\" answers 'blur' too), two that differ only by folder, and one from the user's own folder with a redirected, localised Documents path in it - which is the path shape the walk had to be taught to find.",
   "_comment": "A hand-made stand-in for the catalogue the plug-in writes at %APPDATA%\\pieFX\\effects.json. The harness passes it with --effects so the search window can be driven with a KNOWN list instead of whatever this machine has installed. It is deliberately small AND deliberately nasty: it carries one of each of the catalogue's three sharp edges, so a filter that ignores them fails here rather than in front of a user. Levels appears twice, once live and once _Obsolete, which is a real collision in AE's own list; ADBE Pseudo/ and the empty category are the internal entries; and ADBE Bilateral Blur Vertical Radius is 31 characters, the truncation cap.",
   "effects": [
     { "name": "Gaussian Blur", "match": "ADBE Gaussian Blur 2", "category": "Blur & Sharpen" },
@@ -11,6 +12,13 @@
     { "name": "Master Rig", "match": "Pseudo/ADBE Master Rig", "category": "" },
     { "name": "Camera Mapper", "match": "ADBE CM Mapper", "category": "" }
   ],
+  "presets": [
+    { "name": "Fade In", "path": "C:\\Program Files\\Adobe\\Adobe After Effects 2026\\Support Files\\Presets\\Adobe Express\\In\\Fade In.ffx", "category": "Adobe Express/In" },
+    { "name": "Bungee In", "path": "C:\\Program Files\\Adobe\\Adobe After Effects 2026\\Support Files\\Presets\\Adobe Express\\In\\Bungee In.ffx", "category": "Adobe Express/In" },
+    { "name": "Blurry Fade In", "path": "C:\\Program Files\\Adobe\\Adobe After Effects 2026\\Support Files\\Presets\\Text\\Blurs\\Blurry Fade In.ffx", "category": "Text/Blurs" },
+    { "name": "My Look", "path": "C:\\Users\\someone\\OneDrive\\Documentos\\Adobe\\After Effects 2026\\User Presets\\My Look.ffx", "category": "User Presets (After Effects 2026)" }
+  ],
   "walked": 9,
-  "claimed": 9
+  "claimed": 9,
+  "presets_found": 4
 }

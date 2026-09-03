@@ -292,7 +292,13 @@ function refreshRecents() {
     (txt) => {
       try {
         const a = JSON.parse((txt || "[]").replace(/^﻿/, ""));
-        RECENTS = Array.isArray(a) ? a.slice(0, 5) : [];
+        // {t, id} since a recent can be a preset; a bare string is the old
+        // format and means an effect. The panel only ever shows these, so
+        // migrating on READ costs nothing and keeps one shape below this line.
+        RECENTS = (Array.isArray(a) ? a : [])
+          .slice(0, 5)
+          .map((r) => (typeof r === "string" ? { t: "effect", id: r } : r))
+          .filter((r) => r && typeof r.id === "string");
       } catch (e) {
         RECENTS = [];
       }
@@ -301,18 +307,24 @@ function refreshRecents() {
   );
 }
 
-// The catalogue carries the display names; the panel only has match names. AE's
-// match names are readable enough to be worth showing as-is rather than holding
-// a second copy of a 519-entry list in the wheel just to prettify five lines:
-// "ADBE Gaussian Blur 2" reads as Gaussian Blur once the vendor tag is off.
-function shortMatch(m) {
-  return String(m)
+// The panel holds identities, not display names — a match name for an effect
+// and a file path for a preset — and the catalogue that would prettify them
+// lives in the search window. Rather than keep a second copy of a 1,100-entry
+// list in the wheel to make five lines read better, each identity is trimmed
+// to the part a person recognises: "ADBE Gaussian Blur 2" is Gaussian Blur
+// once the vendor tag is off, and a preset is its filename.
+function shortRecent(r) {
+  if (r.t === "preset") {
+    const leaf = String(r.id).split(/[\\/]/).pop();
+    return leaf.replace(/\.ffx$/i, "");
+  }
+  return String(r.id)
     .replace(/^ADBE\s+/, "")
     .replace(/\s+\d+$/, "");
 }
 
 function drawSearchWidget() {
-  const rows = RECENTS.length ? RECENTS.map(shortMatch) : ["No recent effects yet"];
+  const rows = RECENTS.length ? RECENTS.map(shortRecent) : ["No recent effects yet"];
   const h = widgetHeight(rows.length);
   const x = S.cx - W_W / 2;
   const y = S.cy - h / 2;

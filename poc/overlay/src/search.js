@@ -12,6 +12,18 @@
 //
 // The catalogue comes from a file the plug-in writes once per session
 // (`%APPDATA%\pieFX\effects.json`). Nothing is enumerated here.
+//
+// It holds TWO kinds of thing, and the window deliberately does not separate
+// them: installed effects, and animation presets (.ffx). AE's own Effects &
+// Presets panel lists both in one tree, so a search that offered only effects
+// would answer half of what the user came to ask. They differ in three ways
+// that the code has to keep straight and the UI mostly should not:
+//
+//   identity   an effect is its MATCH NAME, a preset is its PATH
+//   applying   an effect goes through AEGP_ApplyEffect, a preset through the
+//              scripting DOM's layer.applyPreset - two different fire kinds
+//   grouping   an effect's category comes from AE, a preset's is the folder it
+//              was found in, which is the only grouping a .ffx file has
 
 import { sendFire } from "./actions.js";
 
@@ -32,6 +44,7 @@ const state = {
   sel: 0,
   walked: 0,
   claimed: 0,
+  presets: 0,
 };
 
 // --- the catalogue's three sharp edges -------------------------------------
@@ -56,8 +69,12 @@ function isInternal(e) {
   return !e.category || /^Pseudo\//.test(e.match || "");
 }
 
+// A preset is never hidden: they are all things a person deliberately made or
+// Adobe deliberately shipped, and there is no _Obsolete folder among them.
 function usable(e) {
-  return e && e.match && !isObsolete(e) && !isInternal(e);
+  if (!e || !e.id) return false;
+  if (e.t === "preset") return true;
+  return !isObsolete(e) && !isInternal(e);
 }
 
 // --- loading ---------------------------------------------------------------
@@ -89,10 +106,38 @@ function loadCatalogue() {
       state.parseError = String(e);
       return;
     }
-    state.all = Array.isArray(doc.effects) ? doc.effects : [];
+    // One flat list, tagged. Everything downstream - filtering, ranking,
+    // recents, the row renderer - works on `id`, so the only places that care
+    // which kind a row is are the ones that must: the type pill and the fire.
+    const fx = (Array.isArray(doc.effects) ? doc.effects : []).map((e) => ({
+      t: "effect",
+      id: e.match,
+      name: e.name,
+      match: e.match,
+      category: e.category,
+    }));
+    const ps = (Array.isArray(doc.presets) ? doc.presets : []).map((e) => ({
+      t: "preset",
+      id: e.path,
+      name: e.name,
+      category: e.category,
+    }));
+
+    state.all = fx.concat(ps);
     state.walked = doc.walked | 0;
     state.claimed = doc.claimed | 0;
+    state.presets = ps.length;
   });
+}
+
+// Recents are {t, id} now that a recent can be a preset. The old file was a
+// bare array of match names, so a string read back is MIGRATED rather than
+// dropped: someone's recents list is not worth resetting over a format change,
+// and a match name is unambiguously an effect.
+function normaliseRecent(r) {
+  if (typeof r === "string") return { t: "effect", id: r };
+  if (r && typeof r.id === "string") return { t: r.t === "preset" ? "preset" : "effect", id: r.id };
+  return null;
 }
 
 function loadRecents() {
@@ -100,7 +145,7 @@ function loadRecents() {
     (txt) => {
       try {
         const a = JSON.parse((txt || "[]").replace(/^﻿/, ""));
-        state.recents = Array.isArray(a) ? a.filter((s) => typeof s === "string") : [];
+        state.recents = (Array.isArray(a) ? a : []).map(normaliseRecent).filter(Boolean);
       } catch (e) {
         state.recents = [];
       }
@@ -111,8 +156,12 @@ function loadRecents() {
   );
 }
 
-function rememberUsed(match) {
-  state.recents = [match].concat(state.recents.filter((m) => m !== match)).slice(0, MAX_RECENTS);
+function rememberUsed(entry) {
+  const r = { t: entry.t, id: entry.id };
+
+  state.recents = [r]
+    .concat(state.recents.filter((x) => !(x.t === r.t && x.id === r.id)))
+    .slice(0, MAX_RECENTS);
   // Best effort. A recents file that cannot be written must not stop an effect
   // from being applied — the applying is the feature.
   invoke("save_recents", { json: JSON.stringify(state.recents) }).catch(() => {});
@@ -126,19 +175,24 @@ function rememberUsed(match) {
 function score(e, q) {
   const n = (e.name || "").toLowerCase();
   const m = (e.match || "").toLowerCase();
+  const c = (e.category || "").toLowerCase();
   if (n === q) return 0;
   if (n.startsWith(q)) return 1;
   if (n.includes(q)) return 2;
   if (m.includes(q)) return 3;
+  // Category last, and it is here for PRESETS: their names are written for a
+  // folder ("Fade In"), so the folder is half of what identifies them, and
+  // typing "transitions" should find the transitions.
+  if (c.includes(q)) return 4;
   return -1;
 }
 
 function pool() {
-  return hiddenEl.checked ? state.all.filter((e) => e && e.match) : state.all.filter(usable);
+  return hiddenEl.checked ? state.all.filter((e) => e && e.id) : state.all.filter(usable);
 }
 
-function byMatch(m) {
-  return state.all.find((e) => e.match === m);
+function byRecent(r) {
+  return state.all.find((e) => e.t === r.t && e.id === r.id);
 }
 
 function buildRows() {
@@ -148,11 +202,11 @@ function buildRows() {
   if (!q) {
     // No query: recents ARE the answer. This is the zero-typing common case,
     // and it is why the window is bearable at all.
-    const rec = state.recents.map(byMatch).filter(Boolean);
+    const rec = state.recents.map(byRecent).filter(Boolean);
     if (rec.length) {
       rows.push({ head: "Recent" });
       rec.forEach((e) => rows.push(e));
-      rows.push({ head: "All effects" });
+      rows.push({ head: "All effects and presets" });
     }
     pool()
       .slice()
@@ -183,8 +237,8 @@ function render() {
     // has already lost a session to a file that was read, rejected, and never
     // mentioned.
     show(
-      "No effects catalogue yet. The plug-in writes one shortly after pieFX arms " +
-        "inside After Effects — open AE with pieFX armed, then reopen this window."
+      "No catalogue yet. The plug-in writes one shortly after pieFX arms inside " +
+        "After Effects — open AE with pieFX armed, then reopen this window."
     );
   } else if (!state.rows.length) {
     show("Nothing matches.");
@@ -201,10 +255,14 @@ function render() {
       li.className = i === state.sel ? "sel" : "";
       const n = document.createElement("span");
       n.className = "name";
-      n.textContent = r.name || r.match;
+      n.textContent = r.name || r.id;
       const m = document.createElement("span");
-      m.className = "match";
-      m.textContent = r.match;
+      // For an effect the match name IS the identity and worth showing. For a
+      // preset the identity is a long absolute path, which tells the reader
+      // nothing they want at a glance — so the column says what KIND it is
+      // instead, which is the thing they cannot otherwise see.
+      m.className = r.t === "preset" ? "kind" : "match";
+      m.textContent = r.t === "preset" ? "preset" : r.match;
       const c = document.createElement("span");
       c.className = "cat";
       c.textContent = r.category || "(internal)";
@@ -221,7 +279,8 @@ function render() {
 
   const shown = state.rows.filter((r) => !r.head).length;
   countEl.textContent = state.all.length
-    ? `${shown} of ${pool().length} shown · ${state.all.length} installed` +
+    ? `${shown} of ${pool().length} shown · ${state.all.length - state.presets} effects, ` +
+      `${state.presets} presets` +
       (state.walked && state.claimed && state.walked !== state.claimed
         ? ` · AE claimed ${state.claimed}`
         : "")
@@ -253,12 +312,17 @@ function moveSel(d) {
 function apply() {
   const e = state.rows[state.sel];
   if (!e || e.head) return;
-  // The match name is the identity and it goes over the pipe base64-encoded,
-  // exactly as a bound `effect` slot does — this reuses the firing path that
-  // has already been watched putting Gaussian Blur on a layer.
-  sendFire({ kind: "effect", matchName: e.match }).then(
+
+  // Two kinds, two firing paths, and the difference is not cosmetic: an effect
+  // is applied by AEGP from its match name, a preset by the scripting DOM from
+  // its file. Both cross the pipe base64-encoded, and both reuse a path that
+  // already exists rather than inventing a third.
+  const action =
+    e.t === "preset" ? { kind: "preset", path: e.id } : { kind: "effect", matchName: e.id };
+
+  sendFire(action).then(
     () => {
-      rememberUsed(e.match);
+      rememberUsed(e);
       dismiss();
     },
     (err) => show("Could not apply: " + err)

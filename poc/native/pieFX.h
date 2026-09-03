@@ -44,7 +44,19 @@
 	#include <wincodec.h>
 	#pragma comment(lib, "windowscodecs.lib")
 	#pragma comment(lib, "ole32.lib")
+
+	//	SHGetFolderPath, to find Documents. NOT %USERPROFILE%\Documents: on the
+	//	author's machine that folder is C:\Users\aldai\OneDrive\Documentos -
+	//	redirected AND localised - and the user's animation presets live under
+	//	it. Building the path by hand finds nothing and calls it "you have none".
+	#include <shlobj.h>
+	#pragma comment(lib, "shell32.lib")
 #endif
+
+//	How many animation presets to write into the catalogue. AE ships ~620 and a
+//	user can add any number; the cap is here so a pathological Presets folder
+//	cannot turn one summon's worth of work into a stall.
+#define PIEFX_PRESET_MAX	4000
 
 //	Arm/disarm the whole thing.
 #define PIEFX_MENU_NAME		"pieFX (Wheel: OFF/ON)"

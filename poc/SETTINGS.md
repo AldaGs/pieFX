@@ -16,6 +16,7 @@ product can ever do is one of six action kinds:
 | `script-snippet` | ExtendScript source | `AEGP_ExecuteScript` |
 | `script-file` | path to a `.jsx` | `AEGP_ExecuteScript` wrapping `$.evalFile` |
 | `effect` | `matchName` | S5's catalogue lookup + `AEGP_ApplyEffect` |
+| `preset` | `path` | an animation preset (.ffx), applied with `layer.applyPreset` |
 | `ring` | six child slots | nothing — it is a container |
 
 Every kind is now proven live in After Effects. `ae-command` was the one that
@@ -244,6 +245,33 @@ one the TIMELINE shows: `displayStartFrame` is added, because a comp that starts
 at 1001 must not report frame 0 - a number the user cannot find in their own
 timeline is worse than no number.
 
+## Animation presets: found by walking, applied by script
+
+They are in the search because AE's own Effects & Presets panel puts them
+there, and a search that offered only effects answered half the question. They
+are not effects in any other sense, and three differences drive the code:
+
+- **No enumeration.** There is no AEGP call that lists presets; AE's panel finds
+  them by SCANNING FOLDERS and so does the plug-in. Two roots: the shipped
+  `Support Files/Presets`, located from the plug-in's own module path (the .aex
+  sits in `Support Files/Plug-ins`, so no registry key and no guess at a drive
+  letter), and every `Documents/Adobe/After Effects*/User Presets`. **A plug-in
+  loaded from a build folder instead of AE's own `Plug-ins` finds no Presets
+  beside it**, logs that, and offers effects only.
+- **Documents is not `%USERPROFILE%\Documents`.** It can be redirected to
+  OneDrive and localised - on the author's machine it is
+  `C:\Users\aldai\OneDrive\Documentos`. `SHGetFolderPath(CSIDL_PERSONAL)`
+  follows both; a hand-built path finds nothing and reports it as "you have
+  none".
+- **No AEGP apply.** `applyPreset` is a LAYER method in the scripting DOM, so
+  the `preset` kind runs a snippet rather than calling a suite. It opens one
+  undo group, because a preset can add half a dozen effects and keyframes and
+  the user who dislikes the result wants ONE undo.
+
+Identity is the **path**, the way an effect's is its match name. The category is
+the folder it was found in - the only grouping a .ffx file carries - which is
+also what makes typing "transitions" find the transitions.
+
 ## The effect search: two files beside the settings
 
 `builtin` / `effect-search` is the one action kind that never reaches the
@@ -258,9 +286,10 @@ is a press-and-hold. Applying the effect the user picks is an ordinary
 Two files sit beside `settings.json` in `%APPDATA%\pieFX\`:
 
     effects.json   WRITTEN BY THE PLUG-IN, read by the overlay. The installed
-                   catalogue, walked once per session on the first idle after
-                   arming:
+                   catalogue AND the animation presets, both built once per
+                   session on the first idle after arming:
                    { "effects": [ { "name", "match", "category" }, ... ],
+                     "presets": [ { "name", "path", "category" }, ... ],
                      "walked": 519, "claimed": 519 }
                    `walked` vs `claimed` is the honesty check S5 used - a
                    disagreement means the enumeration is incomplete.

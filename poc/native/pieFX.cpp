@@ -87,7 +87,8 @@ enum PieKind {
 	PK_FILE,		//	path to a .jsx, run through $.evalFile
 	PK_EFFECT,		//	install-by-match-name (S5)
 	PK_ANCHOR,		//	builtin: the 3x3 anchor grid
-	PK_COPY_FRAME	//	builtin: current frame -> the clipboard
+	PK_COPY_FRAME,	//	builtin: current frame -> the clipboard
+	PK_PRESET		//	animation preset (.ffx) applied to the selected layer
 };
 
 struct PieAction {
@@ -547,6 +548,7 @@ HandleOverlayLine(const char *lineZ)
 		a.kind = PK_AE_CMD;
 	} else if (!strcmp(kind, "script-snippet") ||
 			   !strcmp(kind, "script-file") ||
+			   !strcmp(kind, "preset") ||
 			   !strcmp(kind, "effect")) {
 		char b64[PIEFX_B64_MAX] = { 0 };
 
@@ -560,6 +562,7 @@ HandleOverlayLine(const char *lineZ)
 
 		a.kind = !strcmp(kind, "script-snippet") ? PK_SNIPPET
 			   : !strcmp(kind, "script-file")	? PK_FILE
+			   : !strcmp(kind, "preset")		? PK_PRESET
 												: PK_EFFECT;
 	} else if (!strcmp(kind, "builtin")) {
 		char name[40] = { 0 };
@@ -1212,6 +1215,188 @@ JsonEscapeInto(const char *srcZ, char *outZ, size_t out_max)
 	outZ[o] = 0;
 }
 
+//	ANIMATION PRESETS, which are not effects and are not in any AEGP suite.
+//
+//	AE's own Effects & Presets panel lists both together, so a search that
+//	offers only effects is a search that answers half the question the user is
+//	asking. There is no enumeration API for presets - the panel finds them by
+//	SCANNING FOLDERS, and so does this.
+//
+//	Two roots:
+//	  <install>/Support Files/Presets   what AE ships. Found from our OWN module
+//	                                    path (the .aex sits in
+//	                                    Support Files/Plug-ins), so it needs no
+//	                                    registry key and no guess at a drive.
+//	  <Documents>/Adobe/After Effects*/User Presets
+//	                                    what the user has saved.
+//
+//	Documents is NOT %USERPROFILE%\\Documents. Measured on the author's machine:
+//	it is C:\\Users\\aldai\\OneDrive\\Documentos - redirected to OneDrive AND
+//	localised. SHGetFolderPath is what follows both; building the path by hand
+//	would have found zero user presets and reported it as "you have none".
+static void
+WalkPresetFolder(FILE *fp, const char *rootZ, const char *labelZ, const char *relZ,
+				 A_long *countP, int depth)
+{
+	if (depth > 8 || *countP >= PIEFX_PRESET_MAX) { return; }
+
+	char glob[MAX_PATH];
+
+	sprintf_s(glob, sizeof(glob), "%s\\%s%s*", rootZ, relZ, relZ[0] ? "\\" : "");
+
+	WIN32_FIND_DATAA fd;
+	HANDLE h = FindFirstFileA(glob, &fd);
+
+	if (h == INVALID_HANDLE_VALUE) { return; }
+
+	do {
+		if (fd.cFileName[0] == '.') { continue; }
+
+		char rel[MAX_PATH];
+
+		if (relZ[0]) {
+			sprintf_s(rel, sizeof(rel), "%s\\%s", relZ, fd.cFileName);
+		} else {
+			strcpy_s(rel, sizeof(rel), fd.cFileName);
+		}
+
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+			WalkPresetFolder(fp, rootZ, labelZ, rel, countP, depth + 1);
+			continue;
+		}
+
+		size_t n = strlen(fd.cFileName);
+
+		if (n < 5 || _stricmp(fd.cFileName + n - 4, ".ffx")) { continue; }
+		if (*countP >= PIEFX_PRESET_MAX) { break; }
+
+		//	The NAME is the file without .ffx, and the CATEGORY is the folder
+		//	path it was found under - which is exactly how AE's own panel groups
+		//	them, and the only grouping a .ffx file carries. `relZ` is already
+		//	that folder, because this recursion descends a directory at a time.
+		//
+		//	`labelZ` is what the ROOT is called: empty for AE's own presets,
+		//	whose top-level folders are the categories people know ("Text",
+		//	"Transitions - Dissolves"), and the version folder for a user's, so
+		//	a preset saved under an older AE is visibly from there.
+		char name[MAX_PATH];
+		char cat[MAX_PATH] = { 0 };
+		char full[MAX_PATH];
+
+		strcpy_s(name, sizeof(name), fd.cFileName);
+		name[n - 4] = 0;
+
+		if (labelZ[0] && relZ[0])	{ sprintf_s(cat, sizeof(cat), "%s/%s", labelZ, relZ); }
+		else if (labelZ[0])			{ strcpy_s(cat, sizeof(cat), labelZ); }
+		else						{ strcpy_s(cat, sizeof(cat), relZ); }
+
+		for (char *q = cat; *q; q++) {
+			if (*q == '\\') { *q = '/'; }
+		}
+		sprintf_s(full, sizeof(full), "%s\\%s", rootZ, rel);
+
+		char e_name[MAX_PATH * 6];
+		char e_path[MAX_PATH * 6];
+		char e_cat[MAX_PATH * 6];
+
+		JsonEscapeInto(name, e_name, sizeof(e_name));
+		JsonEscapeInto(full, e_path, sizeof(e_path));
+		JsonEscapeInto(cat,  e_cat,  sizeof(e_cat));
+
+		fprintf(fp, "%s    { \"name\": \"%s\", \"path\": \"%s\", \"category\": \"%s\" }",
+				*countP ? ",\n" : "", e_name, e_path, e_cat);
+		(*countP)++;
+	} while (FindNextFileA(h, &fd));
+
+	FindClose(h);
+}
+
+//	<install>/Support Files/Presets, from our own module path: the .aex lives in
+//	Support Files/Plug-ins, so the presets are one folder up and one across. No
+//	registry, no guess at a drive letter, and it follows an AE installed
+//	anywhere.
+static A_Boolean
+ShippedPresetRoot(char *outZ, size_t out_max)
+{
+	char	dir[MAX_PATH] = { 0 };
+	HMODULE	self = NULL;
+
+	if (!GetModuleHandleExA(
+			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCSTR>(&ShippedPresetRoot), &self)) {
+		return FALSE;
+	}
+	if (!GetModuleFileNameA(self, dir, MAX_PATH)) { return FALSE; }
+
+	//	...\Support Files\Plug-ins\pieFX.aex -> ...\Support Files
+	for (int i = 0; i < 2; i++) {
+		char *slash = strrchr(dir, '\\');
+
+		if (!slash) { return FALSE; }
+		*slash = 0;
+	}
+	if (strcpy_s(outZ, out_max, dir) || strcat_s(outZ, out_max, "\\Presets")) { return FALSE; }
+	return (GetFileAttributesA(outZ) != INVALID_FILE_ATTRIBUTES);
+}
+
+static A_long
+WritePresets(FILE *fp)
+{
+	A_long	count = 0;
+	char	root[MAX_PATH] = { 0 };
+
+	if (ShippedPresetRoot(root, sizeof(root))) {
+		WalkPresetFolder(fp, root, "", "", &count, 0);
+		Log("  presets: %ld under %s\n", count, root);
+	} else {
+		Log("  presets: no shipped Presets folder beside the plug-in\n");
+	}
+
+	char docs[MAX_PATH] = { 0 };
+
+	if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_PERSONAL, NULL, SHGFP_TYPE_CURRENT, docs))) {
+		char glob[MAX_PATH];
+
+		//	Every "After Effects*" folder, not just the running version's. The
+		//	version folder becomes part of the category, so a preset saved under
+		//	an older AE is offered AND is visibly from there - which is better
+		//	than a mapping from AE's version number to its marketing year, a
+		//	thing that has already changed once.
+		sprintf_s(glob, sizeof(glob), "%s\\Adobe\\After Effects*", docs);
+
+		WIN32_FIND_DATAA fd;
+		HANDLE h = FindFirstFileA(glob, &fd);
+
+		if (h != INVALID_HANDLE_VALUE) {
+			do {
+				if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) { continue; }
+				if (fd.cFileName[0] == '.') { continue; }
+
+				char up[MAX_PATH];
+				char label[MAX_PATH];
+				A_long before = count;
+
+				sprintf_s(up, sizeof(up), "%s\\Adobe\\%s\\User Presets", docs, fd.cFileName);
+				if (GetFileAttributesA(up) == INVALID_FILE_ATTRIBUTES) { continue; }
+
+				//	"User Presets (After Effects 2026)" - the version is in the
+				//	category because more than one of these folders exists on
+				//	any machine that has upgraded, and a preset from the wrong
+				//	one is worth being able to see.
+				sprintf_s(label, sizeof(label), "User Presets (%s)", fd.cFileName);
+				WalkPresetFolder(fp, up, label, "", &count, 0);
+				if (count > before) {
+					Log("  presets: %ld under %s\n", count - before, up);
+				}
+			} while (FindNextFileA(h, &fd));
+			FindClose(h);
+		}
+	} else {
+		Log("  presets: could not resolve the Documents folder\n");
+	}
+	return count;
+}
+
 //	The S5A walk, ported out of the frozen spike and pointed at a file the
 //	overlay can read instead of a human-readable dump.
 //
@@ -1294,7 +1479,15 @@ WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 		walked++;
 	}
 
-	fprintf(fp, "\n  ],\n  \"walked\": %ld,\n  \"claimed\": %ld\n}\n", walked, claimed);
+	fprintf(fp, "\n  ],\n  \"presets\": [\n");
+
+	//	Presets share the file because they share the SEARCH. One file, one read,
+	//	one moment in the session when the catalogue is built - splitting them
+	//	would mean two files that can disagree about how old they are.
+	A_long presets = WritePresets(fp);
+
+	fprintf(fp, "\n  ],\n  \"walked\": %ld,\n  \"claimed\": %ld,\n  \"presets_found\": %ld\n}\n",
+			walked, claimed, presets);
 	fclose(fp);
 
 	Log("  effects: wrote %ld entries (AE claims %ld)%s -> %s\n",
@@ -1786,6 +1979,49 @@ ApplyEffectByMatchName(AEGP_SuiteHandler &suites, const char *matchZ)
 // ---------------------------------------------------------------------------
 //	the executor table
 // ---------------------------------------------------------------------------
+//	Apply an animation preset to the selected layer.
+//
+//	Through ExtendScript, unlike `effect`, because `applyPreset` is a LAYER
+//	method in the scripting DOM and has no AEGP equivalent - the same reason
+//	presets have to be found by scanning folders rather than enumerated. The
+//	undo group is opened here because a preset can add half a dozen effects and
+//	keyframes, and a user who does not like the result wants ONE undo.
+static void
+ApplyPreset(AEGP_SuiteHandler &suites, const char *pathZ)
+{
+	char fwd[PIEFX_TEXT_MAX];
+	char code[PIEFX_TEXT_MAX + 640];
+
+	strcpy_s(fwd, sizeof(fwd), pathZ);
+	for (char *p = fwd; *p; p++) {
+		if (*p == '\\') { *p = '/'; }
+	}
+
+	//	The single-layer rule is the same one the search window is gated on, and
+	//	it is restated here because this executor can also be reached from a
+	//	bound hexagon, where nothing checked it on the way in.
+	sprintf_s(code, sizeof(code),
+		"(function(){"
+		"var c=app.project.activeItem;"
+		"if(!(c&&c instanceof CompItem))return'pieFX: no comp is active';"
+		"var s=c.selectedLayers;"
+		"if(!s||s.length===0)return'pieFX: select a layer first';"
+		"if(s.length>1)return'pieFX: select a single layer';"
+		"var f=new File(\"%s\");"
+		"if(!f.exists)return'pieFX: preset not found';"
+		"app.beginUndoGroup('pieFX: Apply Preset');"
+		"try{s[0].applyPreset(f);}finally{app.endUndoGroup();}"
+		"return'ok';"
+		"})()", fwd);
+
+	S_last_result[0] = 0;
+	RunScript(suites, code, "preset");
+
+	if (0 != strcmp(S_last_result, "ok") && !strncmp(S_last_result, "pieFX: ", 7)) {
+		SendToast("error", S_last_result + 7);
+	}
+}
+
 static void
 ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 {
@@ -1883,6 +2119,10 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 
 		case PK_COPY_FRAME:
 			CopyFrameToClipboard(suites);
+			break;
+
+		case PK_PRESET:
+			ApplyPreset(suites, aP->text);
 			break;
 
 		//	NOT a silent break. A kind that reaches here is one the wire parser

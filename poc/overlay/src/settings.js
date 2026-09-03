@@ -273,7 +273,7 @@ fetch("ae-commands-2025.json")
 
 // --- inspector ------------------------------------------------------------
 const el = (id) => document.getElementById(id);
-const KINDS = ["ae-command", "script-snippet", "script-file", "effect", "builtin"];
+const KINDS = ["ae-command", "script-snippet", "script-file", "effect", "preset", "builtin"];
 const DIRNAMES = ["N", "NE", "SE", "S", "SW", "NW"];
 
 function kindOf(slot) {
@@ -417,6 +417,11 @@ el("f_kind").addEventListener("change", (e) => {
       s.action.path = old.path || "";
     } else if (k === "effect") {
       s.action.matchName = old.matchName || "";
+    } else if (k === "preset") {
+      // Same field as script-file, deliberately: both are a path to something
+      // on disk, and a user who has one in the clipboard should be able to
+      // paste it into either.
+      s.action.path = old.path || "";
     } else if (k === "builtin") {
       s.action.name = "anchor-grid";
       s.action.cell = 4;
