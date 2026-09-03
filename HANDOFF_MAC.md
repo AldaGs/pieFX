@@ -58,6 +58,7 @@ Watched working in AE, or measured by a harness against the real binaries.
 | **the overlay as a bundled `.app`** | `overlay_probe` before and after: level, alpha, bounds and z-order all unchanged; LaunchServices reports `type="UIElement"` |
 | **all four window properties, bundled** | in AE: click-through, no Dock icon, no focus theft — the three a probe cannot reach |
 | **applying a preset from the wheel** | in AE |
+| **an unsigned, QUARANTINED plug-in loads** | in AE, with the download attribute set by hand — so signing is not a gate |
 | **`ag_masterNull.jsx` from a slot** | in AE |
 | **the wheel on both displays, from the real gesture** | in AE, on a 2x and a 1x screen |
 | **launch and teardown from inside the bundle** | `fifo_test` run beside the `.app`: it picks the `.app`, connects, and the watchdog still fires |
@@ -180,9 +181,15 @@ both latent there.
 - **Distribution, the rest of it.** The bundling question is ANSWERED — the
   overlay ships as `pieFX-overlay.app` inside the plug-in and nothing measurable
   changed; see `MAC_RESULTS.md`. What is left:
-  - **Signing and notarization.** Two nested binaries, and the inner one must be
-    signed before the outer, with the outer signature staying valid over it.
-    Nothing here is signed at all yet.
+  - **Signing and notarization.** NOT a gate — measured. AE ships
+    `com.apple.security.cs.disable-library-validation`, so an ad-hoc-signed
+    plug-in loads into its hardened runtime, and a QUARANTINED plug-in was
+    tested by hand and loaded normally. Signing buys Gatekeeper's approval of
+    the downloaded container, nothing more.
+    `Mac/sign_product.sh` is written and waiting for a certificate; there are
+    none in this keychain, so **it has never been run** — read its header
+    before trusting it. Note that `codesign`, `notarytool` and `stapler` are
+    macOS-only, so this can only ever be done on a Mac.
   - **An installer.** Today it is `sudo cp -R`. A `.pkg` has to cope with AE
     being open, with several AE versions side by side, and with uninstalling.
   - `macos-private-api` is required for a transparent window and rules out the
@@ -278,6 +285,7 @@ icon/pieFX LOGO.svg         the master artwork; ICON.png is a 600px export
 icon/make_icons.sh          the icon set, recoloured to hexdraw.js's accent
 icon/render_svg.swift       SVG -> transparent PNG (qlmanage flattens; see MAC_RESULTS)
 Mac/build_product.sh        builds + installs the PRODUCT plug-in (not Xcode)
+Mac/sign_product.sh         sign + notarize + staple — WRITTEN BUT NEVER RUN
 Mac/overlay_probe.swift     window levels, bounds, z-order, focus
 Mac/span_test.swift         can one window span two displays (no)
 Mac/overlay_drive.sh        drive the overlay by hand, no plug-in

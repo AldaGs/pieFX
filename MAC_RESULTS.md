@@ -1282,6 +1282,44 @@ cannot assume anything else wrote it. The bounds are the plug-in's, since its
 reasoning is the load-bearing one: a zero would summon the wheel on every
 right-click and take AE's context menu away entirely.
 
+## Signing is a polish item, not a gate — measured
+
+Two facts, both checked rather than assumed, and together they decide how pieFX
+can be distributed.
+
+**After Effects disables library validation.** Its own signature carries the
+hardened runtime (`flags=0x10000(runtime)`, TeamIdentifier `JQ525L2MZD`) and
+these entitlements:
+
+```
+com.apple.security.cs.allow-jit
+com.apple.security.cs.allow-unsigned-executable-memory
+com.apple.security.cs.disable-library-validation
+```
+
+The third is the one that matters. A hardened-runtime process normally refuses
+to load code that is not signed by the same team, and `disable-library-validation`
+is Adobe switching that off — necessarily, or no third-party plug-in could load.
+It is why pieFX has been loading all along with nothing but the ad-hoc signature
+clang applies by default (`Signature=adhoc`, `flags=0x20002(adhoc,linker-signed)`).
+
+**A quarantined plug-in still loads.** Tested by hand: the quarantine attribute
+Safari would attach to a download was set on the installed bundle, AE was
+launched, and the wheel behaved normally. This was the open question, because
+quarantine is a separate mechanism from signature validation and its treatment
+of loaded bundles has not been consistent across macOS versions.
+
+So an unsigned pieFX works, downloaded and installed by hand, today. Signing
+buys Gatekeeper's approval of the CONTAINER a user downloads — the friction of
+right-click-Open or `xattr -dr com.apple.quarantine` — and nothing about whether
+the plug-in functions.
+
+That is worth knowing precisely because the machine this port was written on is
+borrowed. `codesign`, `notarytool` and `stapler` are macOS-only: no Mac means no
+signing at all, not merely a harder signing. Had signing been a GATE, it would
+have had to happen before the machine went back, on a $99 enrolment that takes
+days. It is not a gate, so it can wait for the next loan.
+
 ## The backstop that nearly went missing
 
 The idle hook carries a backstop for a press whose UP was never seen — a
