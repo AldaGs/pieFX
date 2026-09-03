@@ -11,14 +11,14 @@ Phase 0 (capability spikes) is complete, the POC is complete, and the product no
 runs **end to end in After Effects with nothing started by hand**: arm it from the
 Window menu, right-press and hold, and a hexagon wheel appears under the cursor
 with one level of drill-down. Releasing on a slot fires a real action — an AE menu
-command, a user's ExtendScript, an effect by match name, or the built-in anchor
-grid. **All five executor kinds are proven live from the gesture.** A settings
-window and auto-arm-on-launch are now written but **have not been watched inside
-AE** — that is the first thing the next session should do. The Effects search is no longer a mock: releasing on `Effects`
-opens a focused window with a real filter over the plug-in's own catalogue,
-and Enter applies the effect. It is proven against the offline harness and
-**has not been watched inside AE** - neither has the catalogue walk that feeds
-it, which is the one piece that can only be tested there. The tables below are the
+command, a user's ExtendScript, an effect by match name, the built-in anchor
+grid, or the current frame onto the clipboard. **All six executor kinds are
+proven live from the gesture**, and so are the settings window and
+auto-arm-on-launch. The Effects search is no longer a mock and no longer
+unproven: releasing on `Effects` opens a focused window with a real filter over
+the plug-in's own catalogue, and Enter applies the effect - **watched working in
+the user's own AE**, catalogue file and all. `Comp > Copy to Clipboard` is
+watched too, pasted out of AE into another app. The tables below are the
 honest line between what has been watched working and what has merely been
 written.
 
@@ -56,6 +56,10 @@ the offline harness (`poc/pipe_test.ps1`).
 | The settings window opens IN FRONT of AE | **live** — after the `raise()` fix |
 | A settings file changes what the wheel fires | harness — a rebound `S` fired the rebound command |
 | The whole harness still passes after the frontend was split into modules | harness |
+| The plug-in's walk writes `effects.json` inside AE | **live** |
+| The Effects search: window opens in front of AE, filters, Enter applies | **live** — the user's own session |
+| `layerCount` counts LAYERS, not selected things | **live** — `layers=1` with a layer's properties selected |
+| `copy-frame`: the frame reaches the Windows clipboard and pastes | **live** — pasted out of AE |
 | `Comp > Copy to Clipboard` sends the right builtin down the pipe | harness — the clipboard half is native and needs AE |
 | Releasing on `Effects` opens the search window, and nothing crosses the pipe | harness — a real window, raised, and the overlay still answers `quit` |
 | The search window filters, ranks and keyboard-navigates a catalogue | harness fixture + browser preview |
@@ -111,23 +115,33 @@ were "code, not facts" for too long.
   it now names the kind and toasts. Nothing offline could have caught it (the
   harness ends at the pipe) but **probe 6 of the executor self-test would have**,
   and it existed - it was written in the same commit and never run.
-- **`copy-frame` is otherwise UNWATCHED IN AE.** `Comp > Copy to Clipboard`
+- **`copy-frame` is watched live and pastes.** `Comp > Copy to Clipboard`
   writes the frame to `%TEMP%\pieFX_clipboard_frame.png` through
   `saveFrameToPng` at 1:1, decodes it with WIC and puts three formats on the
-  clipboard ("PNG", CF_DIBV5, CF_DIB - see SETTINGS.md for why three). What the
-  harness proves is only that the gesture sends the right message; the frame,
-  the decode, the clipboard and the `Copied Frame 1234 from <Comp>` toast are
-  all native. **pieFX Self-Test (Executors)** now fires it as probe 6, so the
-  check is "run the self-test, then paste somewhere".
-- **The Effects search is built and UNWATCHED IN AE.** What the harness proves:
-  a release on `Effects` opens the search window (raised, and the overlay still
-  answers `quit` afterwards) and sends nothing down the pipe, and the window
-  filters, ranks and keyboard-navigates a fixture catalogue. What only AE can
-  prove: that the plug-in's walk actually writes `effects.json` there, that the
-  window comes to the front of AE rather than behind it, and that Enter applies
-  the effect to the selected layers. The pieces are separately proven — the walk
-  is S5's, ported; the raise is the settings window's; the apply is the `effect`
-  kind that put Gaussian Blur on a layer — but the assembly is not.
+  clipboard ("PNG", CF_DIBV5, CF_DIB - see SETTINGS.md for why three). Watched:
+  the toast, the log, and a successful paste out of AE.
+- **Its second failure was a check in the wrong place, and that is the reusable
+  part.** The script asked `f.exists` the instant `saveFrameToPng` returned and
+  reported "AE wrote no frame" - a question that cannot tell "AE failed" from
+  "the bytes are not on disk yet", so the only answer it ever gave was the one
+  that stopped everything. The existence check now belongs to the side that has
+  to open the file anyway: the plug-in deletes the previous copy first, then
+  waits for the same non-zero size twice in a row. **A test whose failure mode
+  is indistinguishable from the thing it is testing for is not a test** - the
+  same shape as the settings-window bug that passed against the pre-fix binary.
+- **What is NOT proven about it: the frame NUMBER.** The one watched run
+  reported `Frame 0` and there is no record of where the playhead was, so the
+  number has been seen printing, not seen being right. The arithmetic is
+  `Math.round(c.time/c.frameDuration) + displayStartFrame`; the check worth
+  making is one copy parked somewhere that is not frame 0, and one in a comp
+  whose first frame is not 0.
+- **The Effects search works end to end in AE**, watched by the user: the
+  catalogue file appears, the window comes to the front, the filter finds
+  effects and Enter applies one. The multi-layer refusal and the
+  clear-on-dismiss both came out of that session.
+- Still unmeasured about it: whether `walked` equals `claimed` on a real
+  machine (the file records both; nobody has read them back), and how the
+  window behaves on a second monitor - it is `.center()`ed on the primary.
 - Per-slot context gating is **done and watched live**: `requires` is in the
   schema, the plug-in sends `hasComp` alongside `hasSelection`, and the greying
   reads correctly with nothing selected.
@@ -374,9 +388,13 @@ rather than "nothing came down the pipe" — silence was also what the mock did.
 
 ### What is left
 
-1. **Watch it in AE.** In order: does `%APPDATA%\pieFX\effects.json` appear
-   after arming, and does `walked` equal `claimed`? Does the window come to the
-   FRONT of AE? Does Enter apply to the selected layers?
+The three questions this list opened with - does the catalogue file appear, does
+the window come to the front, does Enter apply - are all answered YES, live.
+What is left is smaller and mostly unmeasured rather than unbuilt.
+
+1. **`walked` vs `claimed` has never been read back.** The file records both,
+   and a disagreement is the only sign that the enumeration is incomplete. One
+   look at `%APPDATA%\pieFX\effects.json` closes it.
 2. **Recents are unproven end to end** — written by the window, read by the
    wheel, and the panel drawing them has never been seen with anything in it.
 3. **A recent is not fireable from the wheel.** The panel lists them; it does
