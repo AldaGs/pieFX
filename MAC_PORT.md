@@ -1,5 +1,9 @@
 # pieFX — the macOS port
 
+> **Picking this up cold?** Read `HANDOFF_MAC.md` first. This page is the PLAN,
+> with each step's outcome folded back into it; the handoff is the state, the
+> next task, and the traps already paid for once.
+
 What it would take, written from the Windows product as it stands and from
 `MAC_RESULTS.md`, which is the record of the one macOS bench session. Read that
 file first: it answers the research questions, and this one is only about the
@@ -31,30 +35,34 @@ From the bench, on Apple silicon, macOS 26.1, AE 2026:
 Every one of those is a question that could have ended the port. None of them
 did.
 
-## The one real unknown: the Tauri overlay
+## The one real unknown: the Tauri overlay — ANSWERED
 
-**S3 proved a hand-built `NSWindow` can sit above AE at
-`NSStatusWindowLevel`. It did not prove Tauri can.** The entire product UI lives
-in that process — the wheel, the settings window, the search window — and it has
-never been launched on a Mac.
+**All four properties hold. See the step 1 section of `MAC_RESULTS.md` for the
+measurements.** The overlay strategy survives on macOS. Nothing below is wasted
+work, and step 1 is done.
 
-Four separate properties have to hold, and only the first is obviously portable:
+It cost one design change and one prerequisite for the plug-in, both of which
+this page had no way to anticipate:
 
-1. a transparent, borderless window,
-2. **click-through** (`set_ignore_cursor_events`),
-3. spanning **all displays**, positioned in one virtual-desktop coordinate space,
-4. **above After Effects**, without stealing focus from it.
+- **The window does not span the displays — it MOVES to the one the cursor is
+  on.** "Displays have separate Spaces" is on by default and clips a window to
+  a single screen. The window server ACCEPTS a spanning frame and then renders
+  it on one screen, so this fails silently in the direction of looking fine.
+- **macOS coordinates are POINTS, top-left origin**, not physical px. That is
+  what `NSEvent` gives the plug-in, and the only space that is coherent across
+  a mixed-DPI desktop. The plug-in must send points and convert nothing. This
+  is settled BEFORE the transport is written, and the table below assumes it.
 
-And a fifth that is known NOT to be portable: `raise()` in `lib.rs` is the
-`AttachThreadInput` dance, `#[cfg(windows)]` and Windows-only by nature. macOS
-has the mirror-image problem with a different answer —
-`NSApp activateIgnoringOtherApps:` — and its own rules about App Nap and Spaces
-on top. The settings and search windows both depend on it.
+Two smaller ones, also in `MAC_RESULTS.md`: transparency needs Tauri's
+`macos-private-api` feature (which forecloses the App Store), and the overlay
+had to be made an **accessory** app — `"focus": false` governs the window,
+while what was stealing the foreground from AE was the application.
 
-**Measure this before writing anything else.** Build the existing Tauri app on
-the Mac, run it with no plug-in at all, and see whether a click-through window
-sits over AE across two displays. If it does not, the overlay strategy needs
-rethinking on that platform and every other task on this page is wasted work.
+The fifth property, the one this page called known-NOT-portable, went exactly as
+predicted: `raise()` now calls `NSApp activateIgnoringOtherApps:` alongside the
+`#[cfg(windows)]` `AttachThreadInput` dance. An accessory app has to ask, which
+is the mirror of Windows making you borrow the foreground thread's input queue.
+Confirmed by hand — the settings window takes the first keystroke.
 
 ## The Windows-only surface in the plug-in
 
@@ -64,13 +72,14 @@ self-tests — is portable untouched. What is not:
 
 | Windows | macOS replacement | State |
 |---|---|---|
-| `CreateNamedPipe` / `ConnectNamedPipe` (7 calls) | `mkfifo` pair, or Unix domain sockets | to write |
-| `SetWindowsHookEx(WH_MOUSE)` | `addLocalMonitorForEventsMatchingMask` | **written and proven** in `pieFXMac.mm` |
-| `SetTimer` / `KillTimer` | `dispatch_after` on the main queue | **written and proven** |
-| `SendInput` replay | `[NSApp postEvent:atStart:NO]`, DOWN then UP | **written and proven** |
-| `CreateProcess` + job object + `--owner-pid` watchdog | `NSTask` / `posix_spawn`, `kqueue` on the parent pid | to write; the `quit` MESSAGE path is already portable |
+| `CreateNamedPipe` / `ConnectNamedPipe` (7 calls) | `mkfifo` pair, or Unix domain sockets | **written and proven** in `poc/native/mac/pieFX_fifo.cpp`, against the real overlay with no AE |
+| `SetWindowsHookEx(WH_MOUSE)` | `addLocalMonitorForEventsMatchingMask` | proven in `pieFXMac.mm`; **now a product module**, `poc/native/mac/pieFX_gesture.mm` |
+| `SetTimer` / `KillTimer` | `dispatch_after` + a generation counter (blocks cannot be cancelled) | **ported**, same module |
+| `SendInput` replay | `[NSApp postEvent:atStart:NO]`, DOWN then UP | **ported**, same module |
+| `CreateProcess` + job object + `--owner-pid` watchdog | `fork`/`exec` into its own process GROUP, plus `kqueue` `NOTE_EXIT` on the owner pid | **written and proven** in `poc/native/mac/pieFX_launch.cpp`; the job object splits in two, and neither half covers both cases |
 | Clipboard: `OpenClipboard` + WIC + three formats (~230 lines) | `NSPasteboard` + `NSPasteboardTypePNG` | to write, and it gets SMALLER |
-| `GetTempPath`, `%APPDATA%` | `$TMPDIR`, `~/Library/Application Support/pieFX` | to write, both sides |
+| `GetTempPath`, `%APPDATA%` | `$TMPDIR`, `~/Library/Application Support/pieFX` | to write; the overlay's `dlog` already falls back to `TMPDIR`, the rest of the overlay's `APPDATA` paths do not |
+| Screen coordinates in physical px | **points, top-left origin**, straight from `NSEvent` | settled by step 1; the overlay expects points and divides by nothing |
 
 The clipboard is the one place the port makes the code shorter. Three formats
 exist on Windows because `CF_DIB` cannot express alpha; `NSPasteboard` takes the
@@ -111,19 +120,41 @@ Both were noted as harmless for a spike. Neither is harmless for the product.
    extended ASCII on the bench's Spanish AE. Those strings now go straight into
    `effects.json` and onto the search window, where they will be mojibake or
    rejected outright — `JSON.parse` on invalid UTF-8 is not a graceful failure.
-   **The Unicode accessors are a prerequisite for the search on a localised
-   Mac**, not a polish item.
-2. **Menu command names are localised too.** The entire `ae-command` table was
-   resolved against an English AE, and `findMenuCommandId("Add to Render
-   Queue")` returns 0 on a Spanish one. The id fallback would carry the whole
-   wheel — which is the exact situation the name-first design exists to avoid,
-   because an id is the thing that silently rots into some other command. This
-   is its own investigation, and it is probably bigger than it looks.
+
+   **CORRECTION.** This page used to call the Unicode accessors a prerequisite.
+   **There are none.** `AEGP_EffectSuite5` is the newest suite and both calls
+   still take `A_char *`; the SDK offers no UTF-16 variant for an effect's name
+   or category. So the conversion is OURS to do, at the one point those strings
+   are written out — and it is not a macOS job: the identical bug is latent on
+   Windows under any non-Latin locale.
+
+   The one string that needs no conversion is `AEGP_GetEffectMatchName`, which
+   the header marks `UTF8!!` and which is a stable, non-localised identifier.
+   That makes it the right fallback when a name will not convert, and the right
+   key for anything that has to be remembered.
+2. **Menu command names are localised too — MEASURED, and smaller than feared.**
+   `findMenuCommandId("Add to Render Queue")` does return 0 on a Spanish AE, so
+   the id fallback does carry the whole wheel. But the ids are **not**
+   localised: on es_ES every Spanish spelling resolved to exactly the id pieFX
+   already ships. An id is stable across LANGUAGES and fragile only across
+   VERSIONS.
+
+   That makes id rot a per-RELEASE question for whoever has an English install,
+   rather than a per-user runtime one — which is fortunate, because at runtime
+   on a localised AE it cannot be answered at all: `AEGP_CommandSuite1` has no
+   way to ask what a command is called.
+
+   It also exposed a real bug. The executor described the id fallback in a
+   comment and never implemented it, so every ae-command slot failed with a
+   toast on a localised AE. Fixed; see `MAC_RESULTS.md`.
 
 ## The thing that would otherwise get skipped
 
-`poc/pipe_test.ps1` is PowerShell driving .NET named pipes. **There is no Mac
-equivalent, and the Mac needs one first, not last.**
+`poc/pipe_test.ps1` is PowerShell driving .NET named pipes. **There is now a Mac
+equivalent — `poc/pipe_test.py` — and it was written first, not last.** It
+passes end to end against the overlay with no plug-in and no AE: same
+assertions, same strokes, same order, so a divergence between the platforms
+shows up as a divergence in the test.
 
 Every transport bug this project has had — the freeze, the startup race, the
 swapped `--tx`/`--rx` flags — was caught by that harness rather than by After
@@ -132,20 +163,64 @@ category of bug it catches. Writing the FIFO harness before the FIFO transport
 is the difference between finding those in a shell and finding them in a
 session with AE open.
 
+It has already earned it once, on something other than transport: the same
+stroke selected anchor cell 4 on the Retina and cell 0 on the 1x display, which
+is what the mixed-DPI coordinate bug looked like from the outside.
+
 ## Suggested order
 
-1. **The Tauri overlay on macOS**: click-through, all displays, above AE,
-   without taking focus. A measurement, not a build. Everything else is
-   conditional on it.
-2. **The offline harness**, driving FIFOs, before there is anything to drive.
-3. **Transport** in the plug-in, then **launch and lifetime**.
-4. **The gesture**, moved out of the frozen spike into the product plug-in. This
-   is proven code changing address, not new work.
-5. **Paths, clipboard, Unicode accessors.**
-6. **Localisation of menu ids** — its own investigation.
+1. ~~**The Tauri overlay on macOS**~~ — **DONE.** All four properties measured
+   and holding; see `MAC_RESULTS.md`. The design changed once: it moves between
+   screens instead of spanning them.
+2. ~~**The offline harness**, driving FIFOs~~ — **DONE**, `poc/pipe_test.py`,
+   written before the transport and passing.
+3. ~~**Transport** in the plug-in, then **launch and lifetime**~~ — **DONE**,
+   both halves, proven offline in `poc/native/mac/fifo_test.cpp` (19
+   assertions, no AE). Send POINTS, top-left origin, from `NSEvent`; the
+   overlay converts nothing.
+4. ~~**The gesture**~~ — **DONE**, module written
+   (`poc/native/mac/pieFX_gesture.mm`), armed and exercised in a host that is
+   not AE. What remains is not the gesture: it is the macOS **target** for the
+   product plug-in. Everything built so far compiles standalone, and
+   `Mac/pieFXMac.xcodeproj` still builds the Phase 0 spike. **That target now
+   exists too** — `Mac/build_product.sh` builds a loadable `pieFX.plugin` from
+   `poc/native/pieFX.cpp` plus the macOS modules. It has not been loaded by AE
+   yet.
+5. **Paths, clipboard, Unicode accessors.** — **THREE OF FOUR DONE.** See
+   `MAC_RESULTS.md` for each.
+   - ~~The `%APPDATA%` agreement~~ — taken on both sides at once:
+     `~/Library/Application Support/pieFX/`, `PieFX_ConfigPath` in the plug-in
+     and `piefx_dir()` in the overlay, with `PIEFX_PATH_SEP` keeping the leaf
+     names spelled once. Checked end to end with the overlay started on no
+     arguments at all, which is the only check that could catch a wrong
+     default — every harness in this project passes `--settings` explicitly.
+   - ~~`ReadSettings`~~ and ~~`WriteEffectCatalogue`~~ — written, and now
+     SINGLE-bodied on both platforms. The `#ifdef` had been in the wrong
+     place: only the path differed.
+   - ~~The encoding~~ — `PieFX_LegacyToUtf8`, both platforms. It tries UTF-8
+     FIRST, because the system-encoding decode cannot fail and therefore
+     cannot be checked; the match name is the fallback.
+   - ~~The clipboard~~ — `NSPasteboard`, one format instead of three, alpha
+     asserted by harness.
+   - ~~`WritePresets`~~ — done last, as planned, and cheaper than feared: the
+     install's SHAPE is the same on both platforms (Presets is a sibling of
+     Plug-ins), so the walk-up rule needed no variant, only more ancestors for
+     the `.plugin` bundle. The seam is `opendir` vs `FindFirstFile` and
+     nothing above it. 621 shipped presets found against the real install.
+     It also turned up a defect nobody was looking for: 136 of AE's preset
+     names are stored DECOMPOSED, and the search matched on a plain substring,
+     so those presets could not be found by typing their own names.
 
-Steps 3 to 5 are mechanical. Step 1 can still change the design. Step 6 is the
-one most likely to be bigger than it looks.
+   **Step 5 is complete. Nothing is stubbed on macOS.**
+6. ~~**Localisation of menu ids**~~ — **investigated**, on a Spanish AE. The
+   ids are language-independent and the fallback now works. ~~what remains is
+   the effect-name encoding~~ — that is done too, in step 5.
+
+Steps 3 to 5 were mechanical, with one exception worth recording: step 5 was
+not a set of four small fixes but ONE two-sided decision with three fixes
+downstream of it, which is why the plan said to take it whole. Step 1 DID
+change the design, in the one way it was most likely to. Step 6 turned out
+smaller than feared — the ids do not vary by language.
 
 ## What this page does NOT cover
 
@@ -154,3 +229,15 @@ notarization and quarantine, and none of that has been looked at. It does not
 block development — a locally built, locally signed binary runs fine on the
 machine that built it — but it is not nothing, and it is not in the estimate
 above.
+
+Step 1 added one fact to it: the overlay cannot be transparent on macOS without
+Tauri's `macos-private-api` feature, which rules out the App Store. That is no
+loss for a helper binary shipped beside a plug-in, but it is a door now closed,
+and better known here than discovered at the end.
+
+It also added a question that is not answered: the overlay currently runs as a
+bare executable, not a bundled `.app`. That is what made it a regular,
+activatable application in the first place, and the accessory activation policy
+is set in code rather than by an `LSUIElement` key in a bundle. Whether the
+shipped form is a bundle — and whether bundling changes any of the four
+properties measured here — has not been tested.

@@ -25,6 +25,12 @@
 #ifdef AE_OS_WIN
 	#define VC_EXTRALEAN
 	#include <windows.h>
+#else
+	//	The Win32 VOCABULARY only — BOOL, MAX_PATH, sprintf_s and friends —
+	//	so the ~300 lines that merely SPEAK Windows stay byte-identical across
+	//	the two platforms. The five regions that genuinely ARE Windows get
+	//	modules with argued implementations instead; see poc/native/mac.
+	#include "mac/pieFX_compat.h"
 #endif
 
 #include "entry.h"
@@ -128,11 +134,25 @@
 //	before the overlay is involved at all.
 #define PIEFX_HOLD_MS		200
 
+//	The separator, so the two REL names below can be written ONCE. They name
+//	files the OVERLAY also opens, and the overlay builds its half of the path
+//	from the same two pieces (see `piefx_dir` in overlay/src-tauri/src/lib.rs);
+//	a path spelled twice is a path that can be spelled two ways.
+#ifdef AE_OS_WIN
+	#define PIEFX_PATH_SEP	"\\"
+#else
+	#define PIEFX_PATH_SEP	"/"
+#endif
+
 //	Where the settings the overlay writes are read back from. The plug-in reads
 //	exactly two fields out of it (`armOnLaunch` and `holdMs`) because those are
 //	the two that have to be honoured BEFORE the overlay exists. Everything else
 //	in the file belongs to the overlay, which owns the slot tree.
-#define PIEFX_SETTINGS_REL	"pieFX\\settings.json"
+//
+//	Relative to %APPDATA% on Windows and to ~/Library/Application Support here;
+//	both are "the per-user place an application keeps state a user does not
+//	browse". See mac/pieFX_paths.h for why that is the macOS answer.
+#define PIEFX_SETTINGS_REL	"pieFX" PIEFX_PATH_SEP "settings.json"
 
 //	Where the installed-effects catalogue is dropped for the overlay to read.
 //	The plug-in owns the AEGP walk and the overlay owns the search UI, so the
@@ -140,7 +160,7 @@
 //	survives a disarm, and the overlay reads it the way it reads any other file
 //	it did not write. Written ONCE per session - 519 entries is not free, and
 //	the installed set does not change while AE is running.
-#define PIEFX_EFFECTS_REL	"pieFX\\effects.json"
+#define PIEFX_EFFECTS_REL	"pieFX" PIEFX_PATH_SEP "effects.json"
 
 //	Wheel geometry, in screen px. Used only by the legacy 3x3 POC path; the
 //	hexagon wheel does its hit-testing overlay-side (it owns the geometry it

@@ -37,7 +37,7 @@ const {
 // pixels between the dead zone and the arming radius, so a category's DEFAULT
 // action is no longer reachable by flicking to it and letting go. Under
 // "distance" a flick into a category lands on the child in that direction.
-// "center" and "exit" still reach defaults the old way.
+// "center" still reaches defaults the old way.
 const ARM_DIST = R;
 
 // The wheel's highlight colour. A slot may override it; see `accent` in
@@ -125,7 +125,6 @@ const S = {
   parent: null,
   level: 1,
   armed: true,
-  entrySector: -1,
   hot: -1,
   // Read from DEFAULTS rather than repeated as a literal - a second copy of the
   // shipping default is a second thing to forget to change, and the browser
@@ -427,8 +426,7 @@ function draw() {
         // only ONE of them is permanent. Drawing them alike is what made the
         // wheel look like it was refusing an action it would happily perform.
         const cannot = !isLive(node);
-        const notYet =
-          !cannot && (!S.armed || (S.armMode === "exit" && i === S.entrySector));
+        const notYet = !cannot && !S.armed;
         const mode = cannot ? "dead" : notYet ? "pending" : S.hot === i ? "hot" : "idle";
         drawHex(x, y, node, mode, undefined, ACCENT);
       }
@@ -440,9 +438,7 @@ function draw() {
         S.parent && !S.armed
           ? S.armMode === "distance"
             ? "keep going to pick one"
-            : S.armMode === "center"
-            ? "back through the centre to pick one"
-            : ""
+            : "back through the centre to pick one"
           : "";
       const missing = waiting
         ? waiting
@@ -559,18 +555,20 @@ function summon(x, y, ctxMsg) {
   S.parent = null;
   S.level = 1;
   S.armed = true;
-  S.entrySector = -1;
   S.hot = -1;
   S.visible = true;
   S.t0 = Date.now();
 }
 
-function drillInto(node, fromSector) {
+function drillInto(node) {
   S.parent = node;
   S.node = node;
   S.level = 2;
-  S.entrySector = fromSector;
-  S.armed = S.armMode === "exit";
+  // Never armed on entry. Both surviving modes ask the stroke to do something
+  // before a child can be picked - travel, or come back through the middle -
+  // and that pause is what stops a flick from firing a grandchild it never
+  // aimed at.
+  S.armed = false;
   S.hot = -1;
 }
 
@@ -602,7 +600,7 @@ function move(sx, sy) {
     // A category with nothing live inside it is not worth drilling into: the
     // level-2 ring would be six dead hexagons and the way out is the centre.
     if (node && (node.kind === "ring" || node.kind === "widget") && isLive(node))
-      drillInto(node, sec);
+      drillInto(node);
   }
 
   // "distance" is CONTINUOUS, unlike the other two: cross ARM_DIST and the
@@ -611,10 +609,7 @@ function move(sx, sy) {
   // which is what makes it readable without instructions.
   if (S.level === 2 && S.node.widget !== "anchor") {
     if (S.armMode === "distance") S.armed = dist > ARM_DIST;
-    else if (!S.armed) {
-      if (S.armMode === "center" && sec === -1) S.armed = true;
-      if (S.armMode === "exit" && sec !== S.entrySector && sec !== -1) S.armed = true;
-    }
+    else if (!S.armed && sec === -1) S.armed = true;		// "center"
   }
 
   // A widget hit-tests for itself - the anchor grid's cells are not sectors -
@@ -660,12 +655,11 @@ function release() {
       label = S.parent.label;
     }
   } else if (S.armed && S.hot >= 0) {
-    const inertSlot = S.armMode === "exit" && S.hot === S.entrySector;
     const node = (S.node.children || [])[S.hot];
-    if (node && node.kind === "verb" && !inertSlot && canFire(node)) {
+    if (node && node.kind === "verb" && canFire(node)) {
       action = node.action;
       label = (S.parent ? S.parent.label + " → " : "") + node.label;
-    } else if (node && node.kind === "verb" && !inertSlot && !isLive(node)) {
+    } else if (node && node.kind === "verb" && !isLive(node)) {
       unavailable = node;
     }
   } else if (!S.armed && S.parent && S.hot >= 0) {
@@ -700,12 +694,25 @@ function release() {
 }
 
 // --- input ----------------------------------------------------------------
+// window-local = (screen - origin), then a unit conversion that differs by
+// platform. The Rust side decides which applies; nothing is sniffed here.
+//
+//   Windows  physical screen px, and the window spans the whole virtual
+//            desktop, so divide by devicePixelRatio to reach the CSS px the
+//            canvas draws in. The origin is fixed for the session.
+//   macOS    POINTS — what NSEvent gives the plug-in, and the only space that
+//            is coherent across a mixed-DPI desktop. CSS px ARE points, so
+//            there is nothing to divide. The origin CHANGES per summon:
+//            macOS will not render one window across two displays, so the
+//            overlay moves to the cursor's screen and sends the new origin
+//            along with the summon.
 let originX = 0;
 let originY = 0;
+let useDpr = true;
 
 function toLocal(x, y) {
-  const dpr = window.devicePixelRatio || 1;
-  return [(x - originX) / dpr, (y - originY) / dpr];
+  const d = useDpr ? window.devicePixelRatio || 1 : 1;
+  return [(x - originX) / d, (y - originY) / d];
 }
 
 if (window.__TAURI__ && window.__TAURI__.event) {
@@ -748,7 +755,9 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     .then((o) => {
       originX = o[0];
       originY = o[1];
-      say("origin " + originX + "," + originY + " dpr=" + window.devicePixelRatio);
+      if (typeof o[2] === "boolean") useDpr = o[2];
+      say("origin " + originX + "," + originY + " dpr=" + window.devicePixelRatio +
+          " useDpr=" + useDpr);
     })
     .catch((e) => say("origin FAILED " + e));
 
@@ -761,6 +770,13 @@ if (window.__TAURI__ && window.__TAURI__.event) {
         return;
       }
       if (m.type === "summon") {
+        // macOS sends the origin WITH the summon: the window has just moved to
+        // the cursor's screen, so the origin fetched at startup is stale.
+        // Absent on Windows, where it never changes.
+        if (typeof m.originX === "number" && typeof m.originY === "number") {
+          originX = m.originX;
+          originY = m.originY;
+        }
         const l = toLocal(m.x, m.y);
         say(
           "summon screen=" + m.x + "," + m.y + " local=" + l[0] + "," + l[1] +
@@ -821,7 +837,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
   });
   addEventListener("keydown", (e) => {
     if (e.key === "m" || e.key === "M")
-      S.armMode = S.armMode === "center" ? "exit" : "center";
+      S.armMode = S.armMode === "center" ? "distance" : "center";
     // Fake the AE context so the `requires` greying is testable with no AE.
     if (e.key === "s" || e.key === "S") CTX.hasSelection = !CTX.hasSelection;
     if (e.key === "c" || e.key === "C") {

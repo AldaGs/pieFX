@@ -25,6 +25,19 @@
 
 #include "pieFX.h"
 
+#ifndef AE_OS_WIN
+	//	The regions that genuinely ARE Windows, in their macOS form. Each is
+	//	proven on its own OUTSIDE After Effects by the harnesses in
+	//	poc/native/mac, which is why they can be relied on here before this
+	//	file has ever been loaded by AE at all.
+	#include "mac/pieFX_fifo.h"
+	#include "mac/pieFX_launch.h"
+	#include "mac/pieFX_gesture.h"
+	#include "mac/pieFX_paths.h"
+	#include "mac/pieFX_text.h"
+	#include "mac/pieFX_clipboard.h"
+#endif
+
 // ---------------------------------------------------------------------------
 //	globals
 // ---------------------------------------------------------------------------
@@ -53,6 +66,12 @@ static void			ReadSettings(void);
 static A_Boolean	Arm(AEGP_SuiteHandler &suites, A_Boolean announce);
 
 //	gesture state (from the S2D spike)
+//
+//	The HOOK and the TIMER are Windows objects and the state machine that uses
+//	them lives in MouseProc below. On macOS both, and the state machine, belong
+//	to poc/native/mac/pieFX_gesture.mm — a local NSEvent monitor and a
+//	dispatch_after — so none of this is declared there.
+#ifdef AE_OS_WIN
 static HHOOK			S_mouse_hook	= NULL;
 static UINT_PTR			S_hold_timer	= 0;
 static DWORD			S_rdown_tick	= 0;
@@ -60,12 +79,15 @@ static POINT			S_rdown_pt		= { 0, 0 };
 static A_Boolean		S_rdownB		= FALSE;
 static A_Boolean		S_hold_firedB	= FALSE;
 static int				S_replay_pending = 0;
+#endif
 
 //	summon session. No cell here: the overlay owns the wheel geometry and does
 //	its own hit-testing, so the native side only reports where the cursor is.
 static LONG				S_summon_cx		= 0;
 static LONG				S_summon_cy		= 0;
+#ifdef AE_OS_WIN
 static POINT			S_last_sent		= { 0, 0 };
+#endif
 
 //	selection context, refreshed in IdleHook so the summon (which runs inside the
 //	mouse hook, where AEGP calls would be reentrant) can read a cached value.
@@ -113,6 +135,12 @@ static int				S_q_tail		= 0;
 static char				S_tx_name[128]	= { 0 };
 static char				S_rx_name[128]	= { 0 };
 
+//	The pipe HANDLES, the job object and the critical section are all Windows
+//	objects with no macOS counterpart to declare here: the FIFO server owns its
+//	own descriptors (poc/native/mac/pieFX_fifo.cpp) and the launcher owns the
+//	child pid and its process group (pieFX_launch.cpp). What survives on both
+//	sides is the NAMES and the connected flag, which the portable code reads.
+#ifdef AE_OS_WIN
 static HANDLE			S_overlay_proc	= NULL;
 //	Kept open for the life of the process ON PURPOSE. The job is configured to
 //	kill everything in it when its last handle closes, and process exit closes
@@ -125,6 +153,10 @@ static HANDLE			S_pipe_thread	= NULL;
 static HANDLE			S_pipe_dead_evt	= NULL;	// UI -> bg: this connection broke
 static HANDLE			S_pipe_stop_evt	= NULL;	// UI -> bg: shut down
 static A_Boolean		S_pipe_connected = FALSE;
+#endif	// AE_OS_WIN
+
+//	Outside the guard: this also serialises the ACTION QUEUE, which is written
+//	on the transport thread and drained on AE's UI thread on both platforms.
 static CRITICAL_SECTION	S_pipe_cs;
 static A_Boolean		S_pipe_cs_ready	= FALSE;
 
@@ -292,6 +324,7 @@ static const char *S_anchor_script_fmt =
 	"       + (skipped ? ', ' + skipped + ' skipped' : '');"
 	"})()";
 
+#ifdef AE_OS_WIN
 // ---------------------------------------------------------------------------
 //	pipe: write side (UI thread)
 // ---------------------------------------------------------------------------
@@ -345,12 +378,30 @@ PipeWrite(const char *jsonZ)
 	LeaveCriticalSection(&S_pipe_cs);
 }
 
+#else	// AE_OS_WIN
+
+//	macOS: the same guarantee, less machinery. The fd is already O_NONBLOCK, so
+//	a full pipe returns EAGAIN instead of parking and poll() supplies the
+//	deadline — see PieFX_PipeWrite. Bounded because this runs on AE's UI
+//	thread, which is the fault b9a73eb fixed on the Windows side.
+static void
+PipeWrite(const char *jsonZ)
+{
+	PieFX_PipeWrite(jsonZ);
+}
+
+#endif	// AE_OS_WIN
+
+
 static void SendSummon(LONG x, LONG y, A_Boolean hasSel, A_Boolean hasComp, A_long layers)
 {
 	char m[224];
 	sprintf_s(m, sizeof(m),
 		"{\"type\":\"summon\",\"x\":%ld,\"y\":%ld,\"hasSelection\":%s,\"hasComp\":%s,\"layerCount\":%ld}\n",
-		x, y, hasSel ? "true" : "false", hasComp ? "true" : "false", layers);
+		//	(long) casts: A_long is 32-bit and %ld is 64-bit on arm64. See
+		//	MAC_RESULTS.md — this is Phase 0's third bug, in new code.
+		(long)x, (long)y, hasSel ? "true" : "false",
+		hasComp ? "true" : "false", (long)layers);
 	PipeWrite(m);
 }
 //	Raw position only. The overlay owns the wheel geometry and hit-tests for
@@ -623,6 +674,27 @@ HandleOverlayLine(const char *lineZ)
 	QueuePush(&a);
 }
 
+#ifndef AE_OS_WIN
+// ---------------------------------------------------------------------------
+//	bridges into the macOS modules
+// ---------------------------------------------------------------------------
+//	The modules are deliberately free of AEGP and of this file's globals, so
+//	they can be built and proven standalone, outside After Effects. These two
+//	functions are the entire coupling between them and the plug-in.
+static void
+PieFXLogBridge(const char *msg, void *)
+{
+	Log("%s", msg);
+}
+
+static void
+PieFXOverlayLineBridge(const char *line, void *)
+{
+	HandleOverlayLine(line);
+}
+#endif	// !AE_OS_WIN
+
+#ifdef AE_OS_WIN
 // ---------------------------------------------------------------------------
 //	pipe: server thread (accept + read + re-accept)
 // ---------------------------------------------------------------------------
@@ -842,6 +914,36 @@ StopPipeServer(void)
 	S_pipe_rx	= INVALID_HANDLE_VALUE;
 }
 
+#else	// AE_OS_WIN
+
+// ---------------------------------------------------------------------------
+//	the transport, macOS
+// ---------------------------------------------------------------------------
+//	poc/native/mac/pieFX_fifo.cpp. A mkfifo pair rather than a named-pipe
+//	server, which keeps the overlay's end unchanged — it opens both with a
+//	plain File::open on a path. What differs is open() semantics and SIGPIPE,
+//	and both are argued at their call sites there.
+static void
+StartPipeServer(void)
+{
+	if (!PieFX_StartPipeServer(S_tx_name, sizeof(S_tx_name),
+							   S_rx_name, sizeof(S_rx_name),
+							   PieFXOverlayLineBridge, NULL,
+							   PieFXLogBridge, NULL)) {
+		Log("  pipe: server would not start\n");
+	}
+}
+
+static void
+StopPipeServer(void)
+{
+	PieFX_StopPipeServer();
+}
+
+#endif	// AE_OS_WIN
+
+
+#ifdef AE_OS_WIN
 // ---------------------------------------------------------------------------
 //	launch the overlay (best-effort; it retries connecting on its own)
 // ---------------------------------------------------------------------------
@@ -942,6 +1044,22 @@ LaunchOverlay(void)
 	}
 }
 
+#else	// AE_OS_WIN
+
+//	macOS: poc/native/mac/pieFX_launch.cpp. The Windows job object splits in
+//	two here — the process GROUP covers a deliberate teardown and takes the
+//	WebKit children with it, --owner-pid covers AE crashing — and neither half
+//	covers both cases. See MAC_RESULTS.md.
+static void
+LaunchOverlay(void)
+{
+	PieFX_LaunchOverlay(S_tx_name, S_rx_name, 0, PieFXLogBridge, NULL);
+}
+
+#endif	// AE_OS_WIN
+
+
+#ifdef AE_OS_WIN
 // ---------------------------------------------------------------------------
 //	the gesture engine (reused from S2D). Swallow is ALWAYS on while armed.
 // ---------------------------------------------------------------------------
@@ -1057,6 +1175,50 @@ MouseProc(int code, WPARAM wParam, LPARAM lParam)
 	}
 	return CallNextHookEx(S_mouse_hook, code, wParam, lParam);
 }
+
+#else	// AE_OS_WIN
+
+// ---------------------------------------------------------------------------
+//	the gesture engine, macOS
+// ---------------------------------------------------------------------------
+//	The same state machine, in poc/native/mac/pieFX_gesture.mm: a local NSEvent
+//	monitor instead of SetWindowsHookEx, dispatch_after with a generation
+//	counter instead of SetTimer/KillTimer (a dispatch block cannot be
+//	cancelled, so a stale one is invalidated rather than stopped), and the
+//	ORIGINAL NSEvent re-posted instead of a synthesised SendInput replay.
+//
+//	The module reports through these three callbacks and decides nothing else:
+//	which slot is under the cursor, and what should fire, remain the overlay's
+//	business exactly as they are on Windows.
+static void
+MacOnHold(int x, int y, void *)
+{
+	S_summon_cx = x;
+	S_summon_cy = y;
+	SendSummon(x, y, S_has_selection, S_has_comp, S_layer_count);
+	Log("  HOLD -> summon at (%d,%d) hasSel=%d hasComp=%d layers=%ld\n",
+		x, y, S_has_selection, S_has_comp, (long)S_layer_count);
+}
+
+static void
+MacOnMove(int x, int y, void *)
+{
+	SendCursor(x, y);
+}
+
+static void
+MacOnRelease(void *)
+{
+	//	We do NOT decide what fires: the overlay knows which slot the cursor is
+	//	on and sends back a finished action, which IdleHook executes.
+	SendRelease();
+	Log("  UP -> release sent; awaiting the overlay's action\n");
+}
+
+static void CancelHoldTimer(void) { /* the module owns its own clock */ }
+
+#endif	// AE_OS_WIN
+
 
 // ---------------------------------------------------------------------------
 //	selection context (safe here in idle), and the deferred anchor action
@@ -1293,6 +1455,55 @@ JsonEscapeInto(const char *srcZ, char *outZ, size_t out_max)
 //	asking. There is no enumeration API for presets - the panel finds them by
 //	SCANNING FOLDERS, and so does this.
 //
+// ---------------------------------------------------------------------------
+//	the configuration directory
+//
+//	%APPDATA%\pieFX\ on Windows, ~/Library/Application Support/pieFX/ here.
+//	Three files live in it and BOTH processes touch them, so the location is
+//	one decision rather than two: the overlay builds the same path from the
+//	same two pieces (`piefx_dir` in overlay/src-tauri/src/lib.rs), and the leaf
+//	names come from the PIEFX_*_REL macros, which are now separator-correct on
+//	both platforms.
+//
+//	The directory is created here rather than assumed, on both platforms and
+//	for the same reason: the settings window may never have run on this
+//	machine, so the plug-in can easily be the first thing that wants the
+//	folder.
+#ifdef AE_OS_WIN
+static int
+PieFX_ConfigPath(const char *relZ, char *out, size_t cap)
+{
+	char	base[MAX_PATH];
+	DWORD	len;
+
+	if (!out || !cap) { return 0; }
+	out[0] = 0;
+	if (!relZ || !*relZ) { return 0; }
+
+	len = GetEnvironmentVariableA("APPDATA", base, MAX_PATH);
+	if (!len || len >= MAX_PATH - (DWORD)strlen(relZ) - 2) { return 0; }
+
+	strcpy_s(out, cap, base);
+	strcat_s(out, cap, "\\");
+	strcat_s(out, cap, relZ);
+
+	//	The parent, created from the path just built rather than from a second
+	//	spelling of the folder name. An existing one is not an error.
+	{
+		char	*sep = strrchr(out, '\\');
+		char	saved;
+
+		if (sep && sep > out) {
+			saved	= *sep;
+			*sep	= 0;
+			CreateDirectoryA(out, NULL);
+			*sep	= saved;
+		}
+	}
+	return 1;
+}
+#endif	// AE_OS_WIN
+
 //	Two roots:
 //	  <install>/Support Files/Presets   what AE ships. Found from our OWN module
 //	                                    path (the .aex sits in
@@ -1305,121 +1516,331 @@ JsonEscapeInto(const char *srcZ, char *outZ, size_t out_max)
 //	it is C:\\Users\\aldai\\OneDrive\\Documentos - redirected to OneDrive AND
 //	localised. SHGetFolderPath is what follows both; building the path by hand
 //	would have found zero user presets and reported it as "you have none".
+// ---------------------------------------------------------------------------
+//	Listing a directory — the one thing in the preset walk that genuinely
+//	differs between the platforms.
+//
+//	Everything else below (the recursion, the depth and count caps, the .ffx
+//	filter, the category rules and the JSON) is logic, and logic maintained
+//	twice is logic that drifts. So the seam is here, at three small functions,
+//	and the ~120 lines that use them are shared.
+struct PieFXDir;
+static PieFXDir  *DirOpen(const char *dirZ);
+static A_Boolean  DirNext(PieFXDir *d, char *nameZ, size_t cap, A_Boolean *is_dirP);
+static void       DirClose(PieFXDir *d);
+
+//	Does this directory exist? Used to recognise an AE install by its shape.
+static A_Boolean  DirExists(const char *pathZ);
+
+//	This binary's own path, so the shipped presets can be found relative to it.
+static A_Boolean  SelfModulePath(char *outZ, size_t out_max);
+
+//	The user's Documents folder, which on BOTH platforms has to be asked for
+//	rather than built: Windows redirects and localises it, macOS relocates it
+//	into iCloud. See PieFX_DocumentsDir and the SHGetFolderPath note above.
+static A_Boolean  DocumentsDir(char *outZ, size_t out_max);
+
+//	Text destined for the catalogue: canonicalised, escaped, and given a
+//	fallback for the case where it cannot be decoded at all. Shared with the
+//	effects walk, which is defined further down — presets and effects land in
+//	the same file and are searched by the same window, so they had better be
+//	spelled the same way.
+static void       CatalogueField(const char *rawZ, const char *fallbackZ,
+                                 char *out, size_t cap);
+
+#ifdef AE_OS_WIN
+
+struct PieFXDir {
+	HANDLE				h;
+	WIN32_FIND_DATAA	fd;
+	A_Boolean			pending;	// FindFirstFile already produced an entry
+};
+
+static PieFXDir *
+DirOpen(const char *dirZ)
+{
+	char		glob[MAX_PATH];
+	PieFXDir	*d;
+
+	if (strcpy_s(glob, sizeof(glob), dirZ) || strcat_s(glob, sizeof(glob), "\\*")) {
+		return NULL;
+	}
+	d = (PieFXDir *)calloc(1, sizeof(PieFXDir));
+	if (!d) { return NULL; }
+
+	d->h = FindFirstFileA(glob, &d->fd);
+	if (d->h == INVALID_HANDLE_VALUE) { free(d); return NULL; }
+	d->pending = TRUE;
+	return d;
+}
+
+static A_Boolean
+DirNext(PieFXDir *d, char *nameZ, size_t cap, A_Boolean *is_dirP)
+{
+	if (!d) { return FALSE; }
+	if (!d->pending && !FindNextFileA(d->h, &d->fd)) { return FALSE; }
+	d->pending = FALSE;
+
+	strcpy_s(nameZ, cap, d->fd.cFileName);
+	*is_dirP = (d->fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? TRUE : FALSE;
+	return TRUE;
+}
+
+static void
+DirClose(PieFXDir *d)
+{
+	if (d) { FindClose(d->h); free(d); }
+}
+
+static A_Boolean
+DirExists(const char *pathZ)
+{
+	DWORD a = GetFileAttributesA(pathZ);
+
+	return (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) ? TRUE : FALSE;
+}
+
+static A_Boolean
+SelfModulePath(char *outZ, size_t out_max)
+{
+	HMODULE self = NULL;
+
+	if (!GetModuleHandleExA(
+			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCSTR>(&SelfModulePath), &self)) {
+		return FALSE;
+	}
+	return GetModuleFileNameA(self, outZ, (DWORD)out_max) ? TRUE : FALSE;
+}
+
+static A_Boolean
+DocumentsDir(char *outZ, size_t out_max)
+{
+	(void)out_max;		// SHGetFolderPathA writes at most MAX_PATH
+	return SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_PERSONAL, NULL, SHGFP_TYPE_CURRENT, outZ))
+		? TRUE : FALSE;
+}
+
+#else	// AE_OS_WIN
+
+#include <dirent.h>
+
+struct PieFXDir {
+	DIR		*d;
+	char	 path[MAX_PATH];		// kept for the DT_UNKNOWN fallback below
+};
+
+static PieFXDir *
+DirOpen(const char *dirZ)
+{
+	PieFXDir *d = (PieFXDir *)calloc(1, sizeof(PieFXDir));
+
+	if (!d) { return NULL; }
+	d->d = opendir(dirZ);
+	if (!d->d) { free(d); return NULL; }
+	strcpy_s(d->path, sizeof(d->path), dirZ);
+	return d;
+}
+
+static A_Boolean
+DirNext(PieFXDir *d, char *nameZ, size_t cap, A_Boolean *is_dirP)
+{
+	struct dirent *e;
+
+	if (!d) { return FALSE; }
+	e = readdir(d->d);
+	if (!e) { return FALSE; }
+
+	strcpy_s(nameZ, cap, e->d_name);
+
+	//	d_type is a free answer on the filesystems AE is installed on, but it is
+	//	NOT guaranteed — some filesystems report DT_UNKNOWN and expect a stat.
+	//	Getting this wrong would silently stop the recursion at the first
+	//	subfolder, which reads as "this AE ships almost no presets".
+	if (e->d_type == DT_UNKNOWN) {
+		char		full[MAX_PATH];
+		struct stat	st;
+
+		sprintf_s(full, sizeof(full), "%s/%s", d->path, e->d_name);
+		*is_dirP = (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) ? TRUE : FALSE;
+	} else {
+		*is_dirP = (e->d_type == DT_DIR) ? TRUE : FALSE;
+	}
+	return TRUE;
+}
+
+static void
+DirClose(PieFXDir *d)
+{
+	if (d) { closedir(d->d); free(d); }
+}
+
+static A_Boolean
+DirExists(const char *pathZ)
+{
+	struct stat st;
+
+	return (stat(pathZ, &st) == 0 && S_ISDIR(st.st_mode)) ? TRUE : FALSE;
+}
+
+static A_Boolean
+SelfModulePath(char *outZ, size_t out_max)
+{
+	return PieFX_ModulePath(outZ, out_max) ? TRUE : FALSE;
+}
+
+static A_Boolean
+DocumentsDir(char *outZ, size_t out_max)
+{
+	return PieFX_DocumentsDir(outZ, out_max) ? TRUE : FALSE;
+}
+
+#endif	// AE_OS_WIN
+
+// ---------------------------------------------------------------------------
+//	From here down, one body on both platforms.
+
+//	One .ffx, written out. Split from the walk because it is the part with the
+//	rules in it, and the rules are not platform-specific.
+//	`dirRelZ` is the FOLDER the file was found in, relative to the root, and
+//	`fileZ` is the bare filename. Two arguments rather than one joined path,
+//	because they are used for different things and gluing them together first
+//	is how the filename ends up inside the category.
+static void
+EmitPreset(FILE *fp, const char *rootZ, const char *labelZ, const char *dirRelZ,
+		   const char *fileZ, A_long *countP)
+{
+	size_t	n = strlen(fileZ);
+	char	name[MAX_PATH];
+	char	cat[MAX_PATH]	= { 0 };
+	char	full[MAX_PATH];
+	char	e_name[MAX_PATH * 6];
+	char	e_path[MAX_PATH * 6];
+	char	e_cat[MAX_PATH * 6];
+
+	//	The NAME is the file without .ffx, and the CATEGORY is the folder path
+	//	it was found under - which is exactly how AE's own panel groups them,
+	//	and the only grouping a .ffx file carries. `relZ` is already that
+	//	folder, because the recursion descends a directory at a time.
+	//
+	//	`labelZ` is what the ROOT is called: empty for AE's own presets, whose
+	//	top-level folders are the categories people know ("Text", "Transitions
+	//	- Dissolves"), and the version folder for a user's, so a preset saved
+	//	under an older AE is visibly from there.
+	strcpy_s(name, sizeof(name), fileZ);
+	name[n - 4] = 0;
+
+	if (labelZ[0] && dirRelZ[0])	{ sprintf_s(cat, sizeof(cat), "%s/%s", labelZ, dirRelZ); }
+	else if (labelZ[0])				{ strcpy_s(cat, sizeof(cat), labelZ); }
+	else							{ strcpy_s(cat, sizeof(cat), dirRelZ); }
+
+	//	Categories are displayed, so they are spelled the one way on both
+	//	platforms; the PATH keeps its native separators because it is opened.
+	for (char *q = cat; *q; q++) {
+		if (*q == '\\') { *q = '/'; }
+	}
+	if (dirRelZ[0]) {
+		sprintf_s(full, sizeof(full), "%s" PIEFX_PATH_SEP "%s" PIEFX_PATH_SEP "%s",
+				  rootZ, dirRelZ, fileZ);
+	} else {
+		sprintf_s(full, sizeof(full), "%s" PIEFX_PATH_SEP "%s", rootZ, fileZ);
+	}
+
+	//	The NAME and the CATEGORY are read by a human and typed at by one, so
+	//	they go through the same canonicalisation as the effect names — see
+	//	PieFX_LegacyToUtf8. Filesystem text needs it for a different reason than
+	//	AEGP text does: not the encoding, but the NORMALISATION. AE's Presets
+	//	tree is a mix of composed and decomposed accents, and the search
+	//	window's substring test cannot match across that difference.
+	//
+	//	The PATH deliberately does NOT go through it. That string is opened, not
+	//	read, so it keeps exactly the bytes the directory gave us.
+	CatalogueField(name, name, e_name, sizeof(e_name));
+	CatalogueField(cat,  cat,  e_cat,  sizeof(e_cat));
+	JsonEscapeInto(full, e_path, sizeof(e_path));
+
+	fprintf(fp, "%s    { \"name\": \"%s\", \"path\": \"%s\", \"category\": \"%s\" }",
+			*countP ? ",\n" : "", e_name, e_path, e_cat);
+	(*countP)++;
+}
+
 static void
 WalkPresetFolder(FILE *fp, const char *rootZ, const char *labelZ, const char *relZ,
 				 A_long *countP, int depth)
 {
+	char		here[MAX_PATH];
+	char		entry[MAX_PATH];
+	A_Boolean	is_dir = FALSE;
+	PieFXDir	*d;
+
 	if (depth > 8 || *countP >= PIEFX_PRESET_MAX) { return; }
 
-	char glob[MAX_PATH];
+	if (relZ[0]) {
+		sprintf_s(here, sizeof(here), "%s" PIEFX_PATH_SEP "%s", rootZ, relZ);
+	} else {
+		strcpy_s(here, sizeof(here), rootZ);
+	}
 
-	sprintf_s(glob, sizeof(glob), "%s\\%s%s*", rootZ, relZ, relZ[0] ? "\\" : "");
+	d = DirOpen(here);
+	if (!d) { return; }
 
-	WIN32_FIND_DATAA fd;
-	HANDLE h = FindFirstFileA(glob, &fd);
-
-	if (h == INVALID_HANDLE_VALUE) { return; }
-
-	do {
-		if (fd.cFileName[0] == '.') { continue; }
-
+	while (DirNext(d, entry, sizeof(entry), &is_dir)) {
 		char rel[MAX_PATH];
 
+		//	Skips "." and ".." as well as dotfiles, which is what is wanted:
+		//	a preset whose name begins with a dot is not one AE shows either.
+		if (entry[0] == '.') { continue; }
+
 		if (relZ[0]) {
-			sprintf_s(rel, sizeof(rel), "%s\\%s", relZ, fd.cFileName);
+			sprintf_s(rel, sizeof(rel), "%s" PIEFX_PATH_SEP "%s", relZ, entry);
 		} else {
-			strcpy_s(rel, sizeof(rel), fd.cFileName);
+			strcpy_s(rel, sizeof(rel), entry);
 		}
 
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+		if (is_dir) {
 			WalkPresetFolder(fp, rootZ, labelZ, rel, countP, depth + 1);
 			continue;
 		}
 
-		size_t n = strlen(fd.cFileName);
+		size_t n = strlen(entry);
 
-		if (n < 5 || _stricmp(fd.cFileName + n - 4, ".ffx")) { continue; }
+		if (n < 5 || _stricmp(entry + n - 4, ".ffx")) { continue; }
 		if (*countP >= PIEFX_PRESET_MAX) { break; }
 
-		//	The NAME is the file without .ffx, and the CATEGORY is the folder
-		//	path it was found under - which is exactly how AE's own panel groups
-		//	them, and the only grouping a .ffx file carries. `relZ` is already
-		//	that folder, because this recursion descends a directory at a time.
-		//
-		//	`labelZ` is what the ROOT is called: empty for AE's own presets,
-		//	whose top-level folders are the categories people know ("Text",
-		//	"Transitions - Dissolves"), and the version folder for a user's, so
-		//	a preset saved under an older AE is visibly from there.
-		char name[MAX_PATH];
-		char cat[MAX_PATH] = { 0 };
-		char full[MAX_PATH];
-
-		strcpy_s(name, sizeof(name), fd.cFileName);
-		name[n - 4] = 0;
-
-		if (labelZ[0] && relZ[0])	{ sprintf_s(cat, sizeof(cat), "%s/%s", labelZ, relZ); }
-		else if (labelZ[0])			{ strcpy_s(cat, sizeof(cat), labelZ); }
-		else						{ strcpy_s(cat, sizeof(cat), relZ); }
-
-		for (char *q = cat; *q; q++) {
-			if (*q == '\\') { *q = '/'; }
-		}
-		sprintf_s(full, sizeof(full), "%s\\%s", rootZ, rel);
-
-		char e_name[MAX_PATH * 6];
-		char e_path[MAX_PATH * 6];
-		char e_cat[MAX_PATH * 6];
-
-		JsonEscapeInto(name, e_name, sizeof(e_name));
-		JsonEscapeInto(full, e_path, sizeof(e_path));
-		JsonEscapeInto(cat,  e_cat,  sizeof(e_cat));
-
-		fprintf(fp, "%s    { \"name\": \"%s\", \"path\": \"%s\", \"category\": \"%s\" }",
-				*countP ? ",\n" : "", e_name, e_path, e_cat);
-		(*countP)++;
-	} while (FindNextFileA(h, &fd));
-
-	FindClose(h);
+		//	relZ, not rel: the category is the folder, and `rel` already has
+		//	the filename on the end of it.
+		EmitPreset(fp, rootZ, labelZ, relZ, entry, countP);
+	}
+	DirClose(d);
 }
 
-//	<install>/Support Files/Presets, found by CLIMBING from our own module path
-//	rather than by counting folders up from it.
+//	Where AE's own presets live, found from our OWN module path.
 //
-//	Counting is what the first version did - two levels, on the assumption that
-//	the .aex sits directly in Plug-ins - and it was wrong on the author's own
-//	machine, where the plug-in is installed in `Plug-ins\AGS\`. It looked for
-//	`Plug-ins\Presets`, found nothing, and reported zero shipped presets while
-//	the user-presets half of the same walk worked perfectly. A plug-in folder is
-//	the USER's to organise; nesting is normal and the depth is not ours to
-//	assume.
+//	The shape is the same on both platforms even though the paths are not.
+//	Windows puts the plug-in in `<install>/Support Files/Plug-ins` and the
+//	presets in `<install>/Support Files/Presets`; macOS puts them in
+//	`<install>/Plug-ins` and `<install>/Presets`. Either way, Presets is a
+//	SIBLING of Plug-ins — so the rule "walk up until an ancestor holds both"
+//	finds it without a registry key, a drive letter, or a guess at where the
+//	user installed After Effects.
 //
-//	So: climb, and at each ancestor ask whether it looks like Support Files -
-//	which is the folder that contains BOTH `Presets` and `Plug-ins`. That pair
-//	is what makes the answer specific; a bare `Presets` folder somewhere up the
-//	tree could be anyone's. If no ancestor has both, the first one with a
-//	`Presets` at all is taken as a fallback, because being slightly too willing
-//	beats offering nothing.
+//	macOS needs more ancestors than Windows: a `.plugin` is a bundle, so the
+//	binary sits at `Plug-ins/pieFX.plugin/Contents/MacOS/pieFX` — five up
+//	rather than two. The existing limit of eight already covers it.
 static A_Boolean
 ShippedPresetRoot(char *outZ, size_t out_max)
 {
-	char	dir[MAX_PATH] = { 0 };
-	char	fallback[MAX_PATH] = { 0 };
-	HMODULE	self = NULL;
+	char	dir[MAX_PATH]		= { 0 };
+	char	fallback[MAX_PATH]	= { 0 };
 
-	if (!GetModuleHandleExA(
-			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-			reinterpret_cast<LPCSTR>(&ShippedPresetRoot), &self)) {
-		return FALSE;
-	}
-	if (!GetModuleFileNameA(self, dir, MAX_PATH)) { return FALSE; }
+	if (!SelfModulePath(dir, sizeof(dir))) { return FALSE; }
 
 	Log("  presets: module is %s\n", dir);
 
-	//	Up to eight ancestors. AE's own install is two, and nobody nests a
-	//	plug-in six deep, but the loop costs nothing and the constant is not a
+	//	Up to eight ancestors. The loop costs nothing and the constant is not a
 	//	claim about anyone's folders.
 	for (int i = 0; i < 8; i++) {
-		char *slash = strrchr(dir, '\\');
+		char *slash = strrchr(dir, PIEFX_PATH_SEP[0]);
 
 		if (!slash) { break; }
 		*slash = 0;
@@ -1428,19 +1849,19 @@ ShippedPresetRoot(char *outZ, size_t out_max)
 		char plugins[MAX_PATH];
 
 		if (strcpy_s(presets, sizeof(presets), dir) ||
-			strcat_s(presets, sizeof(presets), "\\Presets")) {
+			strcat_s(presets, sizeof(presets), PIEFX_PATH_SEP "Presets")) {
 			break;
 		}
-		if (GetFileAttributesA(presets) == INVALID_FILE_ATTRIBUTES) { continue; }
+		if (!DirExists(presets)) { continue; }
 
 		if (!fallback[0]) { strcpy_s(fallback, sizeof(fallback), presets); }
 
 		strcpy_s(plugins, sizeof(plugins), dir);
-		strcat_s(plugins, sizeof(plugins), "\\Plug-ins");
+		strcat_s(plugins, sizeof(plugins), PIEFX_PATH_SEP "Plug-ins");
 
-		if (GetFileAttributesA(plugins) != INVALID_FILE_ATTRIBUTES) {
+		if (DirExists(plugins)) {
 			strcpy_s(outZ, out_max, presets);
-			Log("  presets: Support Files found at %s\n", dir);
+			Log("  presets: install root found at %s\n", dir);
 			return TRUE;
 		}
 	}
@@ -1458,96 +1879,129 @@ WritePresets(FILE *fp)
 {
 	A_long	count = 0;
 	char	root[MAX_PATH] = { 0 };
+	char	docs[MAX_PATH] = { 0 };
 
 	if (ShippedPresetRoot(root, sizeof(root))) {
 		WalkPresetFolder(fp, root, "", "", &count, 0);
-		Log("  presets: %ld under %s\n", count, root);
+		Log("  presets: %d under %s\n", (int)count, root);
 	} else {
 		Log("  presets: no shipped Presets folder beside the plug-in\n");
 	}
 
-	char docs[MAX_PATH] = { 0 };
-
-	if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_PERSONAL, NULL, SHGFP_TYPE_CURRENT, docs))) {
-		char glob[MAX_PATH];
-
-		//	Every "After Effects*" folder, not just the running version's. The
-		//	version folder becomes part of the category, so a preset saved under
-		//	an older AE is offered AND is visibly from there - which is better
-		//	than a mapping from AE's version number to its marketing year, a
-		//	thing that has already changed once.
-		sprintf_s(glob, sizeof(glob), "%s\\Adobe\\After Effects*", docs);
-
-		WIN32_FIND_DATAA fd;
-		HANDLE h = FindFirstFileA(glob, &fd);
-
-		if (h != INVALID_HANDLE_VALUE) {
-			do {
-				if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) { continue; }
-				if (fd.cFileName[0] == '.') { continue; }
-
-				char up[MAX_PATH];
-				char label[MAX_PATH];
-				A_long before = count;
-
-				sprintf_s(up, sizeof(up), "%s\\Adobe\\%s\\User Presets", docs, fd.cFileName);
-				if (GetFileAttributesA(up) == INVALID_FILE_ATTRIBUTES) { continue; }
-
-				//	"User Presets (After Effects 2026)" - the version is in the
-				//	category because more than one of these folders exists on
-				//	any machine that has upgraded, and a preset from the wrong
-				//	one is worth being able to see.
-				sprintf_s(label, sizeof(label), "User Presets (%s)", fd.cFileName);
-				WalkPresetFolder(fp, up, label, "", &count, 0);
-				if (count > before) {
-					Log("  presets: %ld under %s\n", count - before, up);
-				}
-			} while (FindNextFileA(h, &fd));
-			FindClose(h);
-		}
-	} else {
+	if (!DocumentsDir(docs, sizeof(docs))) {
 		Log("  presets: could not resolve the Documents folder\n");
+		return count;
 	}
+	Log("  presets: Documents is %s\n", docs);
+
+	char		adobe[MAX_PATH];
+	char		entry[MAX_PATH];
+	A_Boolean	is_dir = FALSE;
+	PieFXDir	*d;
+
+	sprintf_s(adobe, sizeof(adobe), "%s" PIEFX_PATH_SEP "Adobe", docs);
+
+	d = DirOpen(adobe);
+	if (!d) {
+		Log("  presets: no %s\n", adobe);
+		return count;
+	}
+
+	//	Every "After Effects*" folder, not just the running version's. The
+	//	version folder becomes part of the category, so a preset saved under an
+	//	older AE is offered AND is visibly from there - which is better than a
+	//	mapping from AE's version number to its marketing year, a thing that has
+	//	already changed once.
+	while (DirNext(d, entry, sizeof(entry), &is_dir)) {
+		if (!is_dir || entry[0] == '.') { continue; }
+		if (0 != strncmp(entry, "After Effects", 13)) { continue; }
+
+		char	up[MAX_PATH];
+		char	label[MAX_PATH];
+		A_long	before = count;
+
+		sprintf_s(up, sizeof(up), "%s" PIEFX_PATH_SEP "%s" PIEFX_PATH_SEP "User Presets",
+				  adobe, entry);
+		if (!DirExists(up)) { continue; }
+
+		//	"User Presets (After Effects 2026)" - the version is in the category
+		//	because more than one of these folders exists on any machine that
+		//	has upgraded, and a preset from the wrong one is worth being able to
+		//	see.
+		sprintf_s(label, sizeof(label), "User Presets (%s)", entry);
+		WalkPresetFolder(fp, up, label, "", &count, 0);
+		if (count > before) {
+			Log("  presets: %d under %s\n", (int)(count - before), up);
+		}
+	}
+	DirClose(d);
 	return count;
 }
 
-//	The S5A walk, ported out of the frozen spike and pointed at a file the
-//	overlay can read instead of a human-readable dump.
+//	AE's own text into UTF-8, at the one point it leaves the process.
 //
-//	Everything walked is written, obsolete and uncategorised entries included.
-//	The three sharp edges the catalogue has (31-character match names, 50
-//	`_Obsolete` entries that collide with live ones on display name, 107 with no
-//	category at all) are FILTERING decisions, and filtering is the search UI's
-//	job - the overlay owns what the user sees. What the plug-in owes it is the
-//	API's own strings, unedited, with the category that makes them separable.
+//	`AEGP_GetEffectName` and `AEGP_GetEffectCategory` return single-byte text
+//	in the system's legacy encoding — there is no Unicode accessor; see
+//	mac/pieFX_text.h. Those bytes go straight into effects.json and the overlay
+//	reads it with JSON.parse, which does not tolerate invalid UTF-8. On failure
+//	the caller falls back to the MATCH name, which the SDK marks `UTF8!!`.
 //
-//	`claimed` is written beside the count for the same reason S5A reported it:
-//	the interesting number is not how many there are, it is whether walking the
-//	list agrees with what AE says is in it.
+//	Latent on Windows too, under any non-Latin ACP. A Spanish Mac got there
+//	first; the fix belongs to both platforms.
+#ifdef AE_OS_WIN
+static int
+PieFX_LegacyToUtf8(const char *in, char *out, size_t cap)
+{
+	wchar_t	wide[1024];
+	int		n;
+
+	if (!out || !cap) { return 0; }
+	out[0] = 0;
+	if (!in)  { return 0; }
+	if (!*in) { return 1; }
+
+	n = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, in, -1,
+							wide, (int)(sizeof(wide) / sizeof(wide[0])));
+	if (!n) { return 0; }
+
+	n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, out, (int)cap, NULL, NULL);
+	if (!n) { out[0] = 0; return 0; }
+	return 1;
+}
+#endif	// AE_OS_WIN
+
+//	One field of the catalogue, converted and escaped, with the match name as
+//	the fallback when the conversion cannot be trusted.
+static void
+CatalogueField(const char *rawZ, const char *fallbackZ, char *out, size_t cap)
+{
+	char	utf8[1024];
+
+	if (!PieFX_LegacyToUtf8(rawZ, utf8, sizeof(utf8))) {
+		//	The caller chooses the fallback: an effect's match name, which the
+		//	SDK marks UTF8!!, or a preset's own raw filename, which is at worst
+		//	odd-looking and is at least the string the file is actually called.
+		Log("  catalogue: un-decodable text, falling back to \"%s\"\n", fallbackZ);
+		strcpy_s(utf8, sizeof(utf8), fallbackZ);
+	}
+	JsonEscapeInto(utf8, out, cap);
+}
+
+//	ONE body on both platforms. The AEGP walk, the JSON and the counting are
+//	portable and always were; only the path and the encoding differed, and both
+//	now differ behind a name of their own.
 static void
 WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 {
 	A_Err	err		= A_Err_NONE;
 	A_long	claimed	= 0;
-	char	dir[MAX_PATH];
 	char	path[MAX_PATH];
-	DWORD	len;
 	FILE	*fp		= NULL;
 
-	len = GetEnvironmentVariableA("APPDATA", dir, MAX_PATH);
-	if (!len || len >= MAX_PATH - (DWORD)strlen(PIEFX_EFFECTS_REL) - 2) {
-		Log("  effects: no APPDATA; catalogue not written\n");
+	if (!PieFX_ConfigPath(PIEFX_EFFECTS_REL, path, MAX_PATH)) {
+		Log("  effects: no config directory; catalogue not written\n");
 		return;
 	}
-	strcpy_s(path, MAX_PATH, dir);
-	strcat_s(path, MAX_PATH, "\\pieFX");
-	//	The settings window may never have run on this machine, so the folder is
-	//	not a given. An existing one is not an error.
-	CreateDirectoryA(path, NULL);
-
-	strcpy_s(path, MAX_PATH, dir);
-	strcat_s(path, MAX_PATH, "\\");
-	strcat_s(path, MAX_PATH, PIEFX_EFFECTS_REL);
 
 	if (fopen_s(&fp, path, "wb") || !fp) {
 		Log("  effects: cannot write %s\n", path);
@@ -1584,9 +2038,11 @@ WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 
 		if (err) { break; }
 
-		JsonEscapeInto(name,  e_name,  sizeof(e_name));
+		//	The match name is the fallback for the other two AND is itself
+		//	already UTF-8 by contract, so it only needs escaping.
 		JsonEscapeInto(match, e_match, sizeof(e_match));
-		JsonEscapeInto(cat,   e_cat,   sizeof(e_cat));
+		CatalogueField(name, match, e_name, sizeof(e_name));
+		CatalogueField(cat,  match, e_cat,  sizeof(e_cat));
 
 		fprintf(fp, "%s    { \"name\": \"%s\", \"match\": \"%s\", \"category\": \"%s\" }",
 				walked ? ",\n" : "", e_name, e_match, e_cat);
@@ -1600,17 +2056,18 @@ WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 	//	would mean two files that can disagree about how old they are.
 	A_long presets = WritePresets(fp);
 
-	fprintf(fp, "\n  ],\n  \"walked\": %ld,\n  \"claimed\": %ld,\n  \"presets_found\": %ld\n}\n",
-			walked, claimed, presets);
+	fprintf(fp, "\n  ],\n  \"walked\": %d,\n  \"claimed\": %d,\n  \"presets_found\": %d\n}\n",
+			(int)walked, (int)claimed, (int)presets);
 	fclose(fp);
 
-	Log("  effects: wrote %ld entries (AE claims %ld)%s -> %s\n",
-		walked, claimed, (walked == claimed) ? "" : "  *** MISMATCH ***", path);
+	Log("  effects: wrote %d entries (AE claims %d)%s -> %s\n",
+		(int)walked, (int)claimed, (walked == claimed) ? "" : "  *** MISMATCH ***", path);
 
 	if (err) {
 		Log("  effects: enumeration stopped early with AEGP error %d\n", (int)err);
 	}
 }
+
 
 // ---------------------------------------------------------------------------
 //	Current frame -> the clipboard.
@@ -1633,6 +2090,7 @@ WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 //	              behind the alpha, which is usually black - that is a property
 //	              of the format, not a bug here.
 //	Order is a preference hint, not a rule; the consumer chooses.
+#ifdef AE_OS_WIN
 static A_Boolean
 ReadWholeFile(const char *pathZ, BYTE **bufPP, DWORD *sizeP)
 {
@@ -1860,33 +2318,115 @@ done:
 //	Is the frame on disk yet, and finished?
 //
 //	`saveFrameToPng` returns before the bytes are necessarily readable, so this
-//	polls instead of asking once. It insists on the same non-zero size twice in
-//	a row: a file that has appeared is not a file that has been written, and a
-//	half-written PNG decodes to an error that reads like a broken frame.
+//	polls instead of asking once — and it polls for the PNG's own end marker
+//	rather than for a size that has stopped changing. See PngIsComplete below
+//	for the bug that distinction cost.
+#else	// AE_OS_WIN
+
+//	The whole of the Windows version above — the WIC decode, GlobalFrom, the
+//	two DIBs — collapses into one call here. NSPasteboard takes the PNG bytes
+//	as they are; see mac/pieFX_clipboard.h for why three formats become one.
+static A_Boolean
+PngFileToClipboard(const char *pathZ, char *errZ, size_t err_max)
+{
+	return PieFX_PngFileToClipboard(pathZ, errZ, err_max) ? TRUE : FALSE;
+}
+
+#endif	// AE_OS_WIN
+
+//	Everything from here down is shared. WaitForFrameFile is stdio and a sleep,
+//	and CopyFrameToClipboard is ExtendScript plus string handling — neither had
+//	any Windows in it beyond vocabulary, so neither gets a second copy.
+
+//	A file's size, or -1 when it is not there. The only genuinely different
+//	line in WaitForFrameFile: emulating WIN32_FILE_ATTRIBUTE_DATA in
+//	pieFX_compat.h would be exactly the Windows emulation that header promises
+//	not to do, so the difference is named instead and the retry loop below —
+//	which is the part with the reasoning in it — stays single.
+static long long
+FrameFileSize(const char *pathZ)
+{
+#ifdef AE_OS_WIN
+	WIN32_FILE_ATTRIBUTE_DATA fad;
+
+	if (!GetFileAttributesExA(pathZ, GetFileExInfoStandard, &fad)) { return -1; }
+	return ((long long)fad.nFileSizeHigh << 32) | (long long)fad.nFileSizeLow;
+#else
+	struct stat st;
+
+	if (stat(pathZ, &st) != 0) { return -1; }
+	return (long long)st.st_size;
+#endif
+}
+
+//	Is this a COMPLETE PNG?
+//
+//	This replaces "the same non-zero size twice in a row", which was a guess
+//	dressed as a test and which produced a real bug: a 6656x2270 frame pasted
+//	as 6656x804. AE does not write a big PNG in one push, so any pause longer
+//	than the poll interval looked exactly like a finished file — and a
+//	truncated PNG is the worst possible shape of failure, because its IHDR is
+//	in the first 33 bytes and the pixel rows are not. It therefore does not
+//	fail to decode. It decodes at the FULL advertised size, with only the rows
+//	that arrived, which is why the clipboard reported 6656x2270 while the paste
+//	produced 6656x804. Nothing anywhere reported an error.
+//
+//	A PNG says where it ends: the last chunk is always IEND, and its 12 bytes
+//	are a fixed constant, CRC included, because IEND carries no payload. So the
+//	question "has AE finished?" has an exact answer and does not need timing at
+//	all. The signature is checked at the same time, since a file whose first
+//	eight bytes are not a PNG is not one we should be putting on a clipboard.
+static A_Boolean
+PngIsComplete(const char *pathZ, long long *sizeP)
+{
+	static const BYTE	k_sig[8]	= { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+	//	length 0, type "IEND", and the CRC of "IEND", which never varies.
+	static const BYTE	k_iend[12]	= { 0, 0, 0, 0, 'I', 'E', 'N', 'D',
+										0xAE, 0x42, 0x60, 0x82 };
+	BYTE		head[8];
+	BYTE		tail[12];
+	long long	size	= FrameFileSize(pathZ);
+	FILE		*fp		= NULL;
+
+	if (sizeP) { *sizeP = size; }
+
+	//	Smaller than a signature plus an IEND cannot be a whole PNG, and the
+	//	seek below would go negative.
+	if (size < (long long)(sizeof(head) + sizeof(k_iend))) { return FALSE; }
+
+	if (fopen_s(&fp, pathZ, "rb") || !fp) { return FALSE; }
+
+	if (sizeof(head) != fread(head, 1, sizeof(head), fp)) { fclose(fp); return FALSE; }
+	if (0 != fseek(fp, -(long)sizeof(tail), SEEK_END))    { fclose(fp); return FALSE; }
+	if (sizeof(tail) != fread(tail, 1, sizeof(tail), fp)) { fclose(fp); return FALSE; }
+	fclose(fp);
+
+	if (0 != memcmp(head, k_sig,  sizeof(k_sig)))  { return FALSE; }
+	if (0 != memcmp(tail, k_iend, sizeof(k_iend))) { return FALSE; }
+	return TRUE;
+}
+
 static A_Boolean
 WaitForFrameFile(const char *pathZ, DWORD wait_ms)
 {
 	const DWORD	step	= 40;
 	DWORD		waited	= 0;
-	LARGE_INTEGER last;
-
-	last.QuadPart = -1;
+	long long	size	= -1;
 
 	for (;;) {
-		WIN32_FILE_ATTRIBUTE_DATA fad;
-
-		if (GetFileAttributesExA(pathZ, GetFileExInfoStandard, &fad)) {
-			LARGE_INTEGER now;
-
-			now.HighPart = (LONG)fad.nFileSizeHigh;
-			now.LowPart  = fad.nFileSizeLow;
-
-			if (now.QuadPart > 0 && now.QuadPart == last.QuadPart) {
-				return TRUE;
-			}
-			last = now;
+		if (PngIsComplete(pathZ, &size)) {
+			Log("  copy-frame: complete PNG after %ums, %lld bytes\n",
+				waited, size);
+			return TRUE;
 		}
-		if (waited >= wait_ms) { return FALSE; }
+		if (waited >= wait_ms) {
+			//	The size is worth logging even on the failure path: "grew to 40MB
+			//	and stopped" and "never appeared" are different problems, and
+			//	without this they produce the same message.
+			Log("  copy-frame: gave up after %ums; file is %lld bytes and has no IEND\n",
+				waited, size);
+			return FALSE;
+		}
 		Sleep(step);
 		waited += step;
 	}
@@ -1994,17 +2534,23 @@ CopyFrameToClipboard(AEGP_SuiteHandler &suites)
 	//	is the side that should decide whether it exists, and it can afford to
 	//	wait a moment for it.
 	//
-	//	Two equal non-zero sizes in a row, because a file that has appeared is
-	//	not necessarily a file that has been finished.
-	if (!WaitForFrameFile(path, 4000)) {
+	//	The PNG's own IEND marker, not a size that has stopped changing — see
+	//	PngIsComplete.
+	//
+	//	The budget is generous because it is no longer a guess about how long
+	//	AE takes: the wait ends the instant the file is whole, so a large comp
+	//	costs exactly what it costs and a small one costs nothing. It was 4s
+	//	when the test was "the size held still", and 4s was plenty to be WRONG
+	//	in. What it has to cover now is a genuine 8K write, and running out
+	//	means the frame really is not there.
+	if (!WaitForFrameFile(path, 15000)) {
 		char t[MAX_PATH + 120];
 
 		if (wrote[0] && 0 != _stricmp(wrote, path)) {
 			sprintf_s(t, sizeof(t), "Frame not copied: AE wrote to %s, not %s", wrote, path);
 		} else {
-			sprintf_s(t, sizeof(t), "Frame not copied: AE wrote nothing to %s", path);
+			sprintf_s(t, sizeof(t), "Frame not copied: AE did not finish writing %s", path);
 		}
-		Log("  copy-frame: no file after saveFrameToPng at %s\n", path);
 		SendToast("error", t);
 		return;
 	}
@@ -2024,6 +2570,7 @@ CopyFrameToClipboard(AEGP_SuiteHandler &suites)
 	Log("  copy-frame: %s\n", t);
 	SendToast("info", t);
 }
+
 
 //	S5's lookup: walk the installed catalogue for an exact match name.
 static A_Boolean
@@ -2158,6 +2705,19 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 			//	other command the way a stale id does. Names are localised, so the
 			//	id stays as the fallback.
 			//
+			//	That fallback was DESCRIBED here and never implemented: a name
+			//	that did not resolve returned NO SUCH MENU COMMAND and stopped,
+			//	with the id sitting unused in the same binding. Measured on a
+			//	Spanish AE (es_ES), where findMenuCommandId follows the UI
+			//	language and every English name pieFX ships resolves to 0 — so
+			//	every ae-command slot on the wheel failed with a toast.
+			//
+			//	The ids themselves are NOT localised. The same probe resolved
+			//	the Spanish names to exactly the ids shipped for the English
+			//	ones — 2161, 2007, 2071, 2000, 2279 — so an id is stable across
+			//	LANGUAGES and only fragile across VERSIONS. Falling back to it
+			//	is a much smaller risk than not firing at all.
+			//
 			//	It measures itself either way: a command that returns cleanly and
 			//	changes nothing is the failure that cost two sessions.
 			char code[1024];
@@ -2167,6 +2727,8 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 				sprintf_s(code, sizeof(code),
 					"(function(){"
 					"  var id = app.findMenuCommandId('%s');"
+					"  var byName = !!id;"
+					"  if (!id) { id = %ld; }"
 					"  if (!id) { return 'NO SUCH MENU COMMAND'; }"
 					"  var c = app.project.activeItem;"
 					"  var isC = (c && c instanceof CompItem);"
@@ -2175,8 +2737,9 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 					"  app.executeCommand(id);"
 					"  var L1 = isC ? c.numLayers : -1;"
 					"  var R1 = app.project.renderQueue.numItems;"
-					"  return 'id ' + id + ', layers ' + L0 + '->' + L1 + ', rq ' + R0 + '->' + R1;"
-					"})()", aP->text);
+					"  return 'id ' + id + (byName ? '' : ' (BY ID: the name did not resolve)')"
+					"       + ', layers ' + L0 + '->' + L1 + ', rq ' + R0 + '->' + R1;"
+					"})()", aP->text, (long)aP->id);
 				sprintf_s(what, sizeof(what), "ae-command '%s'", aP->text);
 			} else {
 				sprintf_s(code, sizeof(code),
@@ -2194,9 +2757,13 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 			}
 
 			RunScript(suites, code, what);
+			//	Only reachable now when the name did not resolve AND the binding
+			//	carries no id to fall back to — a genuinely unbound slot, rather
+			//	than a slot bound in another language.
 			if (0 == strcmp(S_last_result, "NO SUCH MENU COMMAND")) {
 				char t[200];
-				sprintf_s(t, sizeof(t), "No menu command named \"%s\"", aP->text);
+				sprintf_s(t, sizeof(t),
+					"No menu command named \"%s\", and no id to fall back to", aP->text);
 				SendToast("error", t);
 			}
 		} break;
@@ -2445,10 +3012,10 @@ ProbeCommand(AEGP_SuiteHandler &suites, long id, const char *nameZ,
 		sprintf_s(line, sizeof(line), "  %-15s %4ld %s : NO ACTIVE COMP\n", nameZ, id, howZ);
 	} else if (after > before) {
 		sprintf_s(line, sizeof(line), "  %-15s %4ld %s : WORKS (%ld -> %ld)\n",
-				  nameZ, id, howZ, before, after);
+				  nameZ, (long)id, howZ, (long)before, (long)after);
 	} else {
 		sprintf_s(line, sizeof(line), "  %-15s %4ld %s : DID NOTHING (%ld, err %d)\n",
-				  nameZ, id, howZ, before, (int)err2);
+				  nameZ, (long)id, howZ, (long)before, (int)err2);
 	}
 	Log("%s", line);
 	Append(summaryZ, summary_max, line);
@@ -2585,6 +3152,7 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 	//	during the modal press loop, so this can only evaluate once the press has
 	//	actually ended - at which point, if we still think the button is down but
 	//	it is physically up, the release happened off-AE. Treat it as a cancel.
+#ifdef AE_OS_WIN
 	if (S_active && S_rdownB && !(GetAsyncKeyState(VK_RBUTTON) & 0x8000)) {
 		CancelHoldTimer();
 		if (S_hold_firedB) {
@@ -2594,9 +3162,22 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 		S_hold_firedB = FALSE;
 		Log("  backstop: right-up unseen (released off-AE) -> cancel, wheel hidden\n");
 	}
+#else
+	//	Same backstop, same reason: a LOCAL NSEvent monitor has the identical
+	//	blind spot, and asks the HID layer the same question through
+	//	CGEventSourceButtonState. The press state lives in the module, so the
+	//	check does too.
+	if (S_active) {
+		PieFX_GesturePoll();
+	}
+#endif
 
 	//	Keep selection context warm while armed (cheap; only when not dragging).
+#ifdef AE_OS_WIN
 	if (S_active && !S_rdownB) {
+#else
+	if (S_active && !PieFX_GestureBusy()) {
+#endif
 		RefreshSelectionContext(suites);
 	}
 
@@ -2630,6 +3211,7 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 static void
 StopOverlay(void)
 {
+#ifdef AE_OS_WIN
 	if (S_overlay_proc) {
 		if (WaitForSingleObject(S_overlay_proc, 0) == WAIT_TIMEOUT) {
 			BOOL  ok = TerminateProcess(S_overlay_proc, 0);
@@ -2652,6 +3234,13 @@ StopOverlay(void)
 		S_overlay_job = NULL;
 		Log("  overlay: job closed (takes the WebView2 children with it)\n");
 	}
+#else
+	//	ONE call, because the process GROUP is what the job object was for: the
+	//	kill reaches the WebKit children too, so there is no separate "and now
+	//	the children" step. It escalates SIGTERM -> SIGKILL rather than going
+	//	straight to force.
+	PieFX_EndOverlay(2000);
+#endif
 }
 
 static A_Err
@@ -2659,7 +3248,11 @@ DeathHook(AEGP_GlobalRefcon, AEGP_DeathRefcon)
 {
 	Log("=== death hook ===\n");
 	CancelHoldTimer();
+#ifdef AE_OS_WIN
 	if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
+#else
+	PieFX_DisarmGesture();
+#endif
 	S_active = FALSE;
 
 	//	ORDER IS THE FIX. Ask first, while the pipe it is reading is still
@@ -2667,11 +3260,27 @@ DeathHook(AEGP_GlobalRefcon, AEGP_DeathRefcon)
 	//	what left it blocked in a read that no longer had a server, and a
 	//	process in that state survives being terminated.
 	SendQuit();
+#ifdef AE_OS_WIN
 	if (S_overlay_proc) {
 		DWORD w = WaitForSingleObject(S_overlay_proc, 2000);
 		Log("  overlay: asked to quit -> %s\n",
 			w == WAIT_OBJECT_0 ? "gone" : "still up after 2s");
 	}
+#else
+	//	Same order, same reason: ask while the FIFO it is reading is still
+	//	whole, and give it a moment. StopPipeServer below depends on this
+	//	having happened first.
+	{
+		int waited = 0;
+
+		while (waited < 2000 && PieFX_OverlayAlive()) {
+			Sleep(50);
+			waited += 50;
+		}
+		Log("  overlay: asked to quit -> %s\n",
+			PieFX_OverlayAlive() ? "still up after 2s" : "gone");
+	}
+#endif
 
 	StopPipeServer();
 	StopOverlay();
@@ -2725,24 +3334,24 @@ FindKey(const char *bufZ, const char *keyZ)
 	return p;
 }
 
+//	ONE body on both platforms. Everything here except the path is plain
+//	stdio and a two-field scan, so a per-platform copy would have been a JSON
+//	parser maintained twice; PieFX_ConfigPath is the only line that differs,
+//	and it differs behind its own name.
 static void
 ReadSettings(void)
 {
 	char	path[MAX_PATH];
-	DWORD	len;
 	FILE	*fp = NULL;
 	char	buf[8192];
 	size_t	got;
 
 	S_settings_read = TRUE;
 
-	len = GetEnvironmentVariableA("APPDATA", path, MAX_PATH);
-	if (!len || len >= MAX_PATH - (DWORD)strlen(PIEFX_SETTINGS_REL) - 2) {
-		Log("  settings: no APPDATA; using defaults\n");
+	if (!PieFX_ConfigPath(PIEFX_SETTINGS_REL, path, MAX_PATH)) {
+		Log("  settings: no config directory; using defaults\n");
 		return;
 	}
-	strcat_s(path, MAX_PATH, "\\");
-	strcat_s(path, MAX_PATH, PIEFX_SETTINGS_REL);
 
 	if (fopen_s(&fp, path, "rb") || !fp) {
 		Log("  settings: none at %s; defaults (armOnLaunch=on, %ums)\n",
@@ -2776,12 +3385,17 @@ ReadSettings(void)
 		path, S_arm_on_launch ? "true" : "false", S_hold_ms);
 }
 
+
 static void
 Disarm(AEGP_SuiteHandler &suites, A_Boolean announce)
 {
 	S_active = FALSE;
 	CancelHoldTimer();
+#ifdef AE_OS_WIN
 	if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
+#else
+	PieFX_DisarmGesture();
+#endif
 	SendCancel();
 
 	//	Same order as the death hook, for the same reason: ask the overlay to
@@ -2791,11 +3405,27 @@ Disarm(AEGP_SuiteHandler &suites, A_Boolean announce)
 	//	AE's next write hung on. Arm() launches a fresh one, so turning pieFX
 	//	back on costs nothing.
 	SendQuit();
+#ifdef AE_OS_WIN
 	if (S_overlay_proc) {
 		DWORD w = WaitForSingleObject(S_overlay_proc, 2000);
 		Log("  overlay: asked to quit -> %s\n",
 			w == WAIT_OBJECT_0 ? "gone" : "still up after 2s");
 	}
+#else
+	//	Same order, same reason: ask while the FIFO it is reading is still
+	//	whole, and give it a moment. StopPipeServer below depends on this
+	//	having happened first.
+	{
+		int waited = 0;
+
+		while (waited < 2000 && PieFX_OverlayAlive()) {
+			Sleep(50);
+			waited += 50;
+		}
+		Log("  overlay: asked to quit -> %s\n",
+			PieFX_OverlayAlive() ? "still up after 2s" : "gone");
+	}
+#endif
 	StopPipeServer();
 	StopOverlay();
 	Log("=== pieFX disarmed ===\n");
@@ -2822,27 +3452,47 @@ Arm(AEGP_SuiteHandler &suites, A_Boolean announce)
 		fclose(fp);
 	}
 
-	S_mouse_hook = SetWindowsHookEx(WH_MOUSE, MouseProc, NULL, GetCurrentThreadId());
-	if (!S_mouse_hook) {
-		char m[160];
+	{
+		//	Installing the gesture is the one step of arming that can fail, and
+		//	it fails differently on each platform. Everything around it — the
+		//	log, the pipe server, the overlay — is identical.
+		A_Boolean	hooked;
+		char		m[160];
 
+#ifdef AE_OS_WIN
+		S_mouse_hook = SetWindowsHookEx(WH_MOUSE, MouseProc, NULL, GetCurrentThreadId());
+		hooked = (S_mouse_hook != NULL);
 		sprintf_s(m, sizeof(m), "pieFX: SetWindowsHookEx failed, err=%lu",
 				  (unsigned long)GetLastError());
-		Log("  %s\n", m);
-		//	A silent auto-arm that fails still has to be reachable: it leaves
-		//	S_active FALSE, so the menu item is the way to try again AND to see
-		//	why. A modal error thrown during AE's startup is not.
-		if (announce) { suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, m); }
-		return FALSE;
+#else
+		PieFXGestureCallbacks cb;
+
+		cb.hold		= MacOnHold;
+		cb.move		= MacOnMove;
+		cb.release	= MacOnRelease;
+		cb.user		= NULL;
+		hooked = PieFX_ArmGesture(&cb, PieFXLogBridge, NULL) ? TRUE : FALSE;
+		sprintf_s(m, sizeof(m), "pieFX: could not install the event monitor");
+#endif
+		if (!hooked) {
+			Log("  %s\n", m);
+			//	A silent auto-arm that fails still has to be reachable: it
+			//	leaves S_active FALSE, so the menu item is the way to try again
+			//	AND to see why. A modal error thrown during AE's startup is not.
+			if (announce) { suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, m); }
+			return FALSE;
+		}
 	}
 
 	StartPipeServer();
 	LaunchOverlay();
 
 	S_active = TRUE;
+#ifdef AE_OS_WIN
 	S_rdownB = FALSE;
 	S_hold_firedB = FALSE;
 	S_replay_pending = 0;
+#endif
 	Log("=== pieFX armed (hold %ums) ===\n", S_hold_ms);
 
 	if (!announce) { return TRUE; }

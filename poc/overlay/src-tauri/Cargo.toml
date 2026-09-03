@@ -24,7 +24,13 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `macos-private-api` is what makes a TRANSPARENT window exist on macOS at all:
+# without it WebviewWindowBuilder has no `transparent` method and the main
+# window's "transparent": true is inert. It does what its name says — Apple
+# would reject an App Store submission carrying it — which is no obstacle here,
+# because the overlay is a helper binary launched by an AE plug-in and is not
+# distributed through the App Store. On Windows the feature is a no-op.
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
