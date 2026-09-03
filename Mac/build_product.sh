@@ -104,6 +104,23 @@ else
 	echo "    NOTE: no overlay built yet; the plug-in will log that it cannot find one"
 fi
 
+#	The .jsx snippets the wheel invokes by RELATIVE path. menu.js binds the
+#	master-null slots to "scripts/ag_masterNull.jsx", and the overlay resolves
+#	that against its OWN directory (current_exe().parent()) — which inside the
+#	bundle is Contents/MacOS. So they sit beside the overlay, not in Resources,
+#	however much Resources looks like where they belong.
+#
+#	The snippet the wheel sends carries a fallback that hunts through AE's user
+#	Scripts folders, so a missing file degrades to a thrown error naming the
+#	path rather than to silence — but shipping it is the point.
+mkdir -p "${APP}/Contents/MacOS/scripts"
+if compgen -G "${ROOT}/poc/scripts/*.jsx" > /dev/null; then
+	cp "${ROOT}"/poc/scripts/*.jsx "${APP}/Contents/MacOS/scripts/"
+	echo "    scripts: $(ls "${APP}/Contents/MacOS/scripts" | tr '\n' ' ')"
+else
+	echo "    NOTE: no .jsx scripts found to copy"
+fi
+
 if [ "${INSTALL}" = "1" ]; then
 	if pgrep -qf "Adobe After Effects"; then
 		echo "!! After Effects is running. Quit it first — AE only reads Plug-ins at"
