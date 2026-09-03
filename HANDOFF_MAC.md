@@ -6,9 +6,12 @@ If you are picking up the macOS port cold, read this file, then `MAC_PORT.md`
 product's handoff and is still the authority on everything not platform
 specific. Everything below is true as of 2026-09-03.
 
-**Start here: the `%APPDATA%` decision.** It is the first section under "What
-to do next", it blocks three of the four remaining jobs, and it is the one
-piece of work that cannot be done correctly on one side of the wire alone.
+**Start here: the hand-check in AE.** The `%APPDATA%` decision has been taken
+and the three jobs it blocked are written, but every one of them was proven by
+harness rather than in After Effects. Two five-minute checks with AE open —
+the settings/catalogue round trip, and the second-display gesture — are what
+stands between "builds and passes" and "works", and they are the first section
+under "What to do next".
 
 ## One-paragraph state
 
@@ -19,10 +22,11 @@ AE menu command for real — watched working on the author's machine, which runs
 Spanish AE. Everything Phase 0 could not answer has been answered by
 measurement: the overlay strategy survives, the transport is proven outside AE
 by its own harness, launch and lifetime are proven, and the gesture is the
-Phase 0 spike moved into a module. What is NOT yet true is the second half of
-the feature set — the effect search, saved settings, presets and copy-frame are
-all stubbed, all of them loudly, and all of them behind one decision about where
-files live.
+Phase 0 spike moved into a module. The second half of the
+feature set was blocked behind one decision about where files live; that
+decision is now taken on both sides of the wire, and the effect search, saved
+settings and copy-frame are written on the back of it. **They have not been
+run in AE.** Presets remain stubbed, deliberately and last.
 
 ## What is actually proven
 
@@ -56,97 +60,85 @@ Watched working in AE, or measured by a harness against the real binaries.
 
 ## Stubbed, and where
 
-Four functions log `not implemented on macOS yet (MAC_PORT step 5)` rather than
-failing quietly. They are all in `poc/native/pieFX.cpp`, each behind
-`#else // AE_OS_WIN` with the reasoning at the site.
+**One** function is still stubbed. It logs
+`not implemented on macOS yet (MAC_PORT step 5)` rather than failing quietly.
 
 | stub | user-visible effect | blocked on |
 |---|---|---|
-| `ReadSettings` | settings never load; built-in defaults are used | the path decision |
-| `WriteEffectCatalogue` | **the Effects search has no catalogue** | the path decision + encoding |
-| `WritePresets` | no animation presets in the search | Documents equivalent |
-| `CopyFrameToClipboard` | reports to the user and does nothing | nothing — it is ready to write |
+| `WritePresets` | no animation presets in the search | the macOS Documents equivalent, and the shipped-presets root inside the AE install |
+
+Returning 0 is honest here in a way the clipboard stub could not be: the
+catalogue is a LIST, so an empty one degrades to "no presets found" rather than
+to a silent wrong answer. The effects half of the same file is populated.
+
+The other three — `ReadSettings`, `WriteEffectCatalogue` and
+`CopyFrameToClipboard` — are written. Note that they are no longer behind
+`#else // AE_OS_WIN` at all: each turned out to have exactly ONE line that was
+genuinely platform-specific, so the seam moved down to that line
+(`PieFX_ConfigPath`, `PieFX_LegacyToUtf8`, `PngFileToClipboard`) and the bodies
+are now shared between the two platforms. Do not go looking for a macOS copy of
+them.
 
 ## What to do next
 
-### 1. The `%APPDATA%` decision — do this first
+### 1. The hand-check in AE — do this first
 
-Three files live in `%APPDATA%\pieFX\` on Windows, and **both processes touch
-them**, which is why this cannot be decided in the plug-in alone:
+Three things are written, harnessed and never run inside After Effects. None
+of them takes long, and each one is a place where a passing harness can still
+be wrong about the real thing.
 
-| file | written by | read by |
-|---|---|---|
-| `settings.json` | the overlay's settings window | the plug-in (`ReadSettings`) and the overlay |
-| `effects.json` | the plug-in (`WriteEffectCatalogue`) | the overlay's search window |
-| `recents.json` | the overlay's search window | the overlay |
+```bash
+./Mac/build_product.sh --install     # AE must be quit; asks for sudo
+```
 
-The documented macOS answer is `~/Library/Application Support/pieFX/`. What has
-to be settled in one go:
+Then, with AE open:
 
-- **The location**, on both sides. `poc/native/pieFX.cpp` (two `%APPDATA%`
-  sites) and `poc/overlay/src-tauri/src/lib.rs` (`settings_path`,
-  `recents_path`, `effects_path` — all three currently return `None` on macOS,
-  so settings, recents and the catalogue are disabled there).
-- **The relative paths.** `PIEFX_SETTINGS_REL` and `PIEFX_EFFECTS_REL` in
-  `poc/native/pieFX.h` are backslash-shaped (`"pieFX\\settings.json"`). They
-  need a separator that is right on both platforms.
-- **Directory creation.** The Windows side calls `CreateDirectoryA` because the
-  settings window may never have run. The macOS side needs the same, and
-  `~/Library/Application Support` may not have a `pieFX` in it.
+- **Settings round trip.** Open `pieFX Settings` from the Window menu, change
+  the hold to something obviously different (say 600ms), save, restart AE, and
+  check `$TMPDIR/pieFX_poc.txt` for
+  `settings: /Users/…/Library/Application Support/pieFX/settings.json -> armOnLaunch=… holdMs=600`.
+  Then feel it: the wheel should need a noticeably longer press.
+- **The catalogue.** Arm pieFX and look for `effects: wrote N entries (AE
+  claims N)` in the same log — **with no `*** MISMATCH ***`** — then open the
+  effect search and confirm the list is populated and the accented Spanish
+  names are correct rather than mojibake. This is the one place the encoding
+  work can still be wrong: the harness proved the conversion, not that AE's
+  bytes are the ones the conversion expects.
+- **Copy-frame.** Fire it from the wheel, then paste into something. Preview
+  and Photoshop are the two worth trying; a transparent comp is the
+  interesting case, because it is the one Windows cannot do properly.
 
-`--settings <path>` and `--effects <path>` already override the defaults on the
-overlay, and `--settings none` disables both plus recents. Every harness in the
-project runs that way, so **the harnesses will not catch a wrong default** —
-this needs checking by hand once, in AE.
+**The second-display gesture check** belongs here too: right-hold on the
+second screen and confirm the wheel appears under the cursor. It is the last
+coordinate question outstanding.
 
-### 2. The effect catalogue, and the encoding
+### 2. Presets
 
-`WriteEffectCatalogue` comes back once the path exists. It also needs the
-conversion below, because those names go straight into `effects.json` and
-`JSON.parse` on invalid UTF-8 is not a graceful failure.
+The remaining stub, and the plan always had it last: the fiddliest of the four
+for the least payoff. It needs the macOS equivalent of a localised, possibly
+redirected Documents folder, plus the shipped-presets root inside the AE
+install — which on macOS is inside the `.app`, not beside it.
 
-**There are no Unicode accessors.** `AEGP_EffectSuite5` is the newest and both
-`AEGP_GetEffectName` and `AEGP_GetEffectCategory` still take `A_char *`. Two
-earlier documents claimed otherwise and have been corrected; do not go looking.
+The path half is now much cheaper than it was: `PieFX_ConfigBase` and
+`PieFX_ConfigPath` exist in `poc/native/mac/pieFX_paths.cpp` and the Documents
+lookup can sit beside them. The Windows side uses `SHGetFolderPath` rather
+than `%USERPROFILE%\Documents` for a reason recorded at the call site — the
+author's folder is redirected to OneDrive AND localised — and the macOS
+equivalent (`NSSearchPathForDirectoriesInDomains` with
+`NSDocumentDirectory`) is the same kind of answer for the same kind of reason.
 
-So the conversion is ours, at the one point the strings are written out:
-
-- macOS: `CFStringCreateWithCString` with `CFStringGetSystemEncoding()`, then
-  read back as UTF-8.
-- Windows: `MultiByteToWideChar(CP_ACP)` then `WideCharToMultiByte(CP_UTF8)`.
-- On failure, fall back to `AEGP_GetEffectMatchName`, which the SDK header marks
-  `UTF8!!` and which is a stable, non-localised identifier.
-
-**This is not a macOS job.** The same bug is latent on Windows under any
-non-Latin locale; the Spanish Mac merely got there first.
-
-### 3. The clipboard
-
-Self-contained, blocked on nothing, and the one place the port makes the code
-*smaller*. Three formats exist on Windows because `CF_DIB` cannot express alpha;
-`NSPasteboard` takes the PNG bytes as they are, so the WIC decode, the DIB
-construction and the force-opaque fallback all disappear. ~230 lines becoming
-perhaps 40.
-
-The frame still arrives as a PNG on disk from ExtendScript — that half is
-already portable and already works.
-
-### 4. Presets
-
-Needs the macOS equivalent of a localised, possibly redirected Documents folder,
-plus the shipped-presets root inside the AE install. The fiddliest of the four
-for the least payoff, so it goes last.
+`WriteEffectCatalogue` already calls `WritePresets` and already writes the
+`presets` array around whatever it returns, so this is a self-contained
+function with a defined contract and a working harness path around it.
 
 ### Also outstanding
 
-- **The second-display gesture check** (above).
 - **Distribution.** Untouched, and it has grown two facts: `macos-private-api`
   is required for a transparent window and rules out the App Store, and the
   overlay currently runs as a **bare executable, not a bundled `.app`**, with
   its accessory activation policy set in code rather than by `LSUIElement`.
   Whether the shipped form is a bundle, and whether bundling disturbs any of the
   four window properties measured in step 1, is untested.
-
 ## Traps — things already paid for once
 
 - **A local NSEvent monitor cannot be tested from outside its own app.** That is
@@ -198,6 +190,12 @@ python3 poc/pipe_test.py                                    # drives the OVERLAY
 ./poc/native/mac/build_fifo_test.sh                         # drives the PLUG-IN side
 poc/overlay/src-tauri/target/release/pieFX_fifo_test
 
+# the step-5 harnesses, no AE involved
+./poc/native/mac/build_paths_test.sh                        # paths + the encoding
+poc/overlay/src-tauri/target/release/pieFX_paths_test
+./poc/native/mac/build_clipboard_test.sh                    # REPLACES your clipboard
+poc/overlay/src-tauri/target/release/pieFX_clipboard_test
+
 # the gesture, in a host that is not AE
 ./poc/native/mac/build_gesture_test.sh
 poc/overlay/src-tauri/target/release/pieFX_gesture_test
@@ -230,8 +228,13 @@ poc/native/mac/
   pieFX_fifo.{h,cpp}        the transport
   pieFX_launch.{h,cpp}      launch, process group, teardown
   pieFX_gesture.{h,mm}      the right-hold gesture
+  pieFX_paths.{h,cpp}       ~/Library/Application Support/pieFX, and mkdir -p
+  pieFX_text.{h,cpp}        legacy AE text -> UTF-8 (there are no Unicode accessors)
+  pieFX_clipboard.{h,mm}    a PNG onto NSPasteboard; three formats become one
   fifo_test.cpp             transport harness, plug-in side
   gesture_test.mm           the gesture in a host that is not AE
+  paths_test.cpp            the two-sided path agreement, and the encoding
+  clipboard_test.mm         the clipboard, alpha included
 poc/pipe_test.py            transport harness, overlay side
 poc/scripts/ag_localeProbe.jsx
 ```
@@ -246,6 +249,20 @@ lines of shell is easier to read and to review than a `pbxproj`.
 AEGP is shared and untouched. Five regions are `#ifdef AE_OS_WIN` with a macOS
 branch that delegates to the modules above: the transport, the overlay launch,
 the gesture, the clipboard, the paths.
+
+**Step 5 made three of those regions smaller, and that is the lesson in it.**
+`ReadSettings`, `WriteEffectCatalogue` and `CopyFrameToClipboard` were each
+split whole, and each turned out to contain exactly one genuinely
+platform-specific LINE — the config path, the encoding, the pasteboard call.
+Everything around those lines was stdio, an AEGP walk, and ExtendScript. So the
+seam was pushed down to the line, the bodies rejoined, and what would have been
+a duplicate JSON parser and a duplicate 90-line catalogue walker never got
+written.
+
+The rule that produced that: split at the smallest thing that genuinely
+differs, and be suspicious of a `#ifdef` whose two branches would say mostly
+the same thing. A stub is a fine placeholder for a function nobody has ported;
+it is a bad guess at where the platform boundary actually is.
 
 Everything else that failed to compile failed over **vocabulary** — `BOOL`,
 `MAX_PATH`, `sprintf_s`, `ZeroMemory`, `CRITICAL_SECTION` — and that is

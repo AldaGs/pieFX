@@ -186,17 +186,35 @@ is what the mixed-DPI coordinate bug looked like from the outside.
    exists too** — `Mac/build_product.sh` builds a loadable `pieFX.plugin` from
    `poc/native/pieFX.cpp` plus the macOS modules. It has not been loaded by AE
    yet.
-5. **Paths, clipboard, Unicode accessors.** ← next. Four functions are stubbed
-   and say so in the log; see `MAC_RESULTS.md`. The `%APPDATA%` ones are a
-   TWO-SIDED agreement — the overlay reads and writes the same files — so they
-   want deciding once, for both ends, rather than half here.
+5. **Paths, clipboard, Unicode accessors.** — **THREE OF FOUR DONE.** See
+   `MAC_RESULTS.md` for each.
+   - ~~The `%APPDATA%` agreement~~ — taken on both sides at once:
+     `~/Library/Application Support/pieFX/`, `PieFX_ConfigPath` in the plug-in
+     and `piefx_dir()` in the overlay, with `PIEFX_PATH_SEP` keeping the leaf
+     names spelled once. Checked end to end with the overlay started on no
+     arguments at all, which is the only check that could catch a wrong
+     default — every harness in this project passes `--settings` explicitly.
+   - ~~`ReadSettings`~~ and ~~`WriteEffectCatalogue`~~ — written, and now
+     SINGLE-bodied on both platforms. The `#ifdef` had been in the wrong
+     place: only the path differed.
+   - ~~The encoding~~ — `PieFX_LegacyToUtf8`, both platforms. It tries UTF-8
+     FIRST, because the system-encoding decode cannot fail and therefore
+     cannot be checked; the match name is the fallback.
+   - ~~The clipboard~~ — `NSPasteboard`, one format instead of three, alpha
+     asserted by harness.
+   - **`WritePresets` remains**, and it is the one the plan always put last:
+     it needs the macOS equivalent of a localised, possibly redirected
+     Documents folder plus the shipped-presets root inside the AE install —
+     the fiddliest of the four for the least payoff.
 6. ~~**Localisation of menu ids**~~ — **investigated**, on a Spanish AE. The
-   ids are language-independent and the fallback now works; what remains is
-   the effect-name encoding, which belongs to step 5.
+   ids are language-independent and the fallback now works. ~~what remains is
+   the effect-name encoding~~ — that is done too, in step 5.
 
-Steps 3 to 5 are mechanical. Step 1 DID change the design, in the one way it
-was most likely to. Step 6 is still the one most likely to be bigger than it
-looks.
+Steps 3 to 5 were mechanical, with one exception worth recording: step 5 was
+not a set of four small fixes but ONE two-sided decision with three fixes
+downstream of it, which is why the plan said to take it whole. Step 1 DID
+change the design, in the one way it was most likely to. Step 6 turned out
+smaller than feared — the ids do not vary by language.
 
 ## What this page does NOT cover
 

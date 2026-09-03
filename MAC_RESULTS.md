@@ -745,28 +745,160 @@ there is nothing to detect there; it appeared the moment the same source was
 compiled for a platform with a different `long`. Cross-compiling is its own
 kind of test.
 
-## What is stubbed, and why loudly
+## What was stubbed, and why loudly
 
-Four functions log "not implemented on macOS yet (MAC_PORT step 5)" rather
-than failing silently:
+Four functions logged "not implemented on macOS yet (MAC_PORT step 5)" rather
+than failing silently. **Three of the four are now written**; see the three
+sections below. `WritePresets` is the one that remains, and returning 0 is
+honest there in a way the clipboard stub could not be: the catalogue is a LIST,
+so an empty one degrades to "no presets found" rather than to a silent wrong
+answer.
 
-- **`CopyFrameToClipboard`** — and it also reports to the user, because a
-  copy-frame that quietly does nothing is indistinguishable from one that
-  worked until paste time.
-- **`WritePresets`** — returning 0 is honest here in a way the clipboard stub
-  cannot be: the catalogue is a LIST, so an empty one degrades to "no presets
-  found" rather than to a silent wrong answer.
-- **`ReadSettings`** — falls through to the built-in defaults, which are the
-  same defaults every harness in this project already runs under.
-- **`WriteEffectCatalogue`** — blocked on the same `%APPDATA%` decision, and
-  on the Unicode accessors: Phase 0 measured `AEGP_GetEffectName` returning
-  single-byte legacy text on a Spanish AE, and those names go straight into
-  `effects.json`, where `JSON.parse` on invalid UTF-8 is not a graceful
-  failure.
-
-The `%APPDATA%` ones share a reason worth stating: the overlay reads and writes
+The `%APPDATA%` ones shared a reason worth stating: the overlay reads and writes
 those same files from its own side, so where they live is a two-sided
-agreement, and taking half of it here would be worse than taking none.
+agreement, and taking half of it here would have been worse than taking none.
+It was taken whole — below.
+
+## The `%APPDATA%` decision, taken on both sides at once
+
+`~/Library/Application Support/pieFX/`. Not a container: After Effects is not
+sandboxed, so it has no container to share, and the two processes have to land
+on the same directory or the feature does not exist.
+
+The decision is one decision in two places, and both were changed together:
+
+| side | before | now |
+|---|---|---|
+| `poc/native/pieFX.cpp` | two open-coded `%APPDATA%` sites | `PieFX_ConfigPath`, split once |
+| `poc/native/mac/pieFX_paths.cpp` | — | the macOS half, with `mkdir -p` |
+| `poc/overlay/src-tauri/src/lib.rs` | `APPDATA` or `None` in three functions | one `piefx_dir()`, used by all three |
+| `poc/native/pieFX.h` | `"pieFX\\settings.json"` | `"pieFX" PIEFX_PATH_SEP "settings.json"` |
+
+Two things fell out of doing it properly rather than minimally.
+
+**The bodies unified.** `ReadSettings` and `WriteEffectCatalogue` had been
+`#ifdef`-split with a macOS stub, and the split was in the wrong place: only
+the PATH differed, and everything else was stdio, a two-field scan, and an
+AEGP walk — all portable, and all of it code that would have had to be
+maintained twice. Both are now single-bodied, with `PieFX_ConfigPath` as the
+only platform seam. That deletes a prospective duplicate JSON parser and a
+prospective duplicate 90-line catalogue walker rather than adding them.
+
+**The directory is created from the path, not from a second spelling.** The
+Windows original built `%APPDATA%\pieFX` to call `CreateDirectoryA` on, then
+built the full path again from the same pieces. The folder name appearing
+twice is a folder name that can be changed once; the helper now truncates the
+finished path at its last separator instead.
+
+### Why no harness could have caught a wrong default
+
+Every driver in this project passes `--settings` / `--effects` explicitly —
+which is the right way to drive a UI against a KNOWN file, and exactly why a
+wrong default would have gone unnoticed by all of them. So the agreement was
+checked two ways instead:
+
+- `poc/native/mac/paths_test.cpp` pins the C++ side against the three relative
+  names spelled the way `lib.rs` spells them. 22 assertions.
+- End to end, with no AE: a `settings.json` written by hand at the agreed path,
+  and the overlay started with **no arguments at all**. Its log said
+  `load_settings: 38 bytes` — the file the plug-in side would have written,
+  found by the side that reads it.
+
+```
+  system encoding: 0  (MacRoman is 0)
+  [ok] it is ~/Library/Application Support
+  [ok] settings.json is where the overlay looks
+  [ok] effects.json is where the overlay looks
+  [ok] the pieFX folder exists after PieFX_ConfigPath
+  22 passed, 0 failed
+```
+
+## The effect catalogue, and the encoding — try UTF-8 FIRST
+
+`WriteEffectCatalogue` came back with the path, and with the conversion the
+earlier note said it needed. The conversion has one decision in it and it is
+not the obvious one.
+
+The obvious implementation is `CFStringCreateWithCString` with
+`CFStringGetSystemEncoding()`. **That cannot fail.** This machine reports
+encoding 0, MacRoman, and MacRoman has a meaning for every one of the 256 byte
+values — so handing it bytes that are actually UTF-8 does not produce an error,
+it produces mojibake. A conversion that cannot fail is a conversion whose
+result cannot be checked.
+
+So `PieFX_LegacyToUtf8` tests the bytes against the stricter grammar first: if
+they are already well-formed UTF-8 they are copied through untouched, and only
+otherwise are they decoded as the system encoding. An English install takes the
+first path for free, since ASCII is a subset.
+
+Measured, both directions:
+
+```
+  [ok] byte-identical, not round-tripped      "Distorsión" (UTF-8 in)
+  [ok] decoded to the right character, in UTF-8
+         Distorsión                           (0x97 MacRoman in)
+  [ok] a too-small buffer is refused
+  [ok] and the buffer is empty, so a fallback is unambiguous
+```
+
+The refusal path matters as much as the success path, because failure has a
+defined fallback: `AEGP_GetEffectMatchName`, which the SDK header marks
+`UTF8!!` and which is a stable, non-localised identifier. An unlocalised name
+is worse than a localised one and much better than a wrong one — and a
+`match` field is already in the file, so the fallback costs nothing.
+
+**Written for both platforms.** The Windows half —
+`MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, ...)` then `CP_UTF8` — sits
+beside the macOS one at the same call site. `MB_ERR_INVALID_CHARS` is the flag
+that makes the Windows conversion checkable, which is the same property the
+UTF-8 pre-test buys here. This was never a macOS bug; a Spanish Mac just got
+to it first.
+
+## The clipboard: 230 lines become about 40
+
+The one place in the port where the code gets smaller, and the reason is worth
+recording rather than just enjoying.
+
+Windows needs three clipboard formats — `"PNG"`, `CF_DIBV5`, `CF_DIB` —
+because `CF_DIB` cannot express alpha and something has to be there for
+consumers that know nothing else. Producing the two DIBs means decoding the PNG
+with WIC and building bitmap headers by hand. `NSPasteboard` takes the PNG
+bytes as they are under `NSPasteboardTypePNG`, and AppKit derives a bitmap for
+anything that asks — with alpha intact. The WIC decode, `GlobalFrom`, the DIB
+construction and the force-opaque fallback all disappear.
+
+The seam moved as it did for settings: `CopyFrameToClipboard` itself is
+ExtendScript plus string handling and had no Windows in it beyond vocabulary,
+so it is now shared, and only `PngFileToClipboard` is split. Two smaller things
+came with it — `DeleteFileA` went to `pieFX_compat.h` as `unlink` (Windows
+returns FALSE when the file was already absent, and pieFX does not look,
+because absent is the outcome it wanted either way), and `WaitForFrameFile`'s
+`WIN32_FILE_ATTRIBUTE_DATA` became a two-line `FrameFileSize`. Emulating that
+struct in the compat header would have been precisely the Windows emulation
+that header promises not to do.
+
+`poc/native/mac/clipboard_test.mm` asserts the thing that actually matters,
+which is not "did `setData` return YES":
+
+```
+  [ok] byte-identical to the file, i.e. nothing re-encoded it
+  [ok] an NSImage can be built from the pasteboard
+  [ok] at the original 4x4, not rescaled
+  [ok] with alpha, NOT flattened
+  [ok] the opaque half is still opaque
+  [ok] the transparent half is still transparent
+  14 passed, 0 failed
+```
+
+It writes a PNG with a transparent half, puts it on the pasteboard, and reads
+it back both ways a real consumer would — as PNG data, and as an `NSImage`,
+which is the path that would silently flatten alpha if anything here were
+wrong. That last assertion is the one the Windows `CF_DIB` fallback cannot
+satisfy at all.
+
+The harness replaces the clipboard when it runs. That is inherent to testing a
+clipboard, and it is why it is a separate binary rather than something the
+other tests do in passing.
 
 ## The backstop that nearly went missing
 
@@ -869,8 +1001,9 @@ show up.
 
 ## What is still open
 
-- **Effect names** still need the legacy-to-UTF-8 conversion (step 5). There
-  are no Unicode accessors; see the correction above.
+- ~~**Effect names** still need the legacy-to-UTF-8 conversion (step 5).~~
+  **DONE** — `PieFX_LegacyToUtf8`, on both platforms, with the match name as
+  the fallback. There are still no Unicode accessors; see the correction below.
 - **The wheel's own labels** are pieFX's vocabulary, not AE's menu strings, so
   they are a separate and optional translation job. A Spanish user reads
   "Comp Settings" on the wheel and gets `Ajustes de composición`; only the
@@ -922,6 +1055,21 @@ the order `MAC_SESSION.md` gives: S1, S5, S4, S3.
 Logs are written to `$TMPDIR` — `pieFX_S4_gesture.txt` and
 `pieFX_S5_effects.txt`. Note that turning the watch off and on truncates
 the S4 log, so a swallow test has to happen inside a single watch session.
+
+### The two step-5 harnesses
+
+Neither needs AE, and neither needs the overlay.
+
+```bash
+./poc/native/mac/build_paths_test.sh
+poc/overlay/src-tauri/target/release/pieFX_paths_test
+
+./poc/native/mac/build_clipboard_test.sh
+poc/overlay/src-tauri/target/release/pieFX_clipboard_test    # replaces your clipboard
+```
+
+`paths_test` also prints `CFStringGetSystemEncoding()`, which is the number the
+encoding argument above turns on.
 
 ### The overlay
 

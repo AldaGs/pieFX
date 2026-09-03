@@ -28,6 +28,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <limits.h>
 #include <stdint.h>
 
@@ -176,6 +177,15 @@ GetTempPathA(DWORD cap, char *out)
 		n++;
 	}
 	return (DWORD)n;
+}
+
+//	DeleteFileA: "make sure this is not there". Windows returns FALSE when the
+//	file was already absent and pieFX does not look, because absent is the
+//	outcome it wanted either way — unlink has exactly that shape.
+static inline BOOL
+DeleteFileA(const char *path)
+{
+	return path && unlink(path) == 0;
 }
 
 #define SW_SHOWNORMAL	1

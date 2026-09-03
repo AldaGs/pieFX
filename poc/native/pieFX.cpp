@@ -33,6 +33,9 @@
 	#include "mac/pieFX_fifo.h"
 	#include "mac/pieFX_launch.h"
 	#include "mac/pieFX_gesture.h"
+	#include "mac/pieFX_paths.h"
+	#include "mac/pieFX_text.h"
+	#include "mac/pieFX_clipboard.h"
 #endif
 
 // ---------------------------------------------------------------------------
@@ -1452,6 +1455,55 @@ JsonEscapeInto(const char *srcZ, char *outZ, size_t out_max)
 //	asking. There is no enumeration API for presets - the panel finds them by
 //	SCANNING FOLDERS, and so does this.
 //
+// ---------------------------------------------------------------------------
+//	the configuration directory
+//
+//	%APPDATA%\pieFX\ on Windows, ~/Library/Application Support/pieFX/ here.
+//	Three files live in it and BOTH processes touch them, so the location is
+//	one decision rather than two: the overlay builds the same path from the
+//	same two pieces (`piefx_dir` in overlay/src-tauri/src/lib.rs), and the leaf
+//	names come from the PIEFX_*_REL macros, which are now separator-correct on
+//	both platforms.
+//
+//	The directory is created here rather than assumed, on both platforms and
+//	for the same reason: the settings window may never have run on this
+//	machine, so the plug-in can easily be the first thing that wants the
+//	folder.
+#ifdef AE_OS_WIN
+static int
+PieFX_ConfigPath(const char *relZ, char *out, size_t cap)
+{
+	char	base[MAX_PATH];
+	DWORD	len;
+
+	if (!out || !cap) { return 0; }
+	out[0] = 0;
+	if (!relZ || !*relZ) { return 0; }
+
+	len = GetEnvironmentVariableA("APPDATA", base, MAX_PATH);
+	if (!len || len >= MAX_PATH - (DWORD)strlen(relZ) - 2) { return 0; }
+
+	strcpy_s(out, cap, base);
+	strcat_s(out, cap, "\\");
+	strcat_s(out, cap, relZ);
+
+	//	The parent, created from the path just built rather than from a second
+	//	spelling of the folder name. An existing one is not an error.
+	{
+		char	*sep = strrchr(out, '\\');
+		char	saved;
+
+		if (sep && sep > out) {
+			saved	= *sep;
+			*sep	= 0;
+			CreateDirectoryA(out, NULL);
+			*sep	= saved;
+		}
+	}
+	return 1;
+}
+#endif	// AE_OS_WIN
+
 //	Two roots:
 //	  <install>/Support Files/Presets   what AE ships. Found from our OWN module
 //	                                    path (the .aex sits in
@@ -1707,31 +1759,67 @@ WritePresets(FILE *fp)
 
 #endif	// AE_OS_WIN
 
+//	AE's own text into UTF-8, at the one point it leaves the process.
+//
+//	`AEGP_GetEffectName` and `AEGP_GetEffectCategory` return single-byte text
+//	in the system's legacy encoding — there is no Unicode accessor; see
+//	mac/pieFX_text.h. Those bytes go straight into effects.json and the overlay
+//	reads it with JSON.parse, which does not tolerate invalid UTF-8. On failure
+//	the caller falls back to the MATCH name, which the SDK marks `UTF8!!`.
+//
+//	Latent on Windows too, under any non-Latin ACP. A Spanish Mac got there
+//	first; the fix belongs to both platforms.
 #ifdef AE_OS_WIN
+static int
+PieFX_LegacyToUtf8(const char *in, char *out, size_t cap)
+{
+	wchar_t	wide[1024];
+	int		n;
+
+	if (!out || !cap) { return 0; }
+	out[0] = 0;
+	if (!in)  { return 0; }
+	if (!*in) { return 1; }
+
+	n = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, in, -1,
+							wide, (int)(sizeof(wide) / sizeof(wide[0])));
+	if (!n) { return 0; }
+
+	n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, out, (int)cap, NULL, NULL);
+	if (!n) { out[0] = 0; return 0; }
+	return 1;
+}
+#endif	// AE_OS_WIN
+
+//	One field of the catalogue, converted and escaped, with the match name as
+//	the fallback when the conversion cannot be trusted.
+static void
+CatalogueField(const char *rawZ, const char *fallbackZ, char *out, size_t cap)
+{
+	char	utf8[1024];
+
+	if (!PieFX_LegacyToUtf8(rawZ, utf8, sizeof(utf8))) {
+		Log("  effects: un-decodable text, using match name \"%s\"\n", fallbackZ);
+		strcpy_s(utf8, sizeof(utf8), fallbackZ);
+	}
+	JsonEscapeInto(utf8, out, cap);
+}
+
+//	ONE body on both platforms. The AEGP walk, the JSON and the counting are
+//	portable and always were; only the path and the encoding differed, and both
+//	now differ behind a name of their own.
 static void
 WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 {
 	A_Err	err		= A_Err_NONE;
 	A_long	claimed	= 0;
-	char	dir[MAX_PATH];
 	char	path[MAX_PATH];
-	DWORD	len;
 	FILE	*fp		= NULL;
 
-	len = GetEnvironmentVariableA("APPDATA", dir, MAX_PATH);
-	if (!len || len >= MAX_PATH - (DWORD)strlen(PIEFX_EFFECTS_REL) - 2) {
-		Log("  effects: no APPDATA; catalogue not written\n");
+	if (!PieFX_ConfigPath(PIEFX_EFFECTS_REL, path, MAX_PATH)) {
+		Log("  effects: no config directory; catalogue not written\n");
 		return;
 	}
-	strcpy_s(path, MAX_PATH, dir);
-	strcat_s(path, MAX_PATH, "\\pieFX");
-	//	The settings window may never have run on this machine, so the folder is
-	//	not a given. An existing one is not an error.
-	CreateDirectoryA(path, NULL);
-
-	strcpy_s(path, MAX_PATH, dir);
-	strcat_s(path, MAX_PATH, "\\");
-	strcat_s(path, MAX_PATH, PIEFX_EFFECTS_REL);
 
 	if (fopen_s(&fp, path, "wb") || !fp) {
 		Log("  effects: cannot write %s\n", path);
@@ -1768,9 +1856,11 @@ WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 
 		if (err) { break; }
 
-		JsonEscapeInto(name,  e_name,  sizeof(e_name));
+		//	The match name is the fallback for the other two AND is itself
+		//	already UTF-8 by contract, so it only needs escaping.
 		JsonEscapeInto(match, e_match, sizeof(e_match));
-		JsonEscapeInto(cat,   e_cat,   sizeof(e_cat));
+		CatalogueField(name, match, e_name, sizeof(e_name));
+		CatalogueField(cat,  match, e_cat,  sizeof(e_cat));
 
 		fprintf(fp, "%s    { \"name\": \"%s\", \"match\": \"%s\", \"category\": \"%s\" }",
 				walked ? ",\n" : "", e_name, e_match, e_cat);
@@ -1784,36 +1874,17 @@ WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 	//	would mean two files that can disagree about how old they are.
 	A_long presets = WritePresets(fp);
 
-	fprintf(fp, "\n  ],\n  \"walked\": %ld,\n  \"claimed\": %ld,\n  \"presets_found\": %ld\n}\n",
-			walked, claimed, presets);
+	fprintf(fp, "\n  ],\n  \"walked\": %d,\n  \"claimed\": %d,\n  \"presets_found\": %d\n}\n",
+			(int)walked, (int)claimed, (int)presets);
 	fclose(fp);
 
-	Log("  effects: wrote %ld entries (AE claims %ld)%s -> %s\n",
-		walked, claimed, (walked == claimed) ? "" : "  *** MISMATCH ***", path);
+	Log("  effects: wrote %d entries (AE claims %d)%s -> %s\n",
+		(int)walked, (int)claimed, (walked == claimed) ? "" : "  *** MISMATCH ***", path);
 
 	if (err) {
 		Log("  effects: enumeration stopped early with AEGP error %d\n", (int)err);
 	}
 }
-
-#else	// AE_OS_WIN
-
-//	MAC_PORT.md step 5, blocked on the same %APPDATA% agreement as
-//	ReadSettings — the overlay READS this file.
-//
-//	And there is a second reason it is not merely a path fix. Phase 0 measured
-//	AEGP_GetEffectName returning single-byte legacy text on a Spanish AE, and
-//	these names go straight into effects.json, where JSON.parse on invalid
-//	UTF-8 is not a graceful failure. The Unicode accessors are a PREREQUISITE
-//	for this function on a localised Mac, not a polish item.
-static void
-WriteEffectCatalogue(AEGP_SuiteHandler &suites)
-{
-	(void)suites;
-	Log("  effects: catalogue not written on macOS yet (MAC_PORT step 5)\n");
-}
-
-#endif	// AE_OS_WIN
 
 
 // ---------------------------------------------------------------------------
@@ -2068,25 +2139,56 @@ done:
 //	polls instead of asking once. It insists on the same non-zero size twice in
 //	a row: a file that has appeared is not a file that has been written, and a
 //	half-written PNG decodes to an error that reads like a broken frame.
+#else	// AE_OS_WIN
+
+//	The whole of the Windows version above — the WIC decode, GlobalFrom, the
+//	two DIBs — collapses into one call here. NSPasteboard takes the PNG bytes
+//	as they are; see mac/pieFX_clipboard.h for why three formats become one.
+static A_Boolean
+PngFileToClipboard(const char *pathZ, char *errZ, size_t err_max)
+{
+	return PieFX_PngFileToClipboard(pathZ, errZ, err_max) ? TRUE : FALSE;
+}
+
+#endif	// AE_OS_WIN
+
+//	Everything from here down is shared. WaitForFrameFile is stdio and a sleep,
+//	and CopyFrameToClipboard is ExtendScript plus string handling — neither had
+//	any Windows in it beyond vocabulary, so neither gets a second copy.
+
+//	A file's size, or -1 when it is not there. The only genuinely different
+//	line in WaitForFrameFile: emulating WIN32_FILE_ATTRIBUTE_DATA in
+//	pieFX_compat.h would be exactly the Windows emulation that header promises
+//	not to do, so the difference is named instead and the retry loop below —
+//	which is the part with the reasoning in it — stays single.
+static long long
+FrameFileSize(const char *pathZ)
+{
+#ifdef AE_OS_WIN
+	WIN32_FILE_ATTRIBUTE_DATA fad;
+
+	if (!GetFileAttributesExA(pathZ, GetFileExInfoStandard, &fad)) { return -1; }
+	return ((long long)fad.nFileSizeHigh << 32) | (long long)fad.nFileSizeLow;
+#else
+	struct stat st;
+
+	if (stat(pathZ, &st) != 0) { return -1; }
+	return (long long)st.st_size;
+#endif
+}
+
 static A_Boolean
 WaitForFrameFile(const char *pathZ, DWORD wait_ms)
 {
 	const DWORD	step	= 40;
 	DWORD		waited	= 0;
-	LARGE_INTEGER last;
-
-	last.QuadPart = -1;
+	long long	last	= -1;
 
 	for (;;) {
-		WIN32_FILE_ATTRIBUTE_DATA fad;
+		long long now = FrameFileSize(pathZ);
 
-		if (GetFileAttributesExA(pathZ, GetFileExInfoStandard, &fad)) {
-			LARGE_INTEGER now;
-
-			now.HighPart = (LONG)fad.nFileSizeHigh;
-			now.LowPart  = fad.nFileSizeLow;
-
-			if (now.QuadPart > 0 && now.QuadPart == last.QuadPart) {
+		if (now >= 0) {
+			if (now > 0 && now == last) {
 				return TRUE;
 			}
 			last = now;
@@ -2229,26 +2331,6 @@ CopyFrameToClipboard(AEGP_SuiteHandler &suites)
 	Log("  copy-frame: %s\n", t);
 	SendToast("info", t);
 }
-
-#else	// AE_OS_WIN
-
-//	MAC_PORT.md step 5. Not written yet, and stubbed LOUDLY rather than
-//	silently: a copy-frame that quietly does nothing looks identical to a copy
-//	that worked, and the user would find out at paste time.
-//
-//	The port makes this code SMALLER. Three clipboard formats exist on Windows
-//	because CF_DIB cannot express alpha; NSPasteboard takes the PNG bytes as
-//	they are, so the WIC decode, the DIB construction and the force-opaque
-//	fallback all disappear.
-static void
-CopyFrameToClipboard(AEGP_SuiteHandler &suites)
-{
-	Log("  copy-frame: not implemented on macOS yet (MAC_PORT step 5)\n");
-	suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id,
-		"pieFX: copying the frame is not available on macOS yet.");
-}
-
-#endif	// AE_OS_WIN
 
 
 //	S5's lookup: walk the installed catalogue for an exact match name.
@@ -3013,25 +3095,24 @@ FindKey(const char *bufZ, const char *keyZ)
 	return p;
 }
 
-#ifdef AE_OS_WIN
+//	ONE body on both platforms. Everything here except the path is plain
+//	stdio and a two-field scan, so a per-platform copy would have been a JSON
+//	parser maintained twice; PieFX_ConfigPath is the only line that differs,
+//	and it differs behind its own name.
 static void
 ReadSettings(void)
 {
 	char	path[MAX_PATH];
-	DWORD	len;
 	FILE	*fp = NULL;
 	char	buf[8192];
 	size_t	got;
 
 	S_settings_read = TRUE;
 
-	len = GetEnvironmentVariableA("APPDATA", path, MAX_PATH);
-	if (!len || len >= MAX_PATH - (DWORD)strlen(PIEFX_SETTINGS_REL) - 2) {
-		Log("  settings: no APPDATA; using defaults\n");
+	if (!PieFX_ConfigPath(PIEFX_SETTINGS_REL, path, MAX_PATH)) {
+		Log("  settings: no config directory; using defaults\n");
 		return;
 	}
-	strcat_s(path, MAX_PATH, "\\");
-	strcat_s(path, MAX_PATH, PIEFX_SETTINGS_REL);
 
 	if (fopen_s(&fp, path, "rb") || !fp) {
 		Log("  settings: none at %s; defaults (armOnLaunch=on, %ums)\n",
@@ -3064,26 +3145,6 @@ ReadSettings(void)
 	Log("  settings: %s -> armOnLaunch=%s holdMs=%u\n",
 		path, S_arm_on_launch ? "true" : "false", S_hold_ms);
 }
-
-#else	// AE_OS_WIN
-
-//	MAC_PORT.md step 5. %APPDATA% has a documented macOS answer
-//	(~/Library/Application Support/pieFX), but PIEFX_SETTINGS_REL is a
-//	BACKSLASH path and the OVERLAY writes the same file from its own side — so
-//	the two ends have to agree, and that is one decision to take rather than
-//	half a decision to take here.
-//
-//	Falling through to the built-in defaults is safe: they are the same
-//	defaults the overlay uses under --settings none, which is how every
-//	harness in this project already runs.
-static void
-ReadSettings(void)
-{
-	S_settings_read = TRUE;
-	Log("  settings: not read on macOS yet (MAC_PORT step 5); using defaults\n");
-}
-
-#endif	// AE_OS_WIN
 
 
 static void

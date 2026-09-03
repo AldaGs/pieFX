@@ -768,13 +768,45 @@ fn settings_arg() -> Option<String> {
         .cloned()
 }
 
+// The configuration directory — `%APPDATA%\pieFX` on Windows,
+// `~/Library/Application Support/pieFX` on macOS.
+//
+// This is the OVERLAY's half of one decision. The plug-in builds the same path
+// from the same two pieces (`PieFX_ConfigPath` in poc/native/pieFX.cpp, and
+// poc/native/mac/pieFX_paths.h for why that is the macOS answer), because all
+// three files below are touched by BOTH processes: the settings window writes
+// settings.json and the plug-in reads it; the plug-in writes effects.json and
+// the search window reads it.
+//
+// Note that no harness in this project exercises this function: every one of
+// them passes `--settings`/`--effects` explicitly, which is the right way to
+// drive a UI with a known file and also the reason a wrong default here would
+// go unnoticed. It is checked by hand, in AE.
+fn piefx_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        Some(PathBuf::from(std::env::var_os("APPDATA")?).join("pieFX"))
+    }
+    #[cfg(not(windows))]
+    {
+        // $HOME rather than a container: After Effects is not sandboxed, so
+        // there is no container to share, and the two processes have to land
+        // on the same directory.
+        Some(
+            PathBuf::from(std::env::var_os("HOME")?)
+                .join("Library")
+                .join("Application Support")
+                .join("pieFX"),
+        )
+    }
+}
+
 fn settings_path() -> Option<PathBuf> {
     match settings_arg() {
         Some(v) if v == "none" => None,
         Some(v) => Some(PathBuf::from(v)),
         None => {
-            let base = std::env::var_os("APPDATA")?;
-            Some(PathBuf::from(base).join("pieFX").join("settings.json"))
+            Some(piefx_dir()?.join("settings.json"))
         }
     }
 }
@@ -832,8 +864,7 @@ fn effects_path() -> Option<PathBuf> {
         Some(v) if v == "none" => None,
         Some(v) => Some(PathBuf::from(v)),
         None => {
-            let base = std::env::var_os("APPDATA")?;
-            Some(PathBuf::from(base).join("pieFX").join("effects.json"))
+            Some(piefx_dir()?.join("effects.json"))
         }
     }
 }
@@ -871,8 +902,7 @@ fn recents_path() -> Option<PathBuf> {
         Some(v) if v == "none" => None,
         Some(v) => Some(PathBuf::from(v).with_file_name("recents.json")),
         None => {
-            let base = std::env::var_os("APPDATA")?;
-            Some(PathBuf::from(base).join("pieFX").join("recents.json"))
+            Some(piefx_dir()?.join("recents.json"))
         }
     }
 }
