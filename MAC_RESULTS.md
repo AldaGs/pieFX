@@ -797,10 +797,21 @@ thing and stays as it is.
 
 ## Carried forward
 
-**The Unicode accessors.** This AE runs in Spanish, and `AEGP_GetEffectName` /
-`AEGP_GetEffectCategory` return single-byte legacy text, not UTF-8 — `file`
-calls the S5 log "Non-ISO extended-ASCII". Harmless for a spike. The product
-will need the Unicode accessors before those names reach a menu.
+**The effect names, and a correction.** This AE runs in Spanish, and
+`AEGP_GetEffectName` / `AEGP_GetEffectCategory` return single-byte legacy text,
+not UTF-8 — `file` calls the S5 log "Non-ISO extended-ASCII". Harmless for a
+spike.
+
+This file previously said the product needs "the Unicode accessors". **There
+are none.** `AEGP_EffectSuite5` is the newest and both calls still take
+`A_char *`. The conversion has to be done by pieFX, at the single point those
+strings are written into `effects.json` — and it is not a macOS-only job, since
+the same bug is latent on Windows under a non-Latin locale.
+
+`AEGP_GetEffectMatchName` is the exception: the header marks it `UTF8!!`, and a
+match name is a stable, non-localised identifier. It is therefore both the
+right fallback for a name that will not convert and the right key for anything
+that has to be remembered across sessions.
 
 **Points, not pixels, on the plug-in side.** The overlay now expects macOS
 summon and cursor coordinates in points, top-left origin. `NSEvent` gives

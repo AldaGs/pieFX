@@ -116,8 +116,18 @@ Both were noted as harmless for a spike. Neither is harmless for the product.
    extended ASCII on the bench's Spanish AE. Those strings now go straight into
    `effects.json` and onto the search window, where they will be mojibake or
    rejected outright — `JSON.parse` on invalid UTF-8 is not a graceful failure.
-   **The Unicode accessors are a prerequisite for the search on a localised
-   Mac**, not a polish item.
+
+   **CORRECTION.** This page used to call the Unicode accessors a prerequisite.
+   **There are none.** `AEGP_EffectSuite5` is the newest suite and both calls
+   still take `A_char *`; the SDK offers no UTF-16 variant for an effect's name
+   or category. So the conversion is OURS to do, at the one point those strings
+   are written out — and it is not a macOS job: the identical bug is latent on
+   Windows under any non-Latin locale.
+
+   The one string that needs no conversion is `AEGP_GetEffectMatchName`, which
+   the header marks `UTF8!!` and which is a stable, non-localised identifier.
+   That makes it the right fallback when a name will not convert, and the right
+   key for anything that has to be remembered.
 2. **Menu command names are localised too.** The entire `ae-command` table was
    resolved against an English AE, and `findMenuCommandId("Add to Render
    Queue")` returns 0 on a Spanish one. The id fallback would carry the whole
