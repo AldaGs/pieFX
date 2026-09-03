@@ -900,6 +900,113 @@ The harness replaces the clipboard when it runs. That is inherent to testing a
 clipboard, and it is why it is a separate binary rather than something the
 other tests do in passing.
 
+## Two bugs the AE hand-check found, and the harnesses did not
+
+Both were found the first time a human used the features on a real machine,
+and both are worth recording because in each case a harness was PASSING over
+the defect.
+
+### A 6656x2270 frame pasted as 6656x804
+
+`WaitForFrameFile` waited for "the same non-zero size twice in a row, 40ms
+apart". That is a guess dressed as a test. AE does not write a large PNG in one
+push, so any pause longer than the poll interval looked exactly like a finished
+file.
+
+What makes this the worst possible shape of failure is what a truncated PNG
+does next. Its IHDR is in the first 33 bytes and its pixel rows are not — so it
+does not fail to decode. It decodes at the FULL advertised size, with only the
+rows that arrived. Hence the report: the clipboard said 6656x2270, and the
+paste produced 6656x804. Every check in the chain passed. Measured directly:
+
+```
+  [ok] a half-written PNG still produces an image rep
+  [ok] at the FULL advertised size — so size proves nothing
+         94162 bytes whole, 47081 truncated, still reports 1600x1200
+```
+
+The fix is to stop timing and start asking. A PNG says where it ends: the last
+chunk is IEND, and its twelve bytes are a fixed constant — length zero, the
+type, and the CRC of the type — because IEND carries no payload. So "has AE
+finished?" has an exact answer. `PngIsComplete` checks the eight-byte signature
+at the front and those twelve bytes at the back, and `WaitForFrameFile` polls
+for that instead.
+
+Two things follow from the check being exact rather than probabilistic:
+
+- **The budget went from 4s to 15s.** The wait now ends the instant the file is
+  whole, so a large comp costs what it costs and a small one costs nothing. 4s
+  was ample time to be WRONG in; what the budget has to cover now is a genuine
+  8K write. The cost is that a frame AE never finishes writing freezes the UI
+  thread for 15s before the error toast — a worse failure than before, in a
+  case that used to fail by silently pasting the wrong thing.
+- **The size is logged on both paths.** "Grew to 40MB and stopped" and "never
+  appeared" are different problems and used to produce the same message.
+
+**This was never a macOS bug.** `WaitForFrameFile` is shared code and the
+heuristic was inherited from Windows, where a big enough comp would do the same
+thing. It is the third defect in this port that turned out to be latent on both
+platforms.
+
+The harness could not have caught it, and the reason is worth keeping: it only
+ever handed the clipboard a COMPLETE file. It now truncates one — at 1600x1200,
+because half of a 4x4 PNG loses the entire IDAT and fails honestly, so a small
+test image would have reported that all was well.
+
+### The settings and search windows opened on the primary display
+
+Both were built with `.center()`, which centers on the primary monitor. The
+wheel already moves to the screen holding the summon point; its two windows did
+not follow. Settings could at least be dragged back. Search is undecorated by
+design — "type, Enter, gone" — so it could not be moved at all.
+
+`mac_place_on_cursor_screen` puts both on the screen under the cursor, reusing
+`screens_in_points` and asking AppKit for `NSEvent.mouseLocation` rather than
+Tauri for a cursor position, for the reason that section already exists: points
+are the only coherent space across a mixed-DPI desktop.
+
+The two windows get DIFFERENT policies, and the difference is what they are.
+Settings is placed once, when it is created, and afterwards raised wherever the
+user left it — it has a title bar, and a user who dragged it somewhere meant
+it. Search is placed on every summon, because it cannot be dragged, so "where
+it was last time" is not a position anyone chose.
+
+**The trap, which cost a debugging round.** With the placement in, the log said
+the frame had been set to the second screen:
+
+```
+  placing on the cursor's screen: cursor (3055, 877) screen (1512, 0) 1920x1080
+  frame -> top-left (1882, 160) 1180x760
+```
+
+and `CGWindowListCopyWindowInfo` said the window was at `X=166.0 Y=128.0` —
+centered on the PRIMARY. `.center()` is not only an initial position on macOS:
+it is applied again when the window becomes visible, so it silently undoes an
+explicit move made while the window was hidden. It is now `#[cfg(not(target_os
+= "macos"))]`.
+
+That is also the argument for measuring from OUTSIDE the process. The overlay's
+own log is a record of what it asked for, not of what it got, and here those
+were different. After the fix, the two agree:
+
+```
+  moved to top-left (1882, 160)
+  pieFX-overlay window X=1882.0 Y=160.0 W=1180.0 H=760.0
+```
+
+**`setFrameTopLeftPoint:`, not `setFrame:display:`.** setFrame: needs a height,
+and Tauri's `outer_size` reports 1180x760 for a decorated window built at
+1180x760 INNER — it does not include the title bar, so passing that to setFrame:
+resizes the window as a side effect of moving it. Asking AppKit for the true
+frame would mean an NSRect return, whose calling convention differs between
+arm64 and x86_64. setFrameTopLeftPoint: takes the frame's top-left corner in
+screen coordinates: the flip needs only the primary height, and it cannot
+resize by accident. `mac_set_frame_points` stays for the overlay window, which
+genuinely does need to resize itself onto each screen.
+
+Windows has the same `.center()` bug, untested and unfixed here — see
+`HANDOFF_MAC.md`.
+
 ## The backstop that nearly went missing
 
 The idle hook carries a backstop for a press whose UP was never seen — a

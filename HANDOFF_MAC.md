@@ -6,12 +6,13 @@ If you are picking up the macOS port cold, read this file, then `MAC_PORT.md`
 product's handoff and is still the authority on everything not platform
 specific. Everything below is true as of 2026-09-03.
 
-**Start here: the hand-check in AE.** The `%APPDATA%` decision has been taken
-and the three jobs it blocked are written, but every one of them was proven by
-harness rather than in After Effects. Two five-minute checks with AE open —
-the settings/catalogue round trip, and the second-display gesture — are what
-stands between "builds and passes" and "works", and they are the first section
-under "What to do next".
+**Start here: finish the hand-check in AE.** The first pass through it found
+two real bugs — a truncated frame on the clipboard, and the settings and search
+windows opening on the wrong display — and both are fixed and measured. What
+that pass did NOT get to is the settings round trip, the effect catalogue, and
+the second-display gesture. It is the first section under "What to do next",
+and its record so far is two bugs in two features, which is the best argument
+available for finishing it.
 
 ## One-paragraph state
 
@@ -47,6 +48,16 @@ Watched working in AE, or measured by a harness against the real binaries.
 
 ## What is NOT proven
 
+- **Settings and the effect catalogue, inside After Effects.** Both are
+  written and both have passing harnesses, but neither has run with AE in the
+  picture. Specifically unchecked: that `ReadSettings` honours a `holdMs`
+  written by the settings window, and that the catalogue AE produces parses in
+  the search window with its accented names intact. The clipboard and the
+  window placement were in this same list and the first hand-check found a real
+  bug in each, so treat "harness passes" as weak evidence here.
+- **The clipboard fix itself, in AE.** The truncation is understood, measured
+  and fixed, but the fix has only been exercised against PNGs this project
+  wrote. The frame that failed was 6656x2270; that is the one to retry.
 - **The wheel summoned on a second display from the real gesture.** The window
   move is measured and the driver script summons there correctly, but nobody has
   right-held on the second screen in AE. This is a five-minute check and it is
@@ -83,11 +94,16 @@ them.
 
 ### 1. The hand-check in AE — do this first
 
-Three things are written, harnessed and never run inside After Effects. None
-of them takes long, and each one is a place where a passing harness can still
-be wrong about the real thing.
+The first pass through this list found a real bug in each of the two features
+it reached. That is the argument for the rest of it: a passing harness is weak
+evidence about a feature nobody has used.
+
+**Both halves have to be reinstalled**, and the overlay is easy to forget —
+`build_product.sh` copies whatever binary is in `target/release` into the
+bundle, so an overlay built after the last plug-in build is not in there.
 
 ```bash
+cd poc/overlay/src-tauri && cargo build --release && cd -
 ./Mac/build_product.sh --install     # AE must be quit; asks for sudo
 ```
 
@@ -104,9 +120,20 @@ Then, with AE open:
   names are correct rather than mojibake. This is the one place the encoding
   work can still be wrong: the harness proved the conversion, not that AE's
   bytes are the ones the conversion expects.
-- **Copy-frame.** Fire it from the wheel, then paste into something. Preview
-  and Photoshop are the two worth trying; a transparent comp is the
-  interesting case, because it is the one Windows cannot do properly.
+- **Copy-frame, on a BIG comp.** This is the one that already failed: a
+  6656x2270 frame pasted as 6656x804, because the wait for AE to finish writing
+  was a timing guess and a truncated PNG keeps its full advertised dimensions.
+  Retry that exact comp. The log now says
+  `copy-frame: complete PNG after Nms, N bytes` on success and names the byte
+  count on failure, so "AE never finished" and "AE wrote nothing" are no longer
+  the same message. Then paste — Preview and Photoshop are both worth trying,
+  and a transparent comp is the interesting case, because it is the one Windows
+  cannot do properly.
+- **The two windows, on the second display.** Also already failed once, and
+  fixed: settings and search now open on the screen under the cursor. Settings
+  is placed only when it is first created, so a settings window you dragged
+  somewhere stays there; search is placed on every summon, because it has no
+  title bar and cannot be dragged at all.
 
 **The second-display gesture check** belongs here too: right-hold on the
 second screen and confirm the wheel appears under the cursor. It is the last
@@ -133,6 +160,18 @@ function with a defined contract and a working harness path around it.
 
 ### Also outstanding
 
+- **`.center()` on Windows.** The settings and search windows still call it
+  there, and it centers on the primary monitor on Windows too — so the bug the
+  hand-check found on macOS is latent on the shipping platform. It was left
+  alone rather than fixed blind: there is no Windows toolchain on this machine,
+  and per-monitor DPI makes the Windows version of this arithmetic its own
+  question. It is the fourth defect in this port that turned out not to be
+  about macOS.
+- **A 15s freeze on a failed copy-frame.** `WaitForFrameFile` runs on AE's UI
+  thread, and its budget went from 4s to 15s when the check became exact. That
+  is only reached when AE never finishes writing the frame — but when it is
+  reached, After Effects is unresponsive for it. Making copy-frame asynchronous
+  is the real answer and is more than this was worth today.
 - **Distribution.** Untouched, and it has grown two facts: `macos-private-api`
   is required for a transparent window and rules out the App Store, and the
   overlay currently runs as a **bare executable, not a bundled `.app`**, with

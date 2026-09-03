@@ -2136,9 +2136,9 @@ done:
 //	Is the frame on disk yet, and finished?
 //
 //	`saveFrameToPng` returns before the bytes are necessarily readable, so this
-//	polls instead of asking once. It insists on the same non-zero size twice in
-//	a row: a file that has appeared is not a file that has been written, and a
-//	half-written PNG decodes to an error that reads like a broken frame.
+//	polls instead of asking once — and it polls for the PNG's own end marker
+//	rather than for a size that has stopped changing. See PngIsComplete below
+//	for the bug that distinction cost.
 #else	// AE_OS_WIN
 
 //	The whole of the Windows version above — the WIC decode, GlobalFrom, the
@@ -2177,23 +2177,74 @@ FrameFileSize(const char *pathZ)
 #endif
 }
 
+//	Is this a COMPLETE PNG?
+//
+//	This replaces "the same non-zero size twice in a row", which was a guess
+//	dressed as a test and which produced a real bug: a 6656x2270 frame pasted
+//	as 6656x804. AE does not write a big PNG in one push, so any pause longer
+//	than the poll interval looked exactly like a finished file — and a
+//	truncated PNG is the worst possible shape of failure, because its IHDR is
+//	in the first 33 bytes and the pixel rows are not. It therefore does not
+//	fail to decode. It decodes at the FULL advertised size, with only the rows
+//	that arrived, which is why the clipboard reported 6656x2270 while the paste
+//	produced 6656x804. Nothing anywhere reported an error.
+//
+//	A PNG says where it ends: the last chunk is always IEND, and its 12 bytes
+//	are a fixed constant, CRC included, because IEND carries no payload. So the
+//	question "has AE finished?" has an exact answer and does not need timing at
+//	all. The signature is checked at the same time, since a file whose first
+//	eight bytes are not a PNG is not one we should be putting on a clipboard.
+static A_Boolean
+PngIsComplete(const char *pathZ, long long *sizeP)
+{
+	static const BYTE	k_sig[8]	= { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+	//	length 0, type "IEND", and the CRC of "IEND", which never varies.
+	static const BYTE	k_iend[12]	= { 0, 0, 0, 0, 'I', 'E', 'N', 'D',
+										0xAE, 0x42, 0x60, 0x82 };
+	BYTE		head[8];
+	BYTE		tail[12];
+	long long	size	= FrameFileSize(pathZ);
+	FILE		*fp		= NULL;
+
+	if (sizeP) { *sizeP = size; }
+
+	//	Smaller than a signature plus an IEND cannot be a whole PNG, and the
+	//	seek below would go negative.
+	if (size < (long long)(sizeof(head) + sizeof(k_iend))) { return FALSE; }
+
+	if (fopen_s(&fp, pathZ, "rb") || !fp) { return FALSE; }
+
+	if (sizeof(head) != fread(head, 1, sizeof(head), fp)) { fclose(fp); return FALSE; }
+	if (0 != fseek(fp, -(long)sizeof(tail), SEEK_END))    { fclose(fp); return FALSE; }
+	if (sizeof(tail) != fread(tail, 1, sizeof(tail), fp)) { fclose(fp); return FALSE; }
+	fclose(fp);
+
+	if (0 != memcmp(head, k_sig,  sizeof(k_sig)))  { return FALSE; }
+	if (0 != memcmp(tail, k_iend, sizeof(k_iend))) { return FALSE; }
+	return TRUE;
+}
+
 static A_Boolean
 WaitForFrameFile(const char *pathZ, DWORD wait_ms)
 {
 	const DWORD	step	= 40;
 	DWORD		waited	= 0;
-	long long	last	= -1;
+	long long	size	= -1;
 
 	for (;;) {
-		long long now = FrameFileSize(pathZ);
-
-		if (now >= 0) {
-			if (now > 0 && now == last) {
-				return TRUE;
-			}
-			last = now;
+		if (PngIsComplete(pathZ, &size)) {
+			Log("  copy-frame: complete PNG after %ums, %lld bytes\n",
+				waited, size);
+			return TRUE;
 		}
-		if (waited >= wait_ms) { return FALSE; }
+		if (waited >= wait_ms) {
+			//	The size is worth logging even on the failure path: "grew to 40MB
+			//	and stopped" and "never appeared" are different problems, and
+			//	without this they produce the same message.
+			Log("  copy-frame: gave up after %ums; file is %lld bytes and has no IEND\n",
+				waited, size);
+			return FALSE;
+		}
 		Sleep(step);
 		waited += step;
 	}
@@ -2301,17 +2352,23 @@ CopyFrameToClipboard(AEGP_SuiteHandler &suites)
 	//	is the side that should decide whether it exists, and it can afford to
 	//	wait a moment for it.
 	//
-	//	Two equal non-zero sizes in a row, because a file that has appeared is
-	//	not necessarily a file that has been finished.
-	if (!WaitForFrameFile(path, 4000)) {
+	//	The PNG's own IEND marker, not a size that has stopped changing — see
+	//	PngIsComplete.
+	//
+	//	The budget is generous because it is no longer a guess about how long
+	//	AE takes: the wait ends the instant the file is whole, so a large comp
+	//	costs exactly what it costs and a small one costs nothing. It was 4s
+	//	when the test was "the size held still", and 4s was plenty to be WRONG
+	//	in. What it has to cover now is a genuine 8K write, and running out
+	//	means the frame really is not there.
+	if (!WaitForFrameFile(path, 15000)) {
 		char t[MAX_PATH + 120];
 
 		if (wrote[0] && 0 != _stricmp(wrote, path)) {
 			sprintf_s(t, sizeof(t), "Frame not copied: AE wrote to %s, not %s", wrote, path);
 		} else {
-			sprintf_s(t, sizeof(t), "Frame not copied: AE wrote nothing to %s", path);
+			sprintf_s(t, sizeof(t), "Frame not copied: AE did not finish writing %s", path);
 		}
-		Log("  copy-frame: no file after saveFrameToPng at %s\n", path);
 		SendToast("error", t);
 		return;
 	}

@@ -421,6 +421,157 @@ fn mac_set_frame_points(win: &tauri::WebviewWindow, x: f64, y: f64, w: f64, h: f
     dlog(&format!("  frame -> top-left ({}, {}) {}x{}", x, y, w, h));
 }
 
+// Where the cursor is, in the same top-left POINT space as screens_in_points.
+//
+// Asked of AppKit rather than of Tauri, for the reason the whole of this
+// section exists: Tauri's cursor position is physical px, and physical px are
+// not one coordinate space across a mixed-DPI desktop. NSEvent gives points
+// directly — the same thing the plug-in sends for a summon, and for the same
+// reason.
+//
+// mouseLocation is bottom-left origin, so it is flipped through the primary
+// screen's height exactly as mac_set_frame_points flips a window frame.
+#[cfg(target_os = "macos")]
+fn mac_cursor_in_points(win: &tauri::WebviewWindow) -> Option<(f64, f64)> {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct NSPoint { x: f64, y: f64 }
+
+    let primary_h = win
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.size().height as f64 / m.scale_factor())
+        .unwrap_or(0.0);
+    if primary_h <= 0.0 {
+        return None;
+    }
+
+    extern "C" {
+        fn objc_getClass(name: *const u8) -> *const c_void;
+        fn sel_registerName(name: *const u8) -> *const c_void;
+        fn objc_msgSend();
+    }
+    unsafe {
+        // Two doubles: returned in registers on both arm64 and x86_64, so the
+        // ordinary objc_msgSend is correct and no _stret variant is involved.
+        let send: extern "C" fn(*const c_void, *const c_void) -> NSPoint =
+            std::mem::transmute(objc_msgSend as *const ());
+        let p = send(
+            objc_getClass(b"NSEvent\0".as_ptr()),
+            sel_registerName(b"mouseLocation\0".as_ptr()),
+        );
+        Some((p.x, primary_h - p.y))
+    }
+}
+
+// MOVE a window, without touching its size.
+//
+// `setFrameTopLeftPoint:` rather than `setFrame:display:`, and the difference
+// is not stylistic. setFrame: needs a HEIGHT, and Tauri's `outer_size` reports
+// 1180x760 for a decorated window built at 1180x760 INNER — it does not include
+// the title bar. Passing that to setFrame: therefore resizes the window as a
+// side effect of moving it, and the settings window comes out a title bar
+// shorter than it asked to be.
+//
+// Asking AppKit for the true frame instead would mean an NSRect return value,
+// whose calling convention differs between arm64 and x86_64. setFrameTopLeftPoint:
+// avoids the whole question: it takes the frame's TOP-LEFT corner in screen
+// coordinates, so the flip needs only the primary height, and it cannot resize
+// the window by accident.
+#[cfg(target_os = "macos")]
+fn mac_set_top_left_point(win: &tauri::WebviewWindow, x: f64, y: f64) {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct NSPoint { x: f64, y: f64 }
+
+    let primary_h = win
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.size().height as f64 / m.scale_factor())
+        .unwrap_or(0.0);
+    if primary_h <= 0.0 {
+        dlog("  no primary monitor height; not moved");
+        return;
+    }
+    let ns = match win.ns_window() {
+        Ok(p) => p as *mut c_void,
+        Err(e) => {
+            dlog(&format!("  no ns_window; not moved: {}", e));
+            return;
+        }
+    };
+    extern "C" {
+        fn sel_registerName(name: *const u8) -> *const c_void;
+        fn objc_msgSend();
+    }
+    unsafe {
+        // Two doubles, returned/passed in registers on both architectures.
+        let send: extern "C" fn(*mut c_void, *const c_void, NSPoint) =
+            std::mem::transmute(objc_msgSend as *const ());
+        send(
+            ns,
+            sel_registerName(b"setFrameTopLeftPoint:\0".as_ptr()),
+            NSPoint { x, y: primary_h - y },
+        );
+    }
+    dlog(&format!("  moved to top-left ({:.0}, {:.0})", x, y));
+}
+
+// Put a window on the screen the user is actually looking at.
+//
+// The settings and search windows were built with `.center()`, which centers
+// on the PRIMARY monitor — so on a second display the wheel appeared correctly
+// under the cursor and then its two windows opened somewhere else entirely.
+// Settings could at least be dragged back; search is undecorated by design
+// ("type, Enter, gone"), so it could not be moved at all.
+//
+// The wheel already solved this for itself: it moves to the screen holding the
+// summon point. This is the same answer for the windows that follow it, asked
+// of the cursor because that is where the user is — the wheel is summoned at
+// the cursor, and settings is opened from a menu the user just clicked.
+//
+// The rect is clamped into the screen rather than merely centred, because a
+// 1180x760 settings window centred on a small laptop display would otherwise
+// hang off two edges at once.
+#[cfg(target_os = "macos")]
+fn mac_place_on_cursor_screen(win: &tauri::WebviewWindow) {
+    let screens = screens_in_points(win);
+    if screens.is_empty() {
+        return;
+    }
+    let (cx, cy) = match mac_cursor_in_points(win) {
+        Some(p) => p,
+        None => return,
+    };
+    let (sx, sy, sw, sh) = screens
+        .iter()
+        .find(|(x, y, w, h)| cx >= *x && cx < x + w && cy >= *y && cy < y + h)
+        .copied()
+        .unwrap_or(screens[0]);
+
+    // The window's size in points, used ONLY to centre it — the move itself
+    // does not resize, so a size that is a title bar short (which is what
+    // Tauri reports here) shifts the centring by a few points and nothing more.
+    let sf = win.scale_factor().unwrap_or(1.0);
+    let (ww, wh) = match win.outer_size() {
+        Ok(sz) if sf > 0.0 => (sz.width as f64 / sf, sz.height as f64 / sf),
+        _ => return,
+    };
+
+    let x = (sx + (sw - ww) / 2.0).max(sx).min(sx + (sw - ww).max(0.0));
+    let y = (sy + (sh - wh) / 2.0).max(sy).min(sy + (sh - wh).max(0.0));
+
+    dlog(&format!(
+        "  placing on the cursor's screen: cursor ({:.0}, {:.0}) screen ({:.0}, {:.0}) {}x{}",
+        cx, cy, sx, sy, sw, sh
+    ));
+    mac_set_top_left_point(win, x, y);
+}
+
 // Move the overlay onto the screen holding the summon point, and report that
 // screen's top-left origin so the frontend can convert.
 //
@@ -599,6 +750,15 @@ fn raise(w: &tauri::WebviewWindow) {
         mac_activate();
         let _ = w.set_focus();
     }
+    // Said out loud, because both windows are now built with `.visible(false)`
+    // so they can be placed before they are seen — and a window that was never
+    // shown is indistinguishable from a window that failed to open, which is a
+    // confusion this project has already paid for once.
+    dlog(&format!(
+        "  raised \"{}\": visible={:?}",
+        w.label(),
+        w.is_visible()
+    ));
 }
 
 // The AttachThreadInput dance. Windows grants SetForegroundWindow only to a
@@ -642,11 +802,15 @@ fn force_foreground(hwnd: isize) {
 
 fn show_settings(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("settings") {
+        // Raised where it is, NOT moved. Settings is a place you go and stay,
+        // it has a title bar, and a user who dragged it somewhere meant it —
+        // yanking it to the cursor's screen on every reopen would undo that.
+        // The search window below is the opposite case and is treated as such.
         raise(&w);
         dlog("  settings window refocused");
         return;
     }
-    match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    let b = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("pieFX Settings")
         .inner_size(1180.0, 760.0)
         .min_inner_size(920.0, 620.0)
@@ -655,14 +819,31 @@ fn show_settings(app: &tauri::AppHandle) {
         .transparent(false)
         .always_on_top(false)
         .skip_taskbar(false)
-        .focused(true)
-        .center()
-        .build()
-    {
+        .focused(true);
+
+    // `.center()` centers on the PRIMARY monitor, and on macOS it is applied
+    // again when the window becomes visible — so it does not merely start the
+    // window in the wrong place, it silently UNDOES an explicit move made
+    // before the window was shown. That cost a debugging round: the log said
+    // the frame had been set to the second screen, and CGWindowList said the
+    // window was centered on the first. It stays only where nothing better
+    // replaces it.
+    #[cfg(not(target_os = "macos"))]
+    let b = b.center();
+
+    // Built hidden on macOS so it can be placed BEFORE it is seen. Without
+    // this the window appears centred on the primary display and then jumps,
+    // which is a worse bug than the one being fixed. `raise()` shows it.
+    #[cfg(target_os = "macos")]
+    let b = b.visible(false);
+
+    match b.build() {
         // .focused(true) at build time is not enough, for the same reason: it
         // asks Windows for the foreground from a process that is not allowed
         // to have it. The window is raised explicitly after it exists.
         Ok(w) => {
+            #[cfg(target_os = "macos")]
+            mac_place_on_cursor_screen(&w);
             raise(&w);
             dlog("  settings window opened and raised");
         }
@@ -691,6 +872,12 @@ fn show_search(app: &tauri::AppHandle) {
         // Dismissing the search HIDES it rather than closing it, so a second
         // summon is instant and the field is already alive. A hidden window
         // cannot be raised into view, so show it before asking for the front.
+        // Placed again on every summon, unlike settings. This one is a
+        // palette with no title bar and no way to drag it, so "where it was
+        // last time" is not a position the user chose — it is wherever they
+        // happened to be working before. It should follow them.
+        #[cfg(target_os = "macos")]
+        mac_place_on_cursor_screen(&w);
         let _ = w.show();
         raise(&w);
         let _ = app.emit("piefx-search-shown", "");
@@ -706,7 +893,7 @@ fn show_search(app: &tauri::AppHandle) {
     //
     // Out of the taskbar for the same reason: it is not a place you alt-tab
     // back to, it is summoned.
-    match WebviewWindowBuilder::new(app, "search", WebviewUrl::App("search.html".into()))
+    let b = WebviewWindowBuilder::new(app, "search", WebviewUrl::App("search.html".into()))
         .title("pieFX — Apply Effect")
         .inner_size(560.0, 460.0)
         .min_inner_size(420.0, 320.0)
@@ -715,11 +902,25 @@ fn show_search(app: &tauri::AppHandle) {
         .transparent(false)
         .always_on_top(false)
         .skip_taskbar(true)
-        .focused(true)
-        .center()
-        .build()
-    {
+        .focused(true);
+
+    // `.center()` centers on the PRIMARY monitor, and on macOS it is applied
+    // again when the window becomes visible — so it does not merely start the
+    // window in the wrong place, it silently UNDOES an explicit move made
+    // before the window was shown. That cost a debugging round: the log said
+    // the frame had been set to the second screen, and CGWindowList said the
+    // window was centered on the first. It stays only where nothing better
+    // replaces it.
+    #[cfg(not(target_os = "macos"))]
+    let b = b.center();
+
+    #[cfg(target_os = "macos")]
+    let b = b.visible(false);
+
+    match b.build() {
         Ok(w) => {
+            #[cfg(target_os = "macos")]
+            mac_place_on_cursor_screen(&w);
             raise(&w);
             dlog("  search window opened and raised");
         }
