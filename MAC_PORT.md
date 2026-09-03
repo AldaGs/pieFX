@@ -68,7 +68,7 @@ self-tests — is portable untouched. What is not:
 
 | Windows | macOS replacement | State |
 |---|---|---|
-| `CreateNamedPipe` / `ConnectNamedPipe` (7 calls) | `mkfifo` pair, or Unix domain sockets | to write |
+| `CreateNamedPipe` / `ConnectNamedPipe` (7 calls) | `mkfifo` pair, or Unix domain sockets | **written and proven** in `poc/native/mac/pieFX_fifo.cpp`, against the real overlay with no AE |
 | `SetWindowsHookEx(WH_MOUSE)` | `addLocalMonitorForEventsMatchingMask` | **written and proven** in `pieFXMac.mm` |
 | `SetTimer` / `KillTimer` | `dispatch_after` on the main queue | **written and proven** |
 | `SendInput` replay | `[NSApp postEvent:atStart:NO]`, DOWN then UP | **written and proven** |
@@ -151,8 +151,12 @@ is what the mixed-DPI coordinate bug looked like from the outside.
    screens instead of spanning them.
 2. ~~**The offline harness**, driving FIFOs~~ — **DONE**, `poc/pipe_test.py`,
    written before the transport and passing.
-3. **Transport** in the plug-in, then **launch and lifetime**. ← next. Send
-   POINTS, top-left origin, from `NSEvent`; the overlay converts nothing.
+3. **Transport** in the plug-in — **DONE** and proven offline
+   (`poc/native/mac/fifo_test.cpp`) — then **launch and lifetime**. ← next.
+   Send POINTS, top-left origin, from `NSEvent`; the overlay converts nothing.
+   Lifetime has one finding waiting for it already: a child of the overlay
+   appears to outlive it holding the events FIFO open, which is what the
+   Windows job object exists to prevent. See `MAC_RESULTS.md`.
 4. **The gesture**, moved out of the frozen spike into the product plug-in. This
    is proven code changing address, not new work.
 5. **Paths, clipboard, Unicode accessors.**

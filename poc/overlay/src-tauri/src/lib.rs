@@ -30,8 +30,26 @@ use tauri::webview::WebviewWindowBuilder;
 // another thread — and on the plug-in's side that write comes from AE's UI
 // thread, which froze AE on the first summon. Separate handles, separate
 // directions, no serialisation.
+#[cfg(not(target_os = "macos"))]
 const PIPE_EVENTS: &str = r"\\.\pipe\pieFX"; // plug-in -> us (summon/cursor/release)
+#[cfg(not(target_os = "macos"))]
 const PIPE_ACTIONS: &str = r"\\.\pipe\pieFX-cmd"; // us -> plug-in (fire)
+
+// macOS has no named-pipe namespace: the plug-in makes a `mkfifo` pair in
+// $TMPDIR, and these are the base names it tries first. They must match
+// PIEFX_FIFO_EVENTS / PIEFX_FIFO_ACTIONS in poc/native/mac/pieFX_fifo.cpp —
+// this is the dev flow, where an overlay started by hand knows only defaults.
+// A second AE finds the base names held and passes a pid-suffixed pair with
+// --events / --actions instead.
+#[cfg(target_os = "macos")]
+fn default_pipe_names() -> (String, String) {
+    let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+    let base = PathBuf::from(tmp);
+    (
+        base.join("pieFX.events").to_string_lossy().into_owned(),
+        base.join("pieFX.actions").to_string_lossy().into_owned(),
+    )
+}
 
 // The plug-in passes the names it actually managed to create (`--events` / `--actions`),
 // because a second AE instance finds the base names taken and falls back to a
@@ -48,7 +66,12 @@ fn pipe_names() -> (String, String) {
     };
     // Named after what FLOWS, not after whose end it is: tx/rx invert
     // between the two processes, and they duly disagreed.
-    (find("--events", PIPE_EVENTS), find("--actions", PIPE_ACTIONS))
+    #[cfg(target_os = "macos")]
+    let (ev, ac) = default_pipe_names();
+    #[cfg(not(target_os = "macos"))]
+    let (ev, ac) = (PIPE_EVENTS.to_string(), PIPE_ACTIONS.to_string());
+
+    (find("--events", &ev), find("--actions", &ac))
 }
 
 // The pid the plug-in passes with `--owner-pid`: the After Effects that

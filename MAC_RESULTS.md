@@ -400,6 +400,122 @@ And by hand, against the predicted screen centres — (756, 491) on the Retina,
 - `Mac/overlay_drive.sh` — drives the overlay by hand with no plug-in and no
   AE: summon, cursor, release, settings, quit. What the by-eye checks used.
 
+---
+
+# The transport — MAC_PORT.md step 3, first half
+
+The `mkfifo` pair, written and proven against the real overlay with **no After
+Effects anywhere**. `poc/native/mac/pieFX_fifo.cpp`, ~450 lines, deliberately
+free of AEGP so it builds and runs alone.
+
+`poc/pipe_test.py` drives the OVERLAY — it plays the plug-in's part. This is
+the mirror, and the half that had no harness on either platform:
+`poc/native/mac/fifo_test.cpp` runs the real plug-in transport against the real
+overlay binary. Thirteen assertions, stable across repeated runs.
+
+```bash
+./poc/native/mac/build_fifo_test.sh && $TMPDIR/pieFX_fifo_test
+```
+
+It paid for itself on the first run, which is the whole argument for writing it
+before the transport it tests.
+
+## poll() does not wake when the last writer closes
+
+**The bug the harness caught.** On Windows the client going away makes the
+parked `ReadFile` return 0, and that is how a disconnect is noticed. There is
+no equivalent here.
+
+Measured: a `poll()` parked on the read end of a FIFO whose last writer has
+closed **never returns**. The server thread sat in it through a killed overlay,
+a relaunched one, and every assertion in between, and only came out when the
+stop byte arrived. Re-accept failed, so an overlay that went and came back was
+never picked up again — which is arm/disarm/arm, the case the whole
+single-overlay rule exists for.
+
+The fix does not wait to be told. `poll` gets a 250ms cadence, and a departed
+overlay is noticed by asking directly: **`O_WRONLY` on a FIFO fails with
+`ENXIO` when there is no reader**, so no reader on the events FIFO means no
+overlay. It is the same primitive the accept uses, asked in the other
+direction.
+
+That `read() == 0` is ambiguous, and the two cases are opposites: the overlay
+has GONE, or it has opened events and not yet opened actions — the gap between
+its two opens, which happens on every single connect. The same probe tells them
+apart.
+
+## The bounded write survives the port
+
+`b9a73eb` made the Windows TX overlapped with a deadline, because a synchronous
+`WriteFile` to an overlay that had stopped reading froze AE until someone
+killed the overlay by hand. The same guarantee is needed here and costs less
+machinery: the fd is already `O_NONBLOCK`, so a full pipe returns `EAGAIN`
+instead of parking, and `poll()` supplies the deadline.
+
+Tested the way the fault actually happens — `SIGSTOP` on the overlay, which
+stops it reading while leaving it alive and the FIFO whole, the exact state a
+synchronous write never returns from:
+
+```
+pipe: write timed out after 1000ms, treating the overlay as gone
+PASS  a stalled overlay makes the write FAIL rather than hang — gave up after 1000ms
+```
+
+One deadline covers the whole line rather than each `write()` call: a slow
+reader draining a byte at a time would otherwise renew it forever.
+
+## SIGPIPE, and a decision taken inside somebody else's process
+
+Writing to a pipe with no reader raises `SIGPIPE`, whose default action is to
+**terminate the process** — and the process is After Effects. The identical
+condition on Windows is an error return, so nothing in the original anticipates
+it.
+
+It is ignored process-wide, which deserves saying out loud rather than being
+buried. The alternative — block it per-thread and drain it with `sigtimedwait`
+— would have to run on AE's UI thread, since that is where `PipeWrite` is
+called from, and leaving a signal pending on AE's UI thread is the more
+invasive of the two. `MSG_NOSIGNAL`, which would avoid the question entirely,
+is a socket facility and does not apply to FIFOs; it is the standing argument
+for the Unix domain socket fallback `MAC_PORT.md` keeps in reserve.
+
+Asserted directly: kill the overlay, write, and check we are still running.
+
+## Names: a FIFO outlives the process that made it
+
+`ResolvePipeNames` on Windows tries the base names and lets a second AE fall
+back to a pid-suffixed pair. A named pipe exists only while its server holds
+it, so `CreateNamedPipe` simply fails when another AE has it.
+
+**A FIFO is a file.** It outlives its maker, so its existence proves nothing —
+a crashed AE leaves one behind, and treating that as "taken" would push every
+later session onto pid names forever.
+
+So the liveness question is asked of a **lock**, not of the FIFOs:
+`flock` on `$TMPDIR/pieFX.lock`, which the kernel releases when the holder
+dies, crash included — exactly the property the FIFO lacks.
+
+The base names are `$TMPDIR/pieFX.events` and `$TMPDIR/pieFX.actions`, and the
+overlay carries matching defaults so an overlay started by hand still connects.
+That agreement is the one place the two sides must not drift, and the symptom
+of drift is an overlay that starts and silently never connects — so the harness
+asserts it, by launching the overlay with no `--events`/`--actions` at all.
+
+FIFOs are also removed on stop. Windows gets that for free.
+
+## Open, and belonging to the next half
+
+After the overlay exits, a reader reappears on the events FIFO about a second
+later, and the server accepts it as a connection. The likely cause — not yet
+confirmed — is a WebKit child inheriting the overlay's read fd and outliving
+its parent, which would make the transport believe an overlay is connected when
+none is.
+
+It is the macOS shape of what the Windows **job object** prevents, and it
+belongs to launch-and-lifetime, which is not written yet. Whatever ends the
+overlay has to end its children too; `MAC_PORT.md` already names `NSTask` /
+`posix_spawn` and a `kqueue` on the parent pid for that job.
+
 ## Carried forward
 
 **The Unicode accessors.** This AE runs in Spanish, and `AEGP_GetEffectName` /
