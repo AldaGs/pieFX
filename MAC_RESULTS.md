@@ -411,7 +411,8 @@ free of AEGP so it builds and runs alone.
 `poc/pipe_test.py` drives the OVERLAY — it plays the plug-in's part. This is
 the mirror, and the half that had no harness on either platform:
 `poc/native/mac/fifo_test.cpp` runs the real plug-in transport against the real
-overlay binary. Thirteen assertions, stable across repeated runs.
+overlay binary. Thirteen assertions at the time; twenty-three now, with launch
+and lifetime folded in. Stable across repeated runs.
 
 ```bash
 ./poc/native/mac/build_fifo_test.sh && $TMPDIR/pieFX_fifo_test
@@ -529,7 +530,7 @@ outright. See below.
 # Launch and lifetime — MAC_PORT.md step 3, second half
 
 The overlay is now started and stopped by the plug-in side
-(`poc/native/mac/pieFX_launch.cpp`), and it outlives nothing. Nineteen
+(`poc/native/mac/pieFX_launch.cpp`), and it outlives nothing. Twenty-three
 assertions in `fifo_test`, stable across repeated runs.
 
 ## The job object splits in two

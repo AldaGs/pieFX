@@ -1,5 +1,9 @@
 # pieFX — the macOS port
 
+> **Picking this up cold?** Read `HANDOFF_MAC.md` first. This page is the PLAN,
+> with each step's outcome folded back into it; the handoff is the state, the
+> next task, and the traps already paid for once.
+
 What it would take, written from the Windows product as it stands and from
 `MAC_RESULTS.md`, which is the record of the one macOS bench session. Read that
 file first: it answers the research questions, and this one is only about the

@@ -1,7 +1,10 @@
 # pieFX — handoff
 
 If you are picking this up cold, read this file, then `poc/README.md`,
-`poc/SETTINGS.md` and `ARCHITECTURE.md`. `SPIKES.md` is the Phase 0 record and
+`poc/SETTINGS.md` and `ARCHITECTURE.md`. **For the macOS port, read
+`HANDOFF_MAC.md`** — the product builds and runs there too now, and the
+platform seam it describes is why this file's Windows detail still reads as it
+always did. `SPIKES.md` is the Phase 0 record and
 is still the reason several obvious-looking approaches are known to fail.
 Everything below is true as of 2026-09-02.
 
@@ -393,7 +396,8 @@ typing. That has not changed; it has been designed around.
                cleared ON THE WAY OUT, because a warm window that comes back
                holding the last search costs more than it saved.
 
-    recents    %APPDATA%\pieFXecents.json, its own file rather than a key in
+    recents    %APPDATA%\pieFX
+ecents.json, its own file rather than a key in
                settings.json: the settings window writes that file whole, and
                two windows of one process saving the same file is a lost
                update waiting to happen. The wheel re-reads it on each summon.
