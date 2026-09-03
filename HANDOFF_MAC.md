@@ -57,24 +57,18 @@ Watched working in AE, or measured by a harness against the real binaries.
 | **the preset walk** | `pieFX_presets_test` against the real AE install: 621 found, every path opens — and the list checked against AE's own by hand |
 | **the overlay as a bundled `.app`** | `overlay_probe` before and after: level, alpha, bounds and z-order all unchanged; LaunchServices reports `type="UIElement"` |
 | **all four window properties, bundled** | in AE: click-through, no Dock icon, no focus theft — the three a probe cannot reach |
+| **applying a preset from the wheel** | in AE |
+| **`ag_masterNull.jsx` from a slot** | in AE |
+| **the wheel on both displays, from the real gesture** | in AE, on a 2x and a 1x screen |
 | **launch and teardown from inside the bundle** | `fifo_test` run beside the `.app`: it picks the `.app`, connects, and the watchdog still fires |
 
 ## What is NOT proven
 
-- **APPLYING a preset from the wheel.** The catalogue is confirmed in AE — the
-  list matches — but the `.ffx` path crossing to ExtendScript and coming back
-  as an applied preset has not been watched on macOS. Reading the list and
-  firing one are different code paths and only the first is settled.
-- **The settings round trip.** That `ReadSettings` honours a `holdMs` written
-  by the settings window has never been watched. It is the last thing in step 5
-  with no observation behind it at all.
+- **The `holdMs` FIX, in AE.** The setting was broken and is now fixed — see
+  `MAC_RESULTS.md` — but the fix itself has only been exercised by
+  `gesture_test`, which is not After Effects. Set the hold to something obvious
+  and feel it.
 - **Windows, at all, since this port began.** See "What to do next".
-- **The wheel summoned on a second display from the real gesture.** The window
-  move is measured and the driver script summons there correctly, but nobody has
-  right-held on the second screen in AE. This is a five-minute check and it is
-  the last coordinate question outstanding.
-- **`ag_masterNull.jsx` from the wheel.** It ships as of the latest build but has
-  not been fired from a slot on macOS.
 - **Anything on an English macOS AE.** Every observation here is from an es_ES
   install. That is mostly an asset — see the traps below — but it does mean the
   English path on macOS is the untested one, which is an unusual way round.

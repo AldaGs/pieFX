@@ -1233,6 +1233,55 @@ is where this process is realistically seen), and the bevel is built from many
 clipped segments that do not quite meet, so there is hairline serration visible
 only well above icon sizes.
 
+## `holdMs` was parsed for the whole port and never used
+
+The settings round trip was the last thing in step 5 with no observation behind
+it. It was checked by hand and it was broken: setting the hold to 3000ms
+changed nothing, and the wheel went on firing at 200.
+
+Two separate defects, both of the same shape — a value the user can set that
+the thing which needs it never receives.
+
+**The gesture had its own copy of the constant.** `pieFX_gesture.mm` carried
+
+```c
+//	Mirrors PIEFX_HOLD_MS in pieFX.h.
+#define PIEFX_HOLD_MS			200
+```
+
+and `PieFX_ArmGesture(cb, log, user)` had nowhere to put a threshold. So
+`ReadSettings` parsed `gesture.holdMs` into `S_hold_ms` correctly, the log even
+printed it, and the gesture went on using its own 200 because nothing carried
+the value across the seam. The word *mirrors* in that comment is the whole bug:
+a mirror is a copy, and this project has now been bitten by a duplicated value
+three times.
+
+The fix is an argument — `PieFX_ArmGesture(cb, hold_ms, log, user)` — used by
+BOTH places that measure the press: the dispatch_after that normally fires it
+and the drag fallback that catches a press whose timer has not landed. Those
+two disagreeing is how a setting half-works, so they read one variable. The
+armed threshold is now logged, because "the setting did nothing" is exactly the
+failure the argument exists to prevent.
+
+`gesture_test` takes the threshold on the command line for the same reason. A
+test that only ever runs at the default cannot see a default being used when it
+should not be.
+
+**And the range was enforced in three places, with three answers.** The
+settings input said `max="1000"`, nothing clamped what was typed, and the
+plug-in clamped to 2000 — so 3000 was stored as 3000 and became 2000 inside the
+plug-in, where the user could not see it happen. `max` on a number input is
+advisory: it styles the field and blocks the spinner, and does nothing about a
+typed value.
+
+`HOLD_MS_MIN`/`HOLD_MS_MAX` now live in `menu.js` beside `ARM_MODES`, the field
+takes its bounds from them, and `parseSettings` clamps — so the FILE is correct
+and the plug-in's clamp becomes a backstop rather than a silent correction. The
+plug-in still clamps independently, because it reads `settings.json` itself and
+cannot assume anything else wrote it. The bounds are the plug-in's, since its
+reasoning is the load-bearing one: a zero would summon the wheel on every
+right-click and take AE's context menu away entirely.
+
 ## The backstop that nearly went missing
 
 The idle hook carries a backstop for a press whose UP was never seen — a

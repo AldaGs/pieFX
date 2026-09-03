@@ -78,5 +78,29 @@ for m in ["\"\"", "null", "\"nonsense\"", "42"] {
 }
 check(armMode(settings(nil)) == "distance", "no armMode key at all -> the default")
 
+//	The hold threshold, which had the same shape of bug as the arm mode: a
+//	value the user could set, that the wheel then did not use. Two halves —
+//	the plug-in never received it (fixed in pieFX_gesture.mm), and the range
+//	was enforced in three places with three different answers.
+print("\nthe hold threshold's range is ONE range")
+let lo = ctx.evaluateScript("HOLD_MS_MIN")!.toInt32()
+let hi = ctx.evaluateScript("HOLD_MS_MAX")!.toInt32()
+check(lo == 80 && hi == 2000, "HOLD_MS_MIN..MAX is \(lo)..\(hi), matching the plug-in's clamp")
+
+func holdMs(_ v: String) -> Int32 {
+    let json = """
+    { "gesture": { "holdMs": \(v) },
+      "wheel": { "slots": [ { "label": "x", "action": { "kind": "builtin", "name": "copy-frame" } } ] } }
+    """
+    return ctx.evaluateScript("parseSettings(\(json.debugDescription)).gesture.holdMs")!.toInt32()
+}
+//	3000 is the value that started this: typed into the settings window, stored
+//	as 3000, and silently clamped to 2000 inside the plug-in where nobody could
+//	see it.
+check(holdMs("3000") == 2000, "3000 is clamped to 2000 in the FILE, not silently in the plug-in")
+check(holdMs("0") == 80, "0 is raised to 80 — a zero would take away AE's context menu")
+check(holdMs("600") == 600, "a value in range is untouched")
+check(holdMs("\"nonsense\"") == 200, "a non-number falls back to the default")
+
 print("\n\(pass) passed, \(fail) failed")
 exit(fail == 0 ? 0 : 1)

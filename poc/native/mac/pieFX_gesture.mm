@@ -7,8 +7,13 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-//	Mirrors PIEFX_HOLD_MS in pieFX.h.
-#define PIEFX_HOLD_MS			200
+//	The DEFAULT only. The live value arrives through PieFX_ArmGesture and lives
+//	in S_hold_ms below; this is what is used when a caller passes 0.
+//
+//	It is deliberately not called PIEFX_HOLD_MS any more. The old name matched
+//	the one in pieFX.h and was documented as mirroring it, which is exactly how
+//	the settings value ended up being parsed and then ignored.
+#define PIEFX_HOLD_DEFAULT_MS	200
 
 //	How long after a replay our own click is still expected back.
 //
@@ -39,6 +44,12 @@ static NSEvent *S_swallowed_down	= nil;
 //	Windows timer, so a stale one from an earlier press is invalidated by
 //	generation instead of stopped.
 static long		S_press_gen			= 0;
+
+//	The live hold threshold, set by PieFX_ArmGesture. Both places that measure
+//	the press read THIS, not a constant — the timer that normally fires it and
+//	the drag fallback that catches the case where the timer has not landed yet.
+//	They disagreeing is how a setting half-works.
+static unsigned	S_hold_ms			= PIEFX_HOLD_DEFAULT_MS;
 
 static PieFXGestureCallbacks	S_cb	= { NULL, NULL, NULL, NULL, NULL };
 static PieFXLogFn				S_log	= NULL;
@@ -140,7 +151,8 @@ OnHoldDetected(const char *sourceZ)
 }
 
 int
-PieFX_ArmGesture(const PieFXGestureCallbacks *cb, PieFXLogFn log, void *log_user)
+PieFX_ArmGesture(const PieFXGestureCallbacks *cb, unsigned hold_ms,
+                 PieFXLogFn log, void *log_user)
 {
 	if (S_armed) {
 		return 1;
@@ -150,6 +162,11 @@ PieFX_ArmGesture(const PieFXGestureCallbacks *cb, PieFXLogFn log, void *log_user
 	}
 	S_log		= log;
 	S_log_user	= log_user;
+	S_hold_ms	= hold_ms ? hold_ms : PIEFX_HOLD_DEFAULT_MS;
+
+	//	Logged, because "the setting did nothing" is the failure this argument
+	//	exists to prevent, and the log is where that is now visible.
+	Log("  gesture: hold threshold %ums\n", S_hold_ms);
 
 	NSEventMask mask = NSEventMaskRightMouseDown
 					 | NSEventMaskRightMouseUp
@@ -188,7 +205,7 @@ PieFX_ArmGesture(const PieFXGestureCallbacks *cb, PieFXLogFn log, void *log_user
 				long gen = S_press_gen;
 
 				dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-											 (int64_t)(PIEFX_HOLD_MS * NSEC_PER_MSEC)),
+											 (int64_t)(S_hold_ms * NSEC_PER_MSEC)),
 							   dispatch_get_main_queue(), ^{
 					if (S_rdown && !S_hold_fired && S_press_gen == gen) {
 						OnHoldDetected("timer");
@@ -203,7 +220,7 @@ PieFX_ArmGesture(const PieFXGestureCallbacks *cb, PieFXLogFn log, void *log_user
 
 			case NSEventTypeRightMouseDragged: {
 				//	The fallback for a press whose timer has not landed yet.
-				if (S_rdown && !S_hold_fired && (NowMs() - S_rdown_time) >= PIEFX_HOLD_MS) {
+				if (S_rdown && !S_hold_fired && (NowMs() - S_rdown_time) >= (double)S_hold_ms) {
 					OnHoldDetected("drag");
 				}
 				if (S_rdown && S_hold_fired) {

@@ -3471,7 +3471,9 @@ Arm(AEGP_SuiteHandler &suites, A_Boolean announce)
 		cb.move		= MacOnMove;
 		cb.release	= MacOnRelease;
 		cb.user		= NULL;
-		hooked = PieFX_ArmGesture(&cb, PieFXLogBridge, NULL) ? TRUE : FALSE;
+		//	S_hold_ms, not a constant: settings.json owns this value and the
+		//	gesture module has no other way to learn it.
+		hooked = PieFX_ArmGesture(&cb, S_hold_ms, PieFXLogBridge, NULL) ? TRUE : FALSE;
 		sprintf_s(m, sizeof(m), "pieFX: could not install the event monitor");
 #endif
 		if (!hooked) {

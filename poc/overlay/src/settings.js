@@ -15,7 +15,8 @@
 //     action has a TEST-FIRE button that goes down the same pipe the gesture
 //     uses.
 
-import { DEFAULTS, compile, parseSettings, cloneSettings, settingsError, ARM_MODES } from "./menu.js";
+import { DEFAULTS, compile, parseSettings, cloneSettings, settingsError, ARM_MODES,
+         HOLD_MS_MIN, HOLD_MS_MAX, clampHoldMs } from "./menu.js";
 import { R, bindDraw, slotPosAt, DEFAULT_ACCENT } from "./hexdraw.js";
 import { sendFire, setInstallDir } from "./actions.js";
 
@@ -554,7 +555,11 @@ el("testfire").addEventListener("click", () => {
 // --- global settings ------------------------------------------------------
 el("g_hold").addEventListener("input", (e) => {
   const n = parseInt(e.target.value, 10);
-  if (Number.isFinite(n)) state.settings.gesture.holdMs = n;
+  // Clamped on the way IN. `max` on a number input is advisory — it styles the
+  // field and blocks the spinner, and does nothing at all about a typed value —
+  // so without this a typed 3000 was stored as 3000 and quietly became 2000
+  // inside the plug-in, where nobody could see it happen.
+  if (Number.isFinite(n)) state.settings.gesture.holdMs = clampHoldMs(n);
   el("dirty").hidden = !dirty();
 });
 el("g_armmode").addEventListener("change", (e) => {
@@ -581,7 +586,11 @@ el("g_autoarm").addEventListener("change", (e) => {
 
 function syncGlobals() {
   const g = state.settings.gesture || {};
-  el("g_hold").value = g.holdMs === undefined ? 200 : g.holdMs;
+  // The bounds come from menu.js rather than from the markup, so the field and
+  // the thing that enforces it cannot disagree.
+  el("g_hold").min = HOLD_MS_MIN;
+  el("g_hold").max = HOLD_MS_MAX;
+  el("g_hold").value = g.holdMs === undefined ? DEFAULTS.gesture.holdMs : g.holdMs;
   // A file written before "exit" was removed still names it, and an unknown
   // value would leave the select showing blank and then SAVE that blank. The
   // coercion lives in parseSettings; this asserts the result rather than

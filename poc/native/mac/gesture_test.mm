@@ -25,6 +25,14 @@
 #include "pieFX_gesture.h"
 
 #include <stdio.h>
+#include <stdlib.h>
+
+//	The hold threshold this run is testing. Settable from the command line so
+//	that the ARGUMENT gets exercised and not just the module's default —
+//	settings.json's `holdMs` was parsed correctly for the whole port and then
+//	dropped at this seam, and a test that only ever runs at 200ms cannot see
+//	that happen.
+static unsigned	S_hold_ms	= 200;
 
 static int	S_holds		= 0;
 static int	S_moves		= 0;
@@ -104,7 +112,7 @@ OnCancel(void *)
 		@"Right-click in this window.\n\n"
 		 "SHORT click  →  the context menu should OPEN.\n"
 		 "                The click was swallowed and handed back.\n\n"
-		 "HOLD (>200ms) →  the menu must NOT open, and the terminal\n"
+		 "HOLD (past the threshold) → the menu must NOT open, and the terminal\n"
 		 "                should report a HOLD. Drag while holding to\n"
 		 "                see cursor updates, then let go for a RELEASE.\n\n"
 		 "If the menu opens on a hold, the swallow is broken.\n"
@@ -130,7 +138,10 @@ OnCancel(void *)
 	cb.release	= OnRelease;
 	cb.cancel	= OnCancel;
 	cb.user		= NULL;
-	if (!PieFX_ArmGesture(&cb, OnLog, NULL)) {
+	//	The threshold under test. Passing 0 would take the module's default and
+	//	prove nothing about the argument that carries the setting, so the test
+	//	names a value that is plainly NOT the default and the log states it.
+	if (!PieFX_ArmGesture(&cb, S_hold_ms, OnLog, NULL)) {
 		printf("FAIL: could not arm the gesture\n");
 	}
 }
@@ -152,9 +163,16 @@ OnCancel(void *)
 @end
 
 int
-main(void)
+main(int argc, char **argv)
 {
 	@autoreleasepool {
+		//	  pieFX_gesture_test 800     hold for most of a second
+		if (argc > 1) {
+			int ms = atoi(argv[1]);
+
+			if (ms > 0) { S_hold_ms = (unsigned)ms; }
+		}
+
 		[NSApplication sharedApplication];
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
@@ -162,6 +180,7 @@ main(void)
 
 		[NSApp setDelegate:d];
 		printf("pieFX gesture test — right-click in the window.\n");
+		printf("hold threshold: %ums   (pass a number to change it)\n", S_hold_ms);
 		fflush(stdout);
 		[NSApp run];
 	}

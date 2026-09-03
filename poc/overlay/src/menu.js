@@ -318,6 +318,24 @@ export function settingsError() {
 // the wheel - which is exactly what removing one by hand would risk.
 export const ARM_MODES = ["distance", "center"];
 
+// The hold threshold's range, in one place for the same reason ARM_MODES is.
+// There were THREE different limits: the settings input said max 1000, nothing
+// clamped what was typed, and the plug-in clamped to 2000 — so typing 3000
+// stored 3000 and silently became 2000 somewhere the user could not see.
+//
+// The bounds are the plug-in's, because its reasoning is the load-bearing one:
+// a zero here would summon the wheel on every right-click and take AE's context
+// menu away entirely, which is a setting nobody could undo without editing the
+// file by hand. The plug-in still clamps independently — it reads settings.json
+// itself and cannot assume anything wrote it.
+export const HOLD_MS_MIN = 80;
+export const HOLD_MS_MAX = 2000;
+
+export function clampHoldMs(n) {
+  if (!Number.isFinite(n)) return DEFAULTS.gesture.holdMs;
+  return Math.max(HOLD_MS_MIN, Math.min(HOLD_MS_MAX, Math.round(n)));
+}
+
 export function parseSettings(text) {
   lastError = "";
   if (!text) return cloneSettings(DEFAULTS);
@@ -339,6 +357,7 @@ export function parseSettings(text) {
     // tree. Unknown values land here too, which is the same fix for the same
     // reason.
     if (!ARM_MODES.includes(s.gesture.armMode)) s.gesture.armMode = DEFAULTS.gesture.armMode;
+    s.gesture.holdMs = clampHoldMs(s.gesture.holdMs);
     s.appearance = Object.assign(cloneSettings(DEFAULTS.appearance), s.appearance || {});
     return s;
   } catch (e) {

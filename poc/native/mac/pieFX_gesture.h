@@ -40,7 +40,17 @@ typedef struct {
 //	mouse-UP before any local monitor sees it — 23 DOWNs and exactly 1 UP.
 //	Swallowing the DOWN prevents the menu, which prevents the tracking loop,
 //	which is what makes the UP visible at all.
-int  PieFX_ArmGesture(const PieFXGestureCallbacks *cb, PieFXLogFn log, void *log_user);
+//	`hold_ms` is the threshold, PASSED IN rather than compiled in. It used to be
+//	a #define in the .mm that said "mirrors PIEFX_HOLD_MS in pieFX.h", and a
+//	mirror is a copy: settings.json could set `gesture.holdMs`, the plug-in
+//	parsed it into S_hold_ms, and the gesture went on using its own 200 because
+//	nothing carried the value across this seam. The setting had no effect at all
+//	on macOS and nothing said so.
+//
+//	0 means "use the built-in default", which is what the gesture test wants
+//	when it is not testing the threshold itself.
+int  PieFX_ArmGesture(const PieFXGestureCallbacks *cb, unsigned hold_ms,
+                      PieFXLogFn log, void *log_user);
 void PieFX_DisarmGesture(void);
 
 //	The backstop, called from the idle hook.
