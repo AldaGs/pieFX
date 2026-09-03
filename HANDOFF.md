@@ -56,7 +56,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | The settings window opens IN FRONT of AE | **live** — after the `raise()` fix |
 | A settings file changes what the wheel fires | harness — a rebound `S` fired the rebound command |
 | The whole harness still passes after the frontend was split into modules | harness |
-| The plug-in's walk writes `effects.json` inside AE | **live** |
+| The plug-in's walk writes `effects.json` inside AE | **live** — 522 walked, 522 claimed |
 | The Effects search: window opens in front of AE, filters, Enter applies | **live** — the user's own session |
 | `layerCount` counts LAYERS, not selected things | **live** — `layers=1` with a layer's properties selected |
 | `copy-frame`: the frame reaches the Windows clipboard and pastes | **live** — pasted out of AE |
@@ -394,9 +394,10 @@ The three questions this list opened with - does the catalogue file appear, does
 the window come to the front, does Enter apply - are all answered YES, live.
 What is left is smaller and mostly unmeasured rather than unbuilt.
 
-1. **`walked` vs `claimed` has never been read back.** The file records both,
-   and a disagreement is the only sign that the enumeration is incomplete. One
-   look at `%APPDATA%\pieFX\effects.json` closes it.
+1. ~~`walked` vs `claimed`~~ **CLOSED: 522 walked, 522 claimed** on the
+   author's AE 2026. The Phase 0 spike walked 519 on the same platform and the
+   macOS bench walked 454, so the number tracks what is installed rather than
+   being a constant - which is the point of writing both into the file.
 2. **Recents are unproven end to end** — written by the window, read by the
    wheel, and the panel drawing them has never been seen with anything in it.
 3. **A recent is not fireable from the wheel.** The panel lists them; it does
