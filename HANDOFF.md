@@ -270,6 +270,7 @@ Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
     ARCHITECTURE.md      The locked two-process design
     MAC_SESSION.md       Pre-written macOS checklist (executed once)
     MAC_RESULTS.md       What the macOS bench found
+    MAC_PORT.md          What porting the PRODUCT would take, and in what order
 
     pieFX.cpp/.h         FROZEN Phase 0 spikes (S1,S2,S3,S5) — reference only
     Win/                 spike VS project
