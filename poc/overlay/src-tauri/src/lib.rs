@@ -18,7 +18,11 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl};
+use tauri::{Emitter, Manager, WebviewUrl};
+// Only the Windows path sets a frame in physical px; macOS goes through
+// NSWindow in points.
+#[cfg(not(target_os = "macos"))]
+use tauri::{PhysicalPosition, PhysicalSize};
 use tauri::webview::WebviewWindowBuilder;
 
 // One pipe per direction. A single duplex pipe opened synchronously has its I/O
@@ -92,6 +96,264 @@ fn watch_owner(pid: u32) {
 #[cfg(not(windows))]
 fn watch_owner(_pid: u32) {}
 
+// macOS: the window LEVEL, and the two things it decides at once.
+//
+// Tauri's `alwaysOnTop` gives level 5. That is above After Effects' own
+// windows (level 0), but it is below the main menu bar (24) — and AppKit
+// CONSTRAINS any window at or below that level to sit under the menu bar. The
+// probe caught it doing exactly that: a canvas asked for {0,0} came back at
+// {0,34}, so the window hung 34pt off the bottom of the screen and every
+// screen -> local conversion in the frontend was displaced by the height of
+// the menu bar.
+//
+// NSStatusWindowLevel (25) is above the menu bar, so the constraint does not
+// apply and the frame is honoured as asked. It is also the level S3 measured
+// sitting above After Effects, which is why one change answers both the
+// "spans the displays" property and the "above AE" one.
+//
+// Called BEFORE the frame is set, because a constrained frame is not
+// retroactively released by a later level change.
+//
+// Done through the Objective-C runtime rather than a new crate: two selectors
+// do not justify a dependency. `setLevel:` and `setCollectionBehavior:` both
+// return void and take one integer, which is the one msgSend shape that needs
+// no special casing on arm64.
+#[cfg(target_os = "macos")]
+fn mac_window_level(win: &tauri::WebviewWindow) {
+    use std::ffi::c_void;
+
+    // NSStatusWindowLevel. Above NSMainMenuWindowLevel (24), which is the
+    // threshold that matters.
+    const NS_STATUS_WINDOW_LEVEL: i64 = 25;
+
+    // canJoinAllSpaces | stationary | fullScreenAuxiliary | ignoresCycle.
+    // The overlay is summoned wherever the user is, so it must not belong to
+    // the Space it happened to be created on, must not slide with a Space
+    // switch, must be allowed over a full-screen After Effects, and must never
+    // appear in cmd-tab.
+    const BEHAVIOR: u64 = (1 << 0) | (1 << 4) | (1 << 8) | (1 << 6);
+
+    extern "C" {
+        fn sel_registerName(name: *const u8) -> *const c_void;
+        fn objc_msgSend();
+    }
+
+    let ns = match win.ns_window() {
+        Ok(p) => p as *mut c_void,
+        Err(e) => {
+            dlog(&format!("  no ns_window; level unchanged: {}", e));
+            return;
+        }
+    };
+    unsafe {
+        let send: extern "C" fn(*mut c_void, *const c_void, i64) =
+            std::mem::transmute(objc_msgSend as *const ());
+        send(ns, sel_registerName(b"setLevel:\0".as_ptr()), NS_STATUS_WINDOW_LEVEL);
+
+        let send_u: extern "C" fn(*mut c_void, *const c_void, u64) =
+            std::mem::transmute(objc_msgSend as *const ());
+        send_u(ns, sel_registerName(b"setCollectionBehavior:\0".as_ptr()), BEHAVIOR);
+    }
+    dlog(&format!("  ns_window level -> {} (status), behavior {:#x}",
+                  NS_STATUS_WINDOW_LEVEL, BEHAVIOR));
+}
+
+// macOS: stop the overlay being an app you can switch TO.
+//
+// `"focus": false` on the window is not enough, and the probe showed why: it
+// governs the WINDOW, while what took the foreground from After Effects was
+// the APPLICATION. Measured, before and after launching it:
+//
+//     frontmost: After Effects        ->   frontmost: pieFX-overlay
+//
+// NSApplicationActivationPolicyAccessory is the fix. An accessory app has no
+// Dock icon, is absent from cmd-tab, and — the part that matters — does not
+// become active merely by showing a window. Its windows still draw, which is
+// all the wheel ever needs, because the plug-in owns the mouse and the overlay
+// is a pure renderer.
+//
+// It does NOT lose the ability to take focus deliberately: an accessory app
+// can still activate on demand, which is what `raise` does for the settings
+// and search windows. That is the whole design — never activate by accident,
+// activate explicitly when a keyboard is genuinely needed.
+#[cfg(target_os = "macos")]
+fn mac_accessory_app() {
+    use std::ffi::c_void;
+    const NS_ACCESSORY: i64 = 1; // regular = 0, accessory = 1, prohibited = 2
+    extern "C" {
+        fn objc_getClass(name: *const u8) -> *const c_void;
+        fn sel_registerName(name: *const u8) -> *const c_void;
+        fn objc_msgSend();
+    }
+    unsafe {
+        let get: extern "C" fn(*const c_void, *const c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let app = get(
+            objc_getClass(b"NSApplication\0".as_ptr()),
+            sel_registerName(b"sharedApplication\0".as_ptr()),
+        );
+        if app.is_null() {
+            dlog("  no NSApp; activation policy unchanged");
+            return;
+        }
+        let set: extern "C" fn(*mut c_void, *const c_void, i64) -> bool =
+            std::mem::transmute(objc_msgSend as *const ());
+        let ok = set(app, sel_registerName(b"setActivationPolicy:\0".as_ptr()), NS_ACCESSORY);
+        dlog(&format!("  activation policy -> accessory: {}", ok));
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_accessory_app() {}
+
+// macOS' answer to the AttachThreadInput dance below. Where Windows makes you
+// borrow the foreground thread's input queue, macOS just asks — but an
+// accessory app has to ask, because it is deliberately not activatable by the
+// ordinary route. Without this the settings window is visible and the first
+// keystroke still goes to After Effects, which is the exact symptom the
+// Windows side documents.
+#[cfg(target_os = "macos")]
+fn mac_activate() {
+    use std::ffi::c_void;
+    extern "C" {
+        fn objc_getClass(name: *const u8) -> *const c_void;
+        fn sel_registerName(name: *const u8) -> *const c_void;
+        fn objc_msgSend();
+    }
+    unsafe {
+        let get: extern "C" fn(*const c_void, *const c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let app = get(
+            objc_getClass(b"NSApplication\0".as_ptr()),
+            sel_registerName(b"sharedApplication\0".as_ptr()),
+        );
+        if app.is_null() {
+            return;
+        }
+        let act: extern "C" fn(*mut c_void, *const c_void, bool) =
+            std::mem::transmute(objc_msgSend as *const ());
+        act(app, sel_registerName(b"activateIgnoringOtherApps:\0".as_ptr()), true);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_window_level(_win: &tauri::WebviewWindow) {}
+
+// The screens, in POINTS, top-left origin — the only coordinate space that is
+// coherent on a mixed-DPI Mac.
+//
+// Tauri reports each monitor in "physical px", which is that monitor's points
+// multiplied by ITS OWN scale factor. Combining those across screens is
+// meaningless, and doing so is what broke the multi-display case: a 2x Retina
+// at (0,0) and a 1x display at (1512,0) produced a union 3432 wide, which
+// Tauri then converted back through the PRIMARY's scale and halved to 1716.
+// The window covered 204pt of the second screen and the wheel never appeared.
+//
+// Divided by each monitor's own scale, the same numbers tile exactly:
+//   Retina (0,0) 1512x982   BenQ (1512,0) 1920x1080
+#[cfg(target_os = "macos")]
+fn screens_in_points(win: &tauri::WebviewWindow) -> Vec<(f64, f64, f64, f64)> {
+    let mut v = Vec::new();
+    if let Ok(monitors) = win.available_monitors() {
+        for m in &monitors {
+            let sf = m.scale_factor();
+            if sf <= 0.0 {
+                continue;
+            }
+            let p = m.position();
+            let s = m.size();
+            v.push((p.x as f64 / sf, p.y as f64 / sf,
+                    s.width as f64 / sf, s.height as f64 / sf));
+        }
+    }
+    v
+}
+
+// Set the window's frame in AppKit points, given a TOP-LEFT rect.
+//
+// Done through NSWindow rather than Tauri's set_position/set_size on purpose.
+// Tauri takes physical px and converts them using a scale factor that depends
+// on where the window currently IS — so moving a window between a 2x and a 1x
+// screen would have to guess which scale applied to which half of the move.
+// AppKit points have no such ambiguity: one call, one space.
+//
+// AppKit's origin is bottom-left and the incoming rect is top-left, so the y
+// is flipped through the primary screen's height — the primary's top-left IS
+// the origin of the top-left space.
+#[cfg(target_os = "macos")]
+fn mac_set_frame_points(win: &tauri::WebviewWindow, x: f64, y: f64, w: f64, h: f64) {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct NSRect { x: f64, y: f64, w: f64, h: f64 }
+
+    let primary_h = win
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.size().height as f64 / m.scale_factor())
+        .unwrap_or(0.0);
+    if primary_h <= 0.0 {
+        dlog("  no primary monitor height; frame unchanged");
+        return;
+    }
+
+    let ns = match win.ns_window() {
+        Ok(p) => p as *mut c_void,
+        Err(e) => {
+            dlog(&format!("  no ns_window; frame unchanged: {}", e));
+            return;
+        }
+    };
+
+    extern "C" {
+        fn sel_registerName(name: *const u8) -> *const c_void;
+        fn objc_msgSend();
+    }
+    let rect = NSRect { x, y: primary_h - (y + h), w, h };
+    unsafe {
+        // NSRect is four doubles — a homogeneous float aggregate, passed in
+        // v0..v3 on arm64, so the ordinary objc_msgSend is the right entry
+        // point and no _stret variant is involved.
+        let send: extern "C" fn(*mut c_void, *const c_void, NSRect, bool) =
+            std::mem::transmute(objc_msgSend as *const ());
+        send(ns, sel_registerName(b"setFrame:display:\0".as_ptr()), rect, true);
+    }
+    dlog(&format!("  frame -> top-left ({}, {}) {}x{}", x, y, w, h));
+}
+
+// Move the overlay onto the screen holding the summon point, and report that
+// screen's top-left origin so the frontend can convert.
+//
+// This replaces the Windows shape — one window spanning the whole virtual
+// desktop — which macOS does not allow. `Mac/span_test.swift` measured it: a
+// hand-built NSWindow was GIVEN the full {{0,-98},{3432,1080}} frame and then
+// rendered on exactly one screen, because "Displays have separate Spaces" is
+// on by default. Frame acceptance and rendering are separate things.
+//
+// One screen at a time is no loss: the wheel is summoned at the cursor, and
+// the cursor is on one display. It is a simplification, too — a window on a
+// single screen has a single scale factor, so the mixed-DPI arithmetic that
+// caused the original bug cannot recur.
+#[cfg(target_os = "macos")]
+fn mac_move_to_summon(win: &tauri::WebviewWindow, x: f64, y: f64) -> (i32, i32) {
+    let screens = screens_in_points(win);
+    if screens.is_empty() {
+        return (0, 0);
+    }
+    // The screen containing the point; failing that, the first one — a summon
+    // is always at a real cursor, so the fallback should never be reached, and
+    // guessing a nearest screen would hide it if it were.
+    let hit = screens
+        .iter()
+        .find(|(sx, sy, sw, sh)| x >= *sx && x < sx + sw && y >= *sy && y < sy + sh)
+        .copied()
+        .unwrap_or(screens[0]);
+    let (sx, sy, sw, sh) = hit;
+    mac_set_frame_points(win, sx, sy, sw, sh);
+    (sx as i32, sy as i32)
+}
+
 // Virtual-desktop origin in physical px; the frontend converts the plug-in's
 // screen coordinates to window-local with it.
 struct Origin(Mutex<(i32, i32)>);
@@ -109,7 +371,11 @@ struct Ready(Mutex<bool>);
 // there is no way to tell "the page never loaded" from "the page loaded but the
 // action never fired" — and guessing between those is what costs an AE session.
 fn dlog(s: &str) {
-    if let Some(t) = std::env::var_os("TEMP") {
+    // TEMP is a Windows name; macOS sets TMPDIR and leaves TEMP unset, which
+    // made every line here vanish silently. That is the worst possible failure
+    // for a windowed process with no console — it turns "the page never loaded"
+    // and "the page loaded but the action never fired" into the same symptom.
+    if let Some(t) = std::env::var_os("TEMP").or_else(|| std::env::var_os("TMPDIR")) {
         let p = PathBuf::from(t).join("piefx_overlay.log");
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
             let _ = writeln!(f, "{}", s);
@@ -155,10 +421,19 @@ fn overlay_dir() -> String {
 }
 
 #[tauri::command]
-fn overlay_origin(state: tauri::State<Origin>) -> (i32, i32) {
+fn overlay_origin(state: tauri::State<Origin>) -> (i32, i32, bool) {
     let o = *state.0.lock().unwrap();
-    dlog(&format!("  overlay_origin -> {:?}", o));
-    o
+    // The third value is whether the frontend must divide by devicePixelRatio.
+    //
+    // Windows sends physical screen px, so it must. macOS sends POINTS — which
+    // is what NSEvent gives the plug-in, and the only space that is coherent
+    // across a mixed-DPI desktop — and CSS px ARE points, so dividing would be
+    // wrong. It also removes a hazard: devicePixelRatio changes when a window
+    // moves between a 2x and a 1x screen, and nothing guarantees it has
+    // updated by the time a summon draws.
+    let use_dpr = cfg!(not(target_os = "macos"));
+    dlog(&format!("  overlay_origin -> {:?} use_dpr={}", o, use_dpr));
+    (o.0, o.1, use_dpr)
 }
 
 // Send one already-serialised message to the plug-in. The frontend builds the
@@ -216,6 +491,14 @@ fn raise(w: &tauri::WebviewWindow) {
             Ok(h) => force_foreground(h.0 as isize),
             Err(e) => dlog(&format!("  no hwnd for settings window: {}", e)),
         }
+    }
+    // The same job, the other platform's way round. Order matters here too:
+    // the app is activated first, then the window is asked for focus, because
+    // set_focus on an inactive accessory app has nothing to give focus within.
+    #[cfg(target_os = "macos")]
+    {
+        mac_activate();
+        let _ = w.set_focus();
     }
 }
 
@@ -561,6 +844,36 @@ fn pipe_client(app: tauri::AppHandle) {
                                     let h = app.clone();
                                     let _ = app.run_on_main_thread(move || show_settings(&h));
                                 }
+                                // macOS: the overlay covers ONE screen, so a
+                                // summon has to move it to the screen the
+                                // cursor is on before anything is drawn. The
+                                // move and the emit both happen on the main
+                                // thread, in that order, so the frontend can
+                                // never draw against a stale frame — and the
+                                // new origin travels WITH the summon rather
+                                // than being fetched separately, which would
+                                // race the drawing it exists to position.
+                                #[cfg(target_os = "macos")]
+                                if msg.contains("\"type\":\"summon\"") {
+                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(msg) {
+                                        let px = v.get("x").and_then(|n| n.as_f64());
+                                        let py = v.get("y").and_then(|n| n.as_f64());
+                                        if let (Some(px), Some(py)) = (px, py) {
+                                            let h = app.clone();
+                                            let mut v2 = v.clone();
+                                            let _ = app.run_on_main_thread(move || {
+                                                if let Some(w) = h.get_webview_window("main") {
+                                                    let (ox, oy) = mac_move_to_summon(&w, px, py);
+                                                    *h.state::<Origin>().0.lock().unwrap() = (ox, oy);
+                                                    v2["originX"] = ox.into();
+                                                    v2["originY"] = oy.into();
+                                                }
+                                                let _ = h.emit("piefx", v2.to_string());
+                                            });
+                                            continue;
+                                        }
+                                    }
+                                }
                                 let _ = app.emit("piefx", msg.to_string());
                             }
                         }
@@ -604,24 +917,54 @@ pub fn run() {
                 .get_webview_window("main")
                 .expect("main window is declared in tauri.conf.json");
 
-            // Span the union of all monitors so a summon on ANY display is
-            // inside the canvas. Physical px.
-            let (mut minx, mut miny, mut maxx, mut maxy) =
-                (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-            if let Ok(monitors) = win.available_monitors() {
-                for m in &monitors {
-                    let p = m.position();
-                    let s = m.size();
-                    minx = minx.min(p.x);
-                    miny = miny.min(p.y);
-                    maxx = maxx.max(p.x + s.width as i32);
-                    maxy = maxy.max(p.y + s.height as i32);
+            // Never steal the foreground from After Effects by existing.
+            mac_accessory_app();
+
+            // The level FIRST: a frame set while the window is still menu-bar
+            // constrained comes back displaced, and raising the level
+            // afterwards does not undo it.
+            mac_window_level(&win);
+
+            // ONE screen, not the union — macOS will not render a window
+            // across two displays (Mac/span_test.swift measured it). This is
+            // only the starting position; each summon moves the window to the
+            // screen the cursor is on.
+            #[cfg(target_os = "macos")]
+            {
+                let screens = screens_in_points(&win);
+                for (i, s) in screens.iter().enumerate() {
+                    dlog(&format!("  screen {} (points): ({}, {}) {}x{}",
+                                  i, s.0, s.1, s.2, s.3));
+                }
+                if let Some(&(sx, sy, sw, sh)) = screens.first() {
+                    mac_set_frame_points(&win, sx, sy, sw, sh);
+                    *app.state::<Origin>().0.lock().unwrap() = (sx as i32, sy as i32);
                 }
             }
-            if minx != i32::MAX {
-                let _ = win.set_position(PhysicalPosition::new(minx, miny));
-                let _ = win.set_size(PhysicalSize::new((maxx - minx) as u32, (maxy - miny) as u32));
-                *app.state::<Origin>().0.lock().unwrap() = (minx, miny);
+
+            // Windows: span the union of all monitors so a summon on ANY
+            // display is inside the canvas. Physical px, which IS one coherent
+            // space there.
+            #[cfg(not(target_os = "macos"))]
+            {
+                let (mut minx, mut miny, mut maxx, mut maxy) =
+                    (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+                if let Ok(monitors) = win.available_monitors() {
+                    for m in &monitors {
+                        let p = m.position();
+                        let s = m.size();
+                        minx = minx.min(p.x);
+                        miny = miny.min(p.y);
+                        maxx = maxx.max(p.x + s.width as i32);
+                        maxy = maxy.max(p.y + s.height as i32);
+                    }
+                }
+                if minx != i32::MAX {
+                    let _ = win.set_position(PhysicalPosition::new(minx, miny));
+                    let _ = win.set_size(PhysicalSize::new((maxx - minx) as u32,
+                                                           (maxy - miny) as u32));
+                    *app.state::<Origin>().0.lock().unwrap() = (minx, miny);
+                }
             }
 
             // The plug-in owns the mouse; the overlay must never steal it while

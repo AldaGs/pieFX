@@ -185,14 +185,244 @@ one comparison S5 exists to make.
 
 ---
 
+---
+
+# The overlay — MAC_PORT.md step 1
+
+The one real unknown, measured. `MAC_PORT.md` said the Tauri overlay had never
+been launched on a Mac, that four properties had to hold, and that everything
+else on the page was conditional on them. **All four hold.** One of them only
+holds after a design change, and that change is the finding worth carrying.
+
+Machine: Apple silicon, macOS 26.1, After Effects 2026. Two displays with
+DIFFERENT scale factors — built-in Retina at 2x, a BenQ GW2780 at 1x — which
+turned out to be the configuration that mattered.
+
+| Property | Verdict |
+|---|---|
+| transparent, borderless | **Pass**, but it needs a private API |
+| click-through | **Pass**, drawn pixels included |
+| all displays, one coordinate space | **Pass — by moving, not spanning** |
+| above AE, without stealing focus | **Pass**, once the app stopped activating |
+
+The product logic came along with it. `poc/pipe_test.py` — the macOS harness,
+written before the transport it tests, as that page argued for — passes every
+assertion the PowerShell does: all eight strokes resolve to the same commands
+as Windows, all five context-gating cases, both search-window cases, cancel,
+and the `quit` path.
+
+---
+
+## Transparency is gated on a private API
+
+`WebviewWindowBuilder` has **no `transparent` method on macOS** unless Tauri is
+built with the `macos-private-api` feature. Without it the build does not
+compile, and the main window's `"transparent": true` is inert. Both are now
+set, in `Cargo.toml` and `tauri.conf.json`.
+
+It is named accurately: Apple rejects App Store submissions carrying it. That
+costs nothing here — the overlay is a helper binary launched by an AE plug-in,
+not an App Store product — but it belongs in the distribution question
+`MAC_PORT.md` defers, because it forecloses one distribution route entirely.
+
+## The window level decides two things at once
+
+Tauri's `alwaysOnTop` gives level 5. That is above After Effects' windows
+(level 0), so the "above AE" half looked fine. It is BELOW the main menu bar
+(24), and **AppKit constrains any window at or below that level to sit under
+the menu bar**.
+
+The probe caught it. A canvas asked for `{0,0}` came back at `{0,34}`:
+
+```
+overlay window:  {{0, 34}, {1512, 982}}   on a {{0,0},{1512,982}} screen
+```
+
+So the window hung 34pt off the bottom of the screen, the bottom strip was
+uncovered, and every screen-to-local conversion in the frontend was displaced
+by the height of the menu bar. On Windows the same code places the canvas
+exactly, which is why nothing upstream anticipated it.
+
+`NSStatusWindowLevel` (25) is above the menu bar, so the constraint does not
+apply — and it is the level S3 measured sitting above After Effects. One change
+answers both properties. It has to run BEFORE the frame is set: a constrained
+frame is not retroactively released by a later level change.
+
+## The overlay was taking the foreground from AE
+
+`"focus": false` is set on the main window, and it was not enough. Measured
+with `NSWorkspace.frontmostApplication`, before and after launching it:
+
+```
+frontmost: After Effects        ->   frontmost: pieFX-overlay
+```
+
+The setting governs the WINDOW. What activated was the APPLICATION — a
+non-bundled binary that creates a window becomes a regular, activatable app.
+
+`NSApplicationActivationPolicyAccessory` fixes it: no Dock icon, no cmd-tab
+entry, and no activation merely from showing a window. The windows still draw,
+which is all the wheel needs, because the plug-in owns the mouse.
+
+It does not lose the ability to take focus deliberately. `raise()` — the
+settings and search path — now calls `activateIgnoringOtherApps:`, which is
+exactly the mirror of the `AttachThreadInput` dance on the Windows side, and
+for the same reason: an accessory app must ask, because it is deliberately not
+activatable by the ordinary route. Confirmed by hand: the settings window comes
+forward and takes the first keystroke, and no pieFX entry appears in the Dock
+or in cmd-tab.
+
+## One window CANNOT span two displays
+
+**This is the design change, and it is the reason this section exists.**
+
+The Windows overlay is one window covering the whole virtual desktop. macOS
+declines. "Displays have separate Spaces" is ON by default
+(`com.apple.spaces spans-displays` unset), and it clips a window to one screen.
+
+The measurement is `Mac/span_test.swift`: a hand-built `NSWindow` at status
+level, sized to the union of both screens, washed in translucent blue.
+Deliberately NOT built on Tauri, whose own geometry was already suspect — a
+Tauri window that failed to span would not have said whether Spaces or the
+arithmetic did it.
+
+```
+union asked for:                 {{0, -98}, {3432, 1080}}
+frame the window ACTUALLY got:   {{0, -98}, {3432, 1080}}
+```
+
+The window server **accepted the frame in full, unclamped — and then rendered
+it on exactly one screen.** Frame acceptance and rendering are separate things,
+and only the second one matters. A test that had checked the frame and stopped
+would have reported a pass.
+
+It rendered on the BenQ, not the built-in Retina — not the primary, and not the
+screen holding the origin. So nothing should be built on an assumption about
+WHICH screen a spanning window lands on either.
+
+**The overlay now covers one screen and moves to the screen holding the summon
+point.** No loss: the wheel is summoned at the cursor, and the cursor is on one
+display. It is a simplification, because a window on a single screen has a
+single scale factor — which is the other half of this story.
+
+## The union was computed in mixed units
+
+Before the spanning question could even be asked, the geometry was wrong.
+
+Tauri reports each monitor in "physical px", which is that monitor's points
+multiplied by **its own** scale factor:
+
+```
+Retina  pos (0,0)     size 3024x1964  scale 2
+BenQ    pos (1512,0)  size 1920x1080  scale 1
+```
+
+Those two positions are not in the same space, so the union of them means
+nothing. It came out 3432 wide; Tauri then converted back through the primary's
+scale and halved it:
+
+```
+overlay window:  {{0, 0}, {1716, 982}}      <- 3432 / 2
+BenQ occupies:   1512 -> 3432
+```
+
+The window overlapped the second display by a 204pt sliver. The wheel had
+nowhere to draw, which is why it never appeared rather than appearing displaced.
+
+Divided by each monitor's OWN scale, the same numbers tile exactly — top-left
+origin, y down, the same convention as Windows:
+
+```
+Retina  (0, 0)     1512x982
+BenQ    (1512, 0)  1920x1080
+```
+
+The frame is now set through `NSWindow setFrame:display:` in AppKit points
+rather than Tauri's physical px. Tauri converts using a scale factor that
+depends on where the window currently IS, so a move between a 2x and a 1x
+screen would have to guess which scale applied to which half of the move.
+Points have no such ambiguity.
+
+## The protocol: macOS sends POINTS
+
+Settled by the above, and it is a **prerequisite for the plug-in side**, not a
+detail to be discovered during it.
+
+macOS summon and cursor coordinates are **points, top-left origin** — the same
+convention as Windows, a different unit. `NSEvent` gives the plug-in points, so
+nothing converts. CSS px ARE points, so the frontend divides by nothing:
+`overlay_origin` returns a third value saying whether `devicePixelRatio`
+applies, Rust decides it, and the JS does not sniff the platform.
+
+Dividing by `devicePixelRatio` on macOS would also have been a live hazard on
+its own: it changes when a window moves between a 2x and a 1x screen, and
+nothing guarantees it has updated by the time a summon draws.
+
+The origin CHANGES per summon now, so it travels WITH the summon rather than
+being fetched separately — a separate fetch would race the drawing it exists to
+position. The move and the emit both happen on the main thread, in that order,
+so the frontend can never draw against a stale frame. Confirmed by eye: the
+first frame after switching screens is already in the right place.
+
+Measured, across both screens:
+
+```
+summon (2400, 500)  -> window on BenQ    {{1512,0},{1920,1080}}  local 888,500
+summon (300, 300)   -> window on Retina  {{0,0},{1512,982}}      local 300,300
+```
+
+And by hand, against the predicted screen centres — (756, 491) on the Retina,
+(2472, 540) on the BenQ — both landed within eyeball error.
+
+## What this deleted
+
+- The virtual-desktop union, on macOS. There is no virtual desktop to span.
+- The `devicePixelRatio` division, on macOS, and the mixed-DPI arithmetic with
+  it. The harness had already caught the smell: the same stroke selected anchor
+  cell 4 on the Retina and cell 0 on the BenQ, because a fixed pixel distance
+  meant different things on each. It now returns cell 0 on both, which is what
+  its own label says it should.
+
+## Tools left behind
+
+- `poc/pipe_test.py` — the offline harness. The FIFO port of `pipe_test.ps1`,
+  same assertions in the same order, so a divergence between platforms shows up
+  as a divergence in the test. Two transport differences are commented where
+  they live: a FIFO's two halves are not symmetric (`O_WRONLY` fails with
+  `ENXIO` until a reader exists and is therefore a real connection event, while
+  `O_RDONLY` proves nothing), and `SIGPIPE` has to be ignored explicitly where
+  Windows just returned an error.
+- `Mac/overlay_probe.swift` — screens, window levels, alpha, bounds, and the
+  overlay-vs-AE z-order, with a verdict line. It says out loud that
+  click-through is NOT observable through `CGWindowListCopyWindowInfo`, rather
+  than appearing to cover four properties while covering three.
+- `Mac/span_test.swift` — the Spaces measurement above.
+- `Mac/overlay_drive.sh` — drives the overlay by hand with no plug-in and no
+  AE: summon, cursor, release, settings, quit. What the by-eye checks used.
+
 ## Carried forward
 
-This AE runs in Spanish, and `AEGP_GetEffectName` / `AEGP_GetEffectCategory`
-return single-byte legacy text, not UTF-8 — `file` calls the S5 log "Non-ISO
-extended-ASCII". Harmless for a spike. The product will need the Unicode
-accessors before those names reach a menu.
+**The Unicode accessors.** This AE runs in Spanish, and `AEGP_GetEffectName` /
+`AEGP_GetEffectCategory` return single-byte legacy text, not UTF-8 — `file`
+calls the S5 log "Non-ISO extended-ASCII". Harmless for a spike. The product
+will need the Unicode accessors before those names reach a menu.
+
+**Points, not pixels, on the plug-in side.** The overlay now expects macOS
+summon and cursor coordinates in points, top-left origin. `NSEvent` gives
+points, so the plug-in should send what it has and convert nothing. This is
+settled before the transport is written, deliberately.
+
+**`macos-private-api` and distribution.** The overlay cannot be transparent on
+macOS without it, and it forecloses the App Store. Not a problem for a helper
+binary beside a plug-in, but it belongs in the distribution question rather
+than being rediscovered there.
+
+**One screen at a time.** Nothing downstream should assume the overlay covers
+the desktop. It covers the screen the cursor is on, and it moves.
 
 ## Reproducing
+
+### The plug-in spikes
 
 ```bash
 ./Mac/build_and_install.sh
@@ -205,3 +435,32 @@ the order `MAC_SESSION.md` gives: S1, S5, S4, S3.
 Logs are written to `$TMPDIR` — `pieFX_S4_gesture.txt` and
 `pieFX_S5_effects.txt`. Note that turning the watch off and on truncates
 the S4 log, so a swallow test has to happen inside a single watch session.
+
+### The overlay
+
+Needs Rust; Node is NOT needed, because `frontendDist` is a static directory
+with no build step and `cargo` alone produces the binary.
+
+```bash
+cd poc/overlay/src-tauri && cargo build --release
+```
+
+Then, with no plug-in and no After Effects involved:
+
+```bash
+python3 poc/pipe_test.py     # the offline harness, all assertions
+./Mac/overlay_drive.sh       # drive it by hand: s / c / r / g / q
+swift Mac/overlay_probe.swift    # levels, bounds, z-order vs AE
+swift Mac/span_test.swift        # the Spaces measurement
+```
+
+The overlay writes to `$TMPDIR/piefx_overlay.log`. It is a windowed process
+with no console, so that file is the only way to tell "the page never loaded"
+from "the page loaded but the action never fired" — and it was silently empty
+on macOS until `dlog` learned that `TEMP` is a Windows name and this platform
+sets `TMPDIR`.
+
+Two properties can only be checked by eye, and both need AE open:
+click-through (click AE THROUGH a summoned wheel, not merely around it), and
+the settings window taking the first keystroke rather than being visible but
+keyboard-dead.

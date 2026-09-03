@@ -700,12 +700,25 @@ function release() {
 }
 
 // --- input ----------------------------------------------------------------
+// window-local = (screen - origin), then a unit conversion that differs by
+// platform. The Rust side decides which applies; nothing is sniffed here.
+//
+//   Windows  physical screen px, and the window spans the whole virtual
+//            desktop, so divide by devicePixelRatio to reach the CSS px the
+//            canvas draws in. The origin is fixed for the session.
+//   macOS    POINTS — what NSEvent gives the plug-in, and the only space that
+//            is coherent across a mixed-DPI desktop. CSS px ARE points, so
+//            there is nothing to divide. The origin CHANGES per summon:
+//            macOS will not render one window across two displays, so the
+//            overlay moves to the cursor's screen and sends the new origin
+//            along with the summon.
 let originX = 0;
 let originY = 0;
+let useDpr = true;
 
 function toLocal(x, y) {
-  const dpr = window.devicePixelRatio || 1;
-  return [(x - originX) / dpr, (y - originY) / dpr];
+  const d = useDpr ? window.devicePixelRatio || 1 : 1;
+  return [(x - originX) / d, (y - originY) / d];
 }
 
 if (window.__TAURI__ && window.__TAURI__.event) {
@@ -748,7 +761,9 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     .then((o) => {
       originX = o[0];
       originY = o[1];
-      say("origin " + originX + "," + originY + " dpr=" + window.devicePixelRatio);
+      if (typeof o[2] === "boolean") useDpr = o[2];
+      say("origin " + originX + "," + originY + " dpr=" + window.devicePixelRatio +
+          " useDpr=" + useDpr);
     })
     .catch((e) => say("origin FAILED " + e));
 
@@ -761,6 +776,13 @@ if (window.__TAURI__ && window.__TAURI__.event) {
         return;
       }
       if (m.type === "summon") {
+        // macOS sends the origin WITH the summon: the window has just moved to
+        // the cursor's screen, so the origin fetched at startup is stale.
+        // Absent on Windows, where it never changes.
+        if (typeof m.originX === "number" && typeof m.originY === "number") {
+          originX = m.originX;
+          originY = m.originY;
+        }
         const l = toLocal(m.x, m.y);
         say(
           "summon screen=" + m.x + "," + m.y + " local=" + l[0] + "," + l[1] +
