@@ -97,29 +97,83 @@ printf 'AEgxFXTC' > "${APP}/Contents/PkgInfo"
 echo "==> built ${APP}"
 lipo -info "${BIN}" | sed 's/^/    /'
 
-#	The overlay must sit BESIDE the plug-in binary: PieFX_LaunchOverlay finds
-#	it with dladdr, relative to the image it is compiled into.
+#	The overlay, as a BUNDLE rather than a bare executable.
+#
+#	It ran as a naked Mach-O for the whole port, which works but is not how
+#	macOS expects a GUI process to exist: no bundle identifier, no icon, and
+#	the accessory activation policy (the thing that keeps it out of the Dock
+#	and stops it stealing focus from AE) set only in code. LaunchServices
+#	reported `bundleID=[ NULL ]` for it.
+#
+#	`PieFX_LaunchOverlay` still execs the INNER binary directly rather than
+#	going through /usr/bin/open, and that is deliberate twice over. `open`
+#	would hand the process to LaunchServices, which breaks the teardown
+#	guarantee — the overlay has to be a direct child in our own process group
+#	so one kill takes its WebKit children with it. And exec'ing the inner
+#	binary still gets bundle semantics, because NSBundle.main is derived from
+#	the executable's PATH: Info.plist is read either way.
 OVERLAY="${ROOT}/poc/overlay/src-tauri/target/release/pieFX-overlay"
+OAPP="${APP}/Contents/MacOS/pieFX-overlay.app"
 if [ -x "${OVERLAY}" ]; then
-	cp "${OVERLAY}" "${APP}/Contents/MacOS/pieFX-overlay"
-	echo "    overlay copied in beside the plug-in"
+	mkdir -p "${OAPP}/Contents/MacOS" "${OAPP}/Contents/Resources"
+	cp "${OVERLAY}" "${OAPP}/Contents/MacOS/pieFX-overlay"
+
+	#	LSUIElement declares what mac_accessory_app() also sets at runtime.
+	#	Both, deliberately: the plist is read before any of our code runs, so
+	#	it closes the window in which a Dock icon could appear, and the runtime
+	#	call keeps the bare-binary dev path behaving the same way.
+	cat > "${OAPP}/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key><string>pieFX-overlay</string>
+	<key>CFBundleIdentifier</key><string>com.piefx.overlay</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>pieFX Overlay</string>
+	<key>CFBundleDisplayName</key><string>pieFX Overlay</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleSignature</key><string>????</string>
+	<key>CFBundleShortVersionString</key><string>0.1.0</string>
+	<key>CFBundleVersion</key><string>0.1.0</string>
+	<key>CFBundleIconFile</key><string>pieFX</string>
+	<key>LSUIElement</key><true/>
+	<key>LSMinimumSystemVersion</key><string>10.15</string>
+	<key>NSHumanReadableCopyright</key><string>Aldair Gonzalez</string>
+	<key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+	printf 'APPL????' > "${OAPP}/Contents/PkgInfo"
+
+	ICNS="${ROOT}/poc/overlay/src-tauri/icons/icon.icns"
+	if [ -f "${ICNS}" ]; then
+		cp "${ICNS}" "${OAPP}/Contents/Resources/pieFX.icns"
+	else
+		echo "    NOTE: no icon.icns — run ./icon/make_icons.sh"
+	fi
+	echo "    overlay bundled at Contents/MacOS/pieFX-overlay.app"
 else
 	echo "    NOTE: no overlay built yet; the plug-in will log that it cannot find one"
 fi
 
 #	The .jsx snippets the wheel invokes by RELATIVE path. menu.js binds the
 #	master-null slots to "scripts/ag_masterNull.jsx", and the overlay resolves
-#	that against its OWN directory (current_exe().parent()) — which inside the
-#	bundle is Contents/MacOS. So they sit beside the overlay, not in Resources,
-#	however much Resources looks like where they belong.
+#	that against its OWN directory — current_exe().parent().
+#
+#	Which MOVED when the overlay became a bundle. They now belong beside the
+#	inner binary, inside pieFX-overlay.app/Contents/MacOS, and putting them
+#	where they used to be would break every script slot with a file-not-found
+#	the wheel reports as a thrown error.
 #
 #	The snippet the wheel sends carries a fallback that hunts through AE's user
 #	Scripts folders, so a missing file degrades to a thrown error naming the
 #	path rather than to silence — but shipping it is the point.
-mkdir -p "${APP}/Contents/MacOS/scripts"
+SCRIPTS="${OAPP}/Contents/MacOS/scripts"
+mkdir -p "${SCRIPTS}"
 if compgen -G "${ROOT}/poc/scripts/*.jsx" > /dev/null; then
-	cp "${ROOT}"/poc/scripts/*.jsx "${APP}/Contents/MacOS/scripts/"
-	echo "    scripts: $(ls "${APP}/Contents/MacOS/scripts" | tr '\n' ' ')"
+	cp "${ROOT}"/poc/scripts/*.jsx "${SCRIPTS}/"
+	echo "    scripts: $(ls "${SCRIPTS}" | tr '\n' ' ')"
 else
 	echo "    NOTE: no .jsx scripts found to copy"
 fi

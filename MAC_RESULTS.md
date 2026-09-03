@@ -1110,6 +1110,121 @@ caught a real bug during development — the joined relative path was being
 passed where the folder belonged, so every category had the preset's filename
 glued to the end of it.
 
+## The overlay becomes a bundle, and nothing breaks
+
+The distribution question opened with the cheapest part of it: the overlay ran
+as a bare Mach-O for the whole port, and the worry was that wrapping it in a
+`.app` would disturb one of the four window properties measured in step 1.
+Measured before and after, with the same instrument:
+
+| | bare executable | `pieFX-overlay.app` |
+|---|---|---|
+| window level | `status(25)` | `status(25)` |
+| alpha | 1.00 | 1.00 |
+| bounds | `{{0,0},{1512,982}}` | `{{0,0},{1512,982}}` |
+| z-order | frontmost | frontmost |
+| LaunchServices | `bundleID=[ NULL ]` | `bundleID="com.piefx.overlay"`, `type="UIElement"` |
+
+Three of the four properties are unchanged. **Click-through is the fourth and
+the probe still cannot see it** — `CGWindowList` does not expose
+`ignoresMouseEvents`, which `overlay_probe.swift` has always said out loud. It
+is set by the same `set_ignore_cursor_events(true)` in both layouts, so there
+is no reason to expect a change, but "no reason to expect" is not a
+measurement and it is listed as unproven.
+
+The gain is the last row. LaunchServices now knows what the process is:
+`type="UIElement"` is macOS agreeing it is a background app, rather than the
+runtime `setActivationPolicy:` call getting there first and hoping. Both are
+kept — the plist closes the window in which a Dock icon could appear, since it
+is read before any of our code runs, and the runtime call keeps the bare-binary
+development path behaving identically.
+
+### exec the inner binary, do not `open` the bundle
+
+The instinct with a `.app` is `/usr/bin/open`. That would have been a bug.
+
+`open` hands the process to LaunchServices, and it is then **not our child** —
+which loses the process-group kill that is half of the teardown guarantee (see
+`pieFX_launch.h`: the group covers a deliberate teardown, `--owner-pid` covers
+a crash, and neither is sufficient alone). So `PieFX_LaunchOverlay` still execs
+`pieFX-overlay.app/Contents/MacOS/pieFX-overlay` directly.
+
+The question that makes this safe is whether `Info.plist` is still honoured
+when the inner binary is exec'd rather than launched. It is: `NSBundle.main` is
+derived from the executable's PATH, so the plist is found either way. Measured,
+not assumed — `bundleID="com.piefx.overlay"` above is LaunchServices reporting
+it for a process started by `execl`.
+
+Proven from inside the shipped layout, by copying `fifo_test` next to the
+`.app` and running it there:
+
+```
+  overlay: launching .../pieFX.plugin/Contents/MacOS/pieFX-overlay.app/Contents/MacOS/pieFX-overlay
+  PASS  an overlay owned by another process launched
+  PASS  and connected
+  PASS  the overlay noticed its owner die and quit unprompted
+```
+
+That last line is the one worth having: the kqueue watchdog and the process
+group both still work from inside a bundle. The launcher tries the `.app` and
+falls back to the bare binary, so `cargo build` output still runs unchanged for
+development, and it logs which one it took.
+
+### The `.jsx` scripts moved, because the overlay did
+
+`menu.js` binds script slots to `"scripts/ag_masterNull.jsx"` and the overlay
+resolves that against `current_exe().parent()`. Bundling MOVES that directory —
+from `pieFX.plugin/Contents/MacOS` to
+`pieFX.plugin/Contents/MacOS/pieFX-overlay.app/Contents/MacOS` — so leaving the
+snippets where they were would have broken every script slot.
+
+It would also have broken quietly-ish: the snippet carries a fallback that
+hunts AE's user Scripts folders, so the failure is a thrown error naming a path
+rather than silence. Checked by firing the Master Null slot and reading the
+path out of the base64 the wheel sent — it points inside the `.app`, and the
+file is there.
+
+## The icon, and two things that would have shipped
+
+The overlay had no icon at all (a bare executable has nowhere to put one), and
+the repo carried Tauri's stock artwork: the icon set, plus two scaffolding SVGs
+in `src/assets` that no page referenced and that were being **codegen-embedded
+into the shipping binary**. Both are gone; the icon set is regenerated from
+pieFX's own logo rather than deleted, because the Windows Store squares are read
+by the MSIX target.
+
+**`qlmanage -t` cannot render an SVG for this purpose.** It is the obvious
+one-liner, it reports `hasAlpha: yes`, and it returns an image whose corner
+pixel is `255,255,255,255` — opaque white — because a thumbnailer composites
+onto a white card. Every icon size would have had a white box behind it, and
+nothing in the pipeline would have said so. It was caught only because the
+script checks its own render for a transparent corner, and the check stayed in
+afterwards: a renderer that is right today is not a reason to stop asking.
+`icon/render_svg.swift` snapshots through WebKit instead, with the web view's
+background off, a transparent body, and an explicit `snapshotWidth` — the last
+because the default would silently produce 2048 for a 1024 request on a 2x
+display.
+
+**The accent is read from `hexdraw.js`, not typed into the art.** The logo
+arrived at `#BE55EE` and the wheel's `DEFAULT_ACCENT` is `#C74FD6` — two
+different purples, in a product whose icon is a picture of its own hexagons. So
+`make_icons.sh` recolours at build time from the constant itself, and the two
+cannot drift again.
+
+The transform is safe because of what the artwork is: its 26 purples are a pure
+LIGHTNESS ramp — hue 281 and saturation 82 across every one of them, lightness
+55 to 70. Each shade takes the accent's hue and saturation and keeps its own
+place in the ramp, so the bevel survives. The 357 white slivers are specular
+highlights, not ramp members, and are left alone. Result: dominant colour
+`#C850D7` against an accent of `#C74FD6`, one unit per channel of HSL
+round-trip rounding.
+
+Two things about the art itself are recorded rather than fixed: at 16px the
+seven hexagons merge into a blob (that is the size Activity Monitor uses, which
+is where this process is realistically seen), and the bevel is built from many
+clipped segments that do not quite meet, so there is hairline serration visible
+only well above icon sizes.
+
 ## The backstop that nearly went missing
 
 The idle hook carries a backstop for a press whose UP was never seen — a

@@ -55,6 +55,8 @@ Watched working in AE, or measured by a harness against the real binaries.
 | **settings and search open on the cursor’s display** | `CGWindowListCopyWindowInfo` from outside the process, then in AE on the second display |
 | **the effect catalogue, with its accents** | in AE: 456 of 456, valid UTF-8, 189 non-ASCII entries correct |
 | **the preset walk** | `pieFX_presets_test` against the real AE install: 621 found, every path opens — and the list checked against AE's own by hand |
+| **the overlay as a bundled `.app`** | `overlay_probe` before and after: level, alpha, bounds and z-order all unchanged; LaunchServices reports `type="UIElement"` |
+| **launch and teardown from inside the bundle** | `fifo_test` run beside the `.app`: it picks the `.app`, connects, and the watchdog still fires |
 
 ## What is NOT proven
 
@@ -66,6 +68,11 @@ Watched working in AE, or measured by a harness against the real binaries.
   by the settings window has never been watched. It is the last thing in step 5
   with no observation behind it at all.
 - **Windows, at all, since this port began.** See "What to do next".
+- **Click-through, since the overlay was bundled.** It is the one of the four
+  window properties `CGWindowList` cannot see — `overlay_probe.swift` has
+  always said so — and it is set by the same call in both layouts, so there is
+  no reason to expect a change. No reason to expect is not a measurement. One
+  right-hold over an AE panel answers it.
 - **The wheel summoned on a second display from the real gesture.** The window
   move is measured and the driver script summons there correctly, but nobody has
   right-held on the second screen in AE. This is a five-minute check and it is
@@ -180,12 +187,16 @@ both latent there.
   is only reached when AE never finishes writing the frame — but when it is
   reached, After Effects is unresponsive for it. Making copy-frame asynchronous
   is the real answer and is more than this was worth today.
-- **Distribution.** Untouched, and it has grown two facts: `macos-private-api`
-  is required for a transparent window and rules out the App Store, and the
-  overlay currently runs as a **bare executable, not a bundled `.app`**, with
-  its accessory activation policy set in code rather than by `LSUIElement`.
-  Whether the shipped form is a bundle, and whether bundling disturbs any of the
-  four window properties measured in step 1, is untested.
+- **Distribution, the rest of it.** The bundling question is ANSWERED — the
+  overlay ships as `pieFX-overlay.app` inside the plug-in and nothing measurable
+  changed; see `MAC_RESULTS.md`. What is left:
+  - **Signing and notarization.** Two nested binaries, and the inner one must be
+    signed before the outer, with the outer signature staying valid over it.
+    Nothing here is signed at all yet.
+  - **An installer.** Today it is `sudo cp -R`. A `.pkg` has to cope with AE
+    being open, with several AE versions side by side, and with uninstalling.
+  - `macos-private-api` is required for a transparent window and rules out the
+    App Store. Settled rather than open, but it belongs here.
 ## Traps — things already paid for once
 
 - **A local NSEvent monitor cannot be tested from outside its own app.** That is
@@ -248,6 +259,9 @@ poc/overlay/src-tauri/target/release/pieFX_presets_test
 # the wheel's own settings logic, in JavaScriptCore (no Node in this project)
 swift poc/overlay/test/armmode_test.swift
 
+# the icon set, rebuilt from the SVG and recoloured to the wheel's accent
+./icon/make_icons.sh
+
 # the gesture, in a host that is not AE
 ./poc/native/mac/build_gesture_test.sh
 poc/overlay/src-tauri/target/release/pieFX_gesture_test
@@ -270,6 +284,9 @@ action never fired".
 ## Repo layout, macOS additions
 
 ```
+icon/pieFX LOGO.svg         the master artwork; ICON.png is a 600px export
+icon/make_icons.sh          the icon set, recoloured to hexdraw.js's accent
+icon/render_svg.swift       SVG -> transparent PNG (qlmanage flattens; see MAC_RESULTS)
 Mac/build_product.sh        builds + installs the PRODUCT plug-in (not Xcode)
 Mac/overlay_probe.swift     window levels, bounds, z-order, focus
 Mac/span_test.swift         can one window span two displays (no)

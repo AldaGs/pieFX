@@ -107,11 +107,27 @@ PieFX_LaunchOverlay(const char *events, const char *actions,
 		Log("  overlay: cannot locate own directory\n");
 		return 0;
 	}
-	snprintf(exe, sizeof(exe), "%s%s", dir, PIEFX_OVERLAY_EXE);
+	//	The shipped layout is a BUNDLE beside the plug-in binary; the bare
+	//	executable is the development one, and cargo produces exactly that. Both
+	//	are tried, bundle first, so a dev build and an installed build behave
+	//	the same without a flag to remember.
+	//
+	//	The inner binary is exec'd directly rather than opened. /usr/bin/open
+	//	would hand the overlay to LaunchServices, and it would no longer be our
+	//	child — which loses the process-group kill that is half of the teardown
+	//	guarantee (see the header). Info.plist is still honoured: NSBundle.main
+	//	comes from the executable's path, so LSUIElement applies either way.
+	snprintf(exe, sizeof(exe), "%s%s.app/Contents/MacOS/%s",
+			 dir, PIEFX_OVERLAY_EXE, PIEFX_OVERLAY_EXE);
 	if (access(exe, X_OK) != 0) {
-		Log("  overlay: %s not found beside the plug-in (run it by hand for dev)\n", exe);
-		return 0;
+		snprintf(exe, sizeof(exe), "%s%s", dir, PIEFX_OVERLAY_EXE);
+		if (access(exe, X_OK) != 0) {
+			Log("  overlay: no %s.app and no %s beside the plug-in "
+				"(run it by hand for dev)\n", PIEFX_OVERLAY_EXE, PIEFX_OVERLAY_EXE);
+			return 0;
+		}
 	}
+	Log("  overlay: launching %s\n", exe);
 
 	snprintf(owner, sizeof(owner), "%ld", owner_pid > 0 ? owner_pid : (long)getpid());
 

@@ -30,9 +30,65 @@ trap 'rm -rf "${TMP}"' EXIT
 
 [ -f "${SVG}" ] || { echo "!! no ${SVG}"; exit 1; }
 
+#	The artwork is recoloured to the WHEEL'S accent before it is rendered, and
+#	the accent is read out of hexdraw.js rather than typed here. The icon and the
+#	hexagons it depicts are then the same purple by construction: change
+#	DEFAULT_ACCENT and the icon follows on the next build, instead of drifting
+#	apart the way they already had once (the art was #BE55EE against the wheel's
+#	#C74FD6).
+#
+#	The logo's 26 purples are a pure LIGHTNESS ramp — hue 281 and saturation 82
+#	across all of them, lightness 55 to 70 — which is what makes this a safe
+#	transform rather than a repaint. Each shade takes the accent's hue and
+#	saturation and keeps its own place in the ramp, so the bevel survives.
+#
+#	The 357 white slivers are specular highlights and are deliberately left
+#	alone: they are not part of the ramp, and a highlight that is not white is
+#	a different drawing.
+echo "==> recolouring to the wheel's accent"
+SRC="${TMP}/recoloured.svg"
+python3 - "${SVG}" "${ROOT}/poc/overlay/src/hexdraw.js" "${SRC}" <<'PY'
+import colorsys, re, sys
+
+svg_path, hexdraw_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+svg = open(svg_path).read()
+
+m = re.search(r'DEFAULT_ACCENT\s*=\s*"(#[0-9a-fA-F]{6})"', open(hexdraw_path).read())
+if not m:
+    sys.exit("!! DEFAULT_ACCENT not found in hexdraw.js — refusing to guess the accent")
+accent = m.group(1).lower()
+
+def to_rgb(h):
+    return tuple(int(h[i:i+2], 16) / 255 for i in (1, 3, 5))
+def to_hex(r, g, b):
+    return "#%02x%02x%02x" % tuple(max(0, min(255, round(c * 255))) for c in (r, g, b))
+
+a_h, a_l, a_s = colorsys.rgb_to_hls(*to_rgb(accent))
+
+#	White is a highlight, not a member of the ramp.
+shades = sorted({c.lower() for c in re.findall(r'#[0-9a-fA-F]{6}', svg)} - {"#ffffff"})
+if not shades:
+    sys.exit("!! no colours found in the SVG")
+lit = sorted((colorsys.rgb_to_hls(*to_rgb(c))[1], c) for c in shades)
+mid_l = lit[len(lit) // 2][0]
+
+mapping = {}
+for c in shades:
+    _, l, _ = colorsys.rgb_to_hls(*to_rgb(c))
+    mapping[c] = to_hex(*colorsys.hls_to_rgb(a_h, max(0.0, min(1.0, l + (a_l - mid_l))), a_s))
+
+#	Case-insensitive, because an exporter may mix them.
+def swap(mo):
+    return mapping.get(mo.group(0).lower(), mo.group(0))
+open(out_path, "w").write(re.sub(r'#[0-9a-fA-F]{6}', swap, svg))
+
+print(f"    {len(shades)} shades -> hue {a_h*360:.0f} sat {a_s*100:.0f} (accent {accent}), ramp preserved")
+PY
+[ -s "${SRC}" ] || { echo "!! the recolour produced nothing"; exit 1; }
+
 echo "==> rendering ${SVG##*/} at 1024"
 MASTER="${TMP}/master.png"
-swift "${HERE}/render_svg.swift" "${SVG}" "${MASTER}" 1024
+swift "${HERE}/render_svg.swift" "${SRC}" "${MASTER}" 1024
 [ -s "${MASTER}" ] || { echo "!! the renderer produced nothing"; exit 1; }
 
 W=$(sips -g pixelWidth "${MASTER}" | awk '/pixelWidth/{print $2}')
