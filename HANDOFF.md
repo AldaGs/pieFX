@@ -296,7 +296,12 @@ typing. That has not changed; it has been designed around.
                a field with a border invites typing, and the wheel cannot take
                a keystroke, so the box was a picture of a control that does
                not exist. It draws "Release to search…" as plain text over the
-               RECENTS list, sized to what is in it, and nothing in it is
+               RECENTS list, sized to what is in it. With more than one layer
+               selected the caption turns red and says so, and the release
+               refuses instead of opening: the plug-in applies through
+               AEGP_GetActiveLayer, which returns a layer only when exactly
+               one is selected, so a search opened there would take a query
+               and an Enter and then apply nothing. Nothing in the panel is
                highlighted, because a hot row
                would promise that releasing fires that row and releasing opens
                a window. Releasing outside the dead zone opens it; the centre
@@ -313,7 +318,9 @@ typing. That has not changed; it has been designed around.
                arrows to walk. Three ways out and all of them go through one
                `hide_search` command: Enter (after the effect is applied),
                Escape, and the focus going anywhere else. Hidden rather than
-               closed, so the next summon is instant.
+               closed, so the next summon is instant - and the query is
+               cleared ON THE WAY OUT, because a warm window that comes back
+               holding the last search costs more than it saved.
 
     recents    %APPDATA%\pieFXecents.json, its own file rather than a key in
                settings.json: the settings window writes that file whole, and

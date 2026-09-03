@@ -269,7 +269,17 @@ function apply() {
 // window would also mean asking Windows for the foreground again. The window
 // has no title bar and so no close button — Enter, Escape and clicking away
 // are the three ways out, and all three land here.
+//
+// The query is cleared ON THE WAY OUT, not only on the way back in. `freshen()`
+// clears it too, but that runs off an event from the Rust side, and a window
+// that comes back still holding the last search is a window you have to empty
+// by hand before you can use it — which is most of the time you saved by
+// keeping it warm. Clearing here means the field is empty the moment it is
+// hidden, whatever happens to the event.
 function dismiss() {
+  qEl.value = "";
+  buildRows();
+  render();
   invoke("hide_search").catch(() => {});
 }
 

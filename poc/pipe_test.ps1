@@ -136,6 +136,22 @@ if ($after -gt $before) {
     Write-Output "  search window opened (overlay log)  -> FAIL (no log line; the release fired nothing)"
 }
 
+# Two layers selected: the search must NOT open. The plug-in applies an effect
+# through AEGP_GetActiveLayer, which returns a layer only when exactly one is
+# selected, so a search that opened here would take a query and an Enter and
+# then apply nothing. Both halves are asserted - silence on the pipe, and NO new
+# window in the log - because silence alone was also what the old mock did.
+$twoSel = '{"type":"summon","x":800,"y":500,"hasSelection":true,"hasComp":true,"layerCount":2}'
+$before2 = if (Test-Path $log) { (Select-String -Path $log -Pattern "search window" -SimpleMatch).Count } else { 0 }
+Expect "N Effects, 2 layers selected  " @($twoSel, '{"type":"cursor","x":800,"y":200}') "silence"
+Start-Sleep -Milliseconds 1000
+$after2 = if (Test-Path $log) { (Select-String -Path $log -Pattern "search window" -SimpleMatch).Count } else { 0 }
+if ($after2 -eq $before2) {
+    Write-Output "  no window opened for a multi-selection -> PASS"
+} else {
+    Write-Output "  no window opened for a multi-selection -> FAIL (it opened anyway)"
+}
+
 # toast channel: nothing comes back, it is one-way to the user
 $w.WriteLine('{"type":"toast","level":"error","text":"_mn is undefined"}')
 Write-Output "  toast sent (check overlay log for receipt)"

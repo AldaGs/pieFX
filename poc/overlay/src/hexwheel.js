@@ -323,11 +323,20 @@ function drawSearchWidget() {
   // and the wheel cannot take a keystroke — the box was a picture of a control
   // that does not exist. What the panel says instead is what the release will
   // actually do, in plain text.
+  // The caption is the honest one for the state you are in. With two layers
+  // selected the release will refuse, and it says so BEFORE you let go rather
+  // than as a toast afterwards - the plug-in applies through
+  // AEGP_GetActiveLayer, which needs exactly one.
+  const tooMany = CTX.layerCount > 1;
   ctx.font = "600 14px system-ui, 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = hotPalette(ACCENT).accent;
-  ctx.fillText("Release to search…", x + 22, y + 28);
+  ctx.fillStyle = tooMany ? "#FF6B5E" : hotPalette(ACCENT).accent;
+  ctx.fillText(
+    tooMany ? `Select a single layer (${CTX.layerCount} selected)` : "Release to search…",
+    x + 22,
+    y + 28
+  );
 
   // Nothing here is highlighted, deliberately. A hot row would say "release
   // fires this", and release opens the window; the rows are what you will find
@@ -616,7 +625,14 @@ function release() {
     // release on it means is "open the search window". The dead zone still
     // cancels, so an aborted gesture does not put a window in front of AE —
     // which is the whole reason settings were kept off the wheel too.
-    if (S.hot >= 0 && canFire(S.parent)) {
+    if (S.hot >= 0 && CTX.layerCount > 1) {
+      // Refused BEFORE the window opens, not after the user has typed. The
+      // plug-in applies an effect through AEGP_GetActiveLayer, which returns a
+      // layer only when exactly one is selected - so with two selected the
+      // search would take a query, take an Enter, and then quietly apply
+      // nothing. Saying so at the gesture is the whole difference.
+      toast("error", `select a single layer (${CTX.layerCount} selected)`);
+    } else if (S.hot >= 0 && canFire(S.parent)) {
       action = S.parent.action;
       label = S.parent.label;
     } else if (S.hot >= 0 && S.parent.action) {
