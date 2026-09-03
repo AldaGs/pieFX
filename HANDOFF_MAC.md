@@ -152,13 +152,30 @@ coordinate question outstanding.
 ### 2. ~~A Windows build~~ — DONE, and clean
 
 The largest un-repaid debt in the project, paid on 2026-09-03 on the Windows
-machine. `Win/pieFX.sln` builds **Debug and Release, x64, with no warnings and
-no errors**, so every shared body this port rewrote —  `PieFX_ConfigPath`,
+machine. **`poc/native/Win/pieFX.sln`** — the PRODUCT project; see the trap
+below — builds **Debug and Release, x64, with no warnings and no errors**, and
+it is built `/WX`, so those are hard zeroes. Every shared body this port rewrote —  `PieFX_ConfigPath`,
 `PieFX_LegacyToUtf8`, `FrameFileSize`, `PngIsComplete` and the
 `WaitForFrameFile` rewrite, `EmitPreset`, and the `DirOpen`/`DirNext`/`DirClose`
 iterator that `WalkPresetFolder` and `WritePresets` were rebuilt on — has now
 been compiled by MSVC as well as clang. It compiled on the first attempt; the
 sharing was sound.
+
+**The trap, and it bit once.** There are TWO Windows projects in this tree and
+they write to the SAME output, `C:\AE_SDK\_build_out\AEGP\pieFX.aex`:
+
+- `Win/pieFX.sln`, which compiles the ROOT `pieFX.cpp` — the Phase 0 SPIKE, 1592
+  lines, whose Window menu is `pieFX S1 (Anchor to Center)`, `S2A`, `S2B` …
+- `poc/native/Win/pieFX.sln`, which compiles `poc/native/pieFX.cpp` — the
+  PRODUCT, 3622 lines, whose Window menu is `pieFX (Show/Hide)` and
+  `pieFX Settings`.
+
+Whichever was built LAST is the .aex on disk, and the first attempt at this
+build was the spike one — which compiles just as cleanly and installs just as
+happily, and is only caught by opening AE's Window menu. Build the product one.
+The .aex was verified afterwards by reading its strings: `pieFX (Show/Hide)`
+present, no `Anchor to Center`, no `pieFX S1`. (`Self-Test` is absent on purpose
+— `PIEFX_SHOW_SELFTESTS` is 0.)
 
 What that does NOT cover: the .aex was built, not installed and not loaded into
 a running AE, and none of those bodies has been EXERCISED on Windows since the

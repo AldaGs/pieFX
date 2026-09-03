@@ -327,7 +327,15 @@ Also live: the overlay writes `%TEMP%\piefx_overlay.log` and the plug-in writes
 ## Building
 
 **Native:** set `AE_PLUGIN_BUILD_DIR`, build `poc/native/Win/pieFX.sln`
-`Debug|x64`, verify with `dumpbin /EXPORTS` that `EntryPointFunc` is **un-mangled**
+`Debug|x64`. **That path, and not the one at the repo root.** `Win/pieFX.sln`
+still exists and still builds the Phase 0 SPIKE (the root `pieFX.cpp`), and both
+projects link to the SAME `pieFX.aex` — so the wrong one compiles cleanly,
+installs happily, and is only caught by opening AE's Window menu and finding
+`pieFX S1 (Anchor to Center)` where `pieFX (Show/Hide)` should be. It has
+already cost one session. Verify the built .aex if in any doubt: it must contain
+the string `pieFX (Show/Hide)` and must not contain `Anchor to Center`.
+
+Then verify with `dumpbin /EXPORTS` that `EntryPointFunc` is **un-mangled**
 (the entry point takes FIVE parameters; `Commando` shows a stale seven-param form
 that links silently and fails to load — model on `Persisto`). Install to AE's own
 `Support Files/Plug-ins/`, not MediaCore.
