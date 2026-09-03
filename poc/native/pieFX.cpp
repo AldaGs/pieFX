@@ -1311,14 +1311,28 @@ WalkPresetFolder(FILE *fp, const char *rootZ, const char *labelZ, const char *re
 	FindClose(h);
 }
 
-//	<install>/Support Files/Presets, from our own module path: the .aex lives in
-//	Support Files/Plug-ins, so the presets are one folder up and one across. No
-//	registry, no guess at a drive letter, and it follows an AE installed
-//	anywhere.
+//	<install>/Support Files/Presets, found by CLIMBING from our own module path
+//	rather than by counting folders up from it.
+//
+//	Counting is what the first version did - two levels, on the assumption that
+//	the .aex sits directly in Plug-ins - and it was wrong on the author's own
+//	machine, where the plug-in is installed in `Plug-ins\AGS\`. It looked for
+//	`Plug-ins\Presets`, found nothing, and reported zero shipped presets while
+//	the user-presets half of the same walk worked perfectly. A plug-in folder is
+//	the USER's to organise; nesting is normal and the depth is not ours to
+//	assume.
+//
+//	So: climb, and at each ancestor ask whether it looks like Support Files -
+//	which is the folder that contains BOTH `Presets` and `Plug-ins`. That pair
+//	is what makes the answer specific; a bare `Presets` folder somewhere up the
+//	tree could be anyone's. If no ancestor has both, the first one with a
+//	`Presets` at all is taken as a fallback, because being slightly too willing
+//	beats offering nothing.
 static A_Boolean
 ShippedPresetRoot(char *outZ, size_t out_max)
 {
 	char	dir[MAX_PATH] = { 0 };
+	char	fallback[MAX_PATH] = { 0 };
 	HMODULE	self = NULL;
 
 	if (!GetModuleHandleExA(
@@ -1328,15 +1342,44 @@ ShippedPresetRoot(char *outZ, size_t out_max)
 	}
 	if (!GetModuleFileNameA(self, dir, MAX_PATH)) { return FALSE; }
 
-	//	...\Support Files\Plug-ins\pieFX.aex -> ...\Support Files
-	for (int i = 0; i < 2; i++) {
+	Log("  presets: module is %s\n", dir);
+
+	//	Up to eight ancestors. AE's own install is two, and nobody nests a
+	//	plug-in six deep, but the loop costs nothing and the constant is not a
+	//	claim about anyone's folders.
+	for (int i = 0; i < 8; i++) {
 		char *slash = strrchr(dir, '\\');
 
-		if (!slash) { return FALSE; }
+		if (!slash) { break; }
 		*slash = 0;
+
+		char presets[MAX_PATH];
+		char plugins[MAX_PATH];
+
+		if (strcpy_s(presets, sizeof(presets), dir) ||
+			strcat_s(presets, sizeof(presets), "\\Presets")) {
+			break;
+		}
+		if (GetFileAttributesA(presets) == INVALID_FILE_ATTRIBUTES) { continue; }
+
+		if (!fallback[0]) { strcpy_s(fallback, sizeof(fallback), presets); }
+
+		strcpy_s(plugins, sizeof(plugins), dir);
+		strcat_s(plugins, sizeof(plugins), "\\Plug-ins");
+
+		if (GetFileAttributesA(plugins) != INVALID_FILE_ATTRIBUTES) {
+			strcpy_s(outZ, out_max, presets);
+			Log("  presets: Support Files found at %s\n", dir);
+			return TRUE;
+		}
 	}
-	if (strcpy_s(outZ, out_max, dir) || strcat_s(outZ, out_max, "\\Presets")) { return FALSE; }
-	return (GetFileAttributesA(outZ) != INVALID_FILE_ATTRIBUTES);
+
+	if (fallback[0]) {
+		strcpy_s(outZ, out_max, fallback);
+		Log("  presets: no Plug-ins sibling; falling back to %s\n", fallback);
+		return TRUE;
+	}
+	return FALSE;
 }
 
 static A_long

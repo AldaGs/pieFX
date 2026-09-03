@@ -253,11 +253,14 @@ are not effects in any other sense, and three differences drive the code:
 
 - **No enumeration.** There is no AEGP call that lists presets; AE's panel finds
   them by SCANNING FOLDERS and so does the plug-in. Two roots: the shipped
-  `Support Files/Presets`, located from the plug-in's own module path (the .aex
-  sits in `Support Files/Plug-ins`, so no registry key and no guess at a drive
-  letter), and every `Documents/Adobe/After Effects*/User Presets`. **A plug-in
-  loaded from a build folder instead of AE's own `Plug-ins` finds no Presets
-  beside it**, logs that, and offers effects only.
+  `Support Files/Presets` and every `Documents/Adobe/After Effects*/User
+  Presets`. The first is found by **climbing** from the plug-in's own module
+  path until an ancestor holds both a `Presets` and a `Plug-ins` folder - that
+  pair is what identifies Support Files. It climbs rather than counting levels
+  because **a plug-in may be installed in a SUBFOLDER of `Plug-ins`** (the
+  author's is in `Plug-ins\AGS\`), and the folder is the user's to organise. A
+  plug-in loaded from somewhere else entirely finds no Presets, logs that, and
+  offers effects only.
 - **Documents is not `%USERPROFILE%\Documents`.** It can be redirected to
   OneDrive and localised - on the author's machine it is
   `C:\Users\aldai\OneDrive\Documentos`. `SHGetFolderPath(CSIDL_PERSONAL)`

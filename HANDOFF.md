@@ -147,9 +147,17 @@ were "code, not facts" for too long.
   through the scripting DOM's `layer.applyPreset`, under one undo group because
   a preset can add half a dozen effects at once. What is unwatched: whether the
   walk finds AE's ~620 shipped presets on a real install, and whether
-  `applyPreset` lands. The walk needs the .aex to be installed in AE's
-  `Support Files/Plug-ins` - one loaded from a build folder finds no Presets
-  folder beside it, says so in the log, and offers effects only.
+  `applyPreset` lands.
+- **The shipped-presets root is found by CLIMBING, not by counting levels**, and
+  the first version counted. It went two folders up from the .aex on the
+  assumption that a plug-in sits directly in `Plug-ins` - and the author's sits
+  in `Plug-ins\AGS\`, so it looked in `Plug-ins\Presets`, found nothing, and
+  reported zero shipped presets. **The user-presets half of the same walk
+  worked**, which is what made the report diagnostic rather than "presets do not
+  work": one half working narrows a fault to what the halves do not share. It
+  now climbs until an ancestor holds both `Presets` and `Plug-ins` - the pair
+  that identifies Support Files - and logs the module path and every folder it
+  ruled out.
 - **Documents is not `%USERPROFILE%\Documents`.** Measured while writing that
   walk: on the author's machine it is `C:\Users\aldai\OneDrive\Documentos` -
   redirected to OneDrive AND localised. `SHGetFolderPath(CSIDL_PERSONAL)`
