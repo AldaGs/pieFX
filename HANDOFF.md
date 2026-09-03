@@ -58,7 +58,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | The whole harness still passes after the frontend was split into modules | harness |
 | The plug-in's walk writes `effects.json` inside AE | **live** — 522 walked, 522 claimed |
 | The preset walk finds AE's own presets and the user's | **live** — 621 shipped + 1 in Documents |
-| A preset APPLIED from the search (`layer.applyPreset`) | **live** — applied to a layer from the search window |
+| A preset APPLIED from the search (`layer.applyPreset`) | **live** — applied from the window, and ONE undo takes it back |
 | The Effects search: window opens in front of AE, filters, Enter applies | **live** — the user's own session |
 | `layerCount` counts LAYERS, not selected things | **live** — `layers=1` with a layer's properties selected |
 | `copy-frame`: the frame reaches the Windows clipboard and pastes | **live** — pasted out of AE |
@@ -148,10 +148,9 @@ were "code, not facts" for too long.
   through the scripting DOM's `layer.applyPreset`, under one undo group because
   a preset can add half a dozen effects at once. Watched: 621 shipped presets
   plus one saved in Documents, in one list with the effects, and one of them
-  applied to a layer from the window.
-  The one claim in that sentence nobody has TESTED is the undo group - a preset
-  that adds six effects should come back off in one Ctrl+Z, and that has been
-  reasoned about rather than watched.
+  applied to a layer from the window, and a single Ctrl+Z taking the whole
+  preset back off - which is what the undo group is for and the last thing in
+  this feature that was reasoned rather than seen.
 - **The shipped-presets root is found by CLIMBING, not by counting levels**, and
   the first version counted. It went two folders up from the .aex on the
   assumption that a plug-in sits directly in `Plug-ins` - and the author's sits
