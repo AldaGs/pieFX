@@ -1550,6 +1550,41 @@ done:
 	return ok;
 }
 
+//	Is the frame on disk yet, and finished?
+//
+//	`saveFrameToPng` returns before the bytes are necessarily readable, so this
+//	polls instead of asking once. It insists on the same non-zero size twice in
+//	a row: a file that has appeared is not a file that has been written, and a
+//	half-written PNG decodes to an error that reads like a broken frame.
+static A_Boolean
+WaitForFrameFile(const char *pathZ, DWORD wait_ms)
+{
+	const DWORD	step	= 40;
+	DWORD		waited	= 0;
+	LARGE_INTEGER last;
+
+	last.QuadPart = -1;
+
+	for (;;) {
+		WIN32_FILE_ATTRIBUTE_DATA fad;
+
+		if (GetFileAttributesExA(pathZ, GetFileExInfoStandard, &fad)) {
+			LARGE_INTEGER now;
+
+			now.HighPart = (LONG)fad.nFileSizeHigh;
+			now.LowPart  = fad.nFileSizeLow;
+
+			if (now.QuadPart > 0 && now.QuadPart == last.QuadPart) {
+				return TRUE;
+			}
+			last = now;
+		}
+		if (waited >= wait_ms) { return FALSE; }
+		Sleep(step);
+		waited += step;
+	}
+}
+
 static void
 CopyFrameToClipboard(AEGP_SuiteHandler &suites)
 {
@@ -1570,6 +1605,12 @@ CopyFrameToClipboard(AEGP_SuiteHandler &suites)
 		if (*p == '\\') { *p = '/'; }
 	}
 
+	//	Deleted HERE, by the side that will read it back. A previous copy's file
+	//	is the one thing that could make a failed save look like a success, and
+	//	"is the frame there?" is only a real question if we are the ones who
+	//	took the old one away.
+	DeleteFileA(path);
+
 	//	The frame number is the one the TIMELINE shows, which is not
 	//	time/frameDuration: a comp can start at any frame, and reporting 0 for a
 	//	comp whose first frame is 1001 would be a number the user cannot find.
@@ -1584,15 +1625,17 @@ CopyFrameToClipboard(AEGP_SuiteHandler &suites)
 		"if(!(c&&c instanceof CompItem))return'pieFX: no comp is active';"
 		"if(typeof c.saveFrameToPng!=='function')return'pieFX: this AE has no saveFrameToPng';"
 		"var f=new File(\"%s\");"
-		"if(f.exists)f.remove();"
 		"var res=c.resolutionFactor;"
 		"try{c.resolutionFactor=[1,1];c.saveFrameToPng(c.time,f);}"
 		"finally{c.resolutionFactor=res;}"
-		"if(!f.exists)return'pieFX: AE wrote no frame';"
 		"var off=(typeof c.displayStartFrame==='number')?c.displayStartFrame"
 		":Math.round(c.displayStartTime/c.frameDuration);"
 		"var fr=Math.round(c.time/c.frameDuration)+off;"
-		"return'ok|'+fr+'|'+c.name;"
+		//	fsName LAST, and it is a diagnostic, not decoration: if AE ever
+		//	resolves this File somewhere other than where we are about to look,
+		//	that fact is in the log the first time it happens instead of after
+		//	another build.
+		"return'ok|'+fr+'|'+c.name+'|'+f.fsName;"
 		"})()", fwd);
 
 	S_last_result[0] = 0;
@@ -1611,15 +1654,52 @@ CopyFrameToClipboard(AEGP_SuiteHandler &suites)
 
 	char	frame[32]	= { 0 };
 	char	comp[200]	= { 0 };
-	const char *p = S_last_result + 3;
-	const char *bar = strchr(p, '|');
+	char	wrote[MAX_PATH] = { 0 };
+	const char *p	 = S_last_result + 3;
+	const char *bar	 = strchr(p, '|');
+	//	A comp may legitimately be named "A|B", so the frame is the FIRST field
+	//	and the path is the LAST; the name is whatever is between them.
+	const char *last = strrchr(p, '|');
 
 	if (bar) {
 		size_t n = (size_t)(bar - p);
 		if (n >= sizeof(frame)) { n = sizeof(frame) - 1; }
 		memcpy(frame, p, n);
 		frame[n] = 0;
-		strcpy_s(comp, sizeof(comp), bar + 1);
+
+		if (last && last != bar) {
+			size_t m = (size_t)(last - (bar + 1));
+			if (m >= sizeof(comp)) { m = sizeof(comp) - 1; }
+			memcpy(comp, bar + 1, m);
+			comp[m] = 0;
+			strcpy_s(wrote, sizeof(wrote), last + 1);
+		} else {
+			strcpy_s(comp, sizeof(comp), bar + 1);
+		}
+	}
+	Log("  copy-frame: AE says it wrote \"%s\"\n", wrote[0] ? wrote : "(no path returned)");
+
+	//	WAIT for the file, rather than asking ExtendScript whether it is there.
+	//	The first version had the script check `f.exists` immediately after
+	//	saveFrameToPng and report "AE wrote no frame", which is what it did on
+	//	the first live run - and that check could not tell "AE failed" from "the
+	//	bytes are not on disk yet". This side has to open the file anyway, so it
+	//	is the side that should decide whether it exists, and it can afford to
+	//	wait a moment for it.
+	//
+	//	Two equal non-zero sizes in a row, because a file that has appeared is
+	//	not necessarily a file that has been finished.
+	if (!WaitForFrameFile(path, 4000)) {
+		char t[MAX_PATH + 120];
+
+		if (wrote[0] && 0 != _stricmp(wrote, path)) {
+			sprintf_s(t, sizeof(t), "Frame not copied: AE wrote to %s, not %s", wrote, path);
+		} else {
+			sprintf_s(t, sizeof(t), "Frame not copied: AE wrote nothing to %s", path);
+		}
+		Log("  copy-frame: no file after saveFrameToPng at %s\n", path);
+		SendToast("error", t);
+		return;
 	}
 
 	char err[200] = { 0 };
