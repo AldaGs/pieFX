@@ -21,7 +21,7 @@
 #	com.apple.security.cs.disable-library-validation, so its hardened runtime
 #	accepts a plug-in signed by anyone or by no one, and a QUARANTINED unsigned
 #	plug-in was tested by hand and loaded normally. Signing buys Gatekeeper's
-#	approval of the container a user DOWNLOADS. See MAC_RESULTS.md.
+#	approval of the container a user DOWNLOADS. See docs/MAC_RESULTS.md.
 #
 #	  ./Mac/sign_product.sh "Developer ID Application: Your Name (TEAMID)"
 #	  ./Mac/sign_product.sh "Developer ID Application: ..." --notarize KEYCHAIN_PROFILE

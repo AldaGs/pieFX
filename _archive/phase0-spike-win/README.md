@@ -9,7 +9,7 @@ floor. It is the smallest thing that loads into After Effects as an AEGP, hooks
 the mouse, swallows a right-hold, throws a layered window over AE and walks the
 effect catalogue — four capabilities, one file, no pipes, no overlay process, no
 settings. When something in the product stops working and the question becomes
-"is this us, or is this AE?", this is where you ask it. `SPIKES.md` is the log
+"is this us, or is this AE?", this is where you ask it. `docs/SPIKES.md` is the log
 it produced.
 
 ## What is in here

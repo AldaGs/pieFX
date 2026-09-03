@@ -1,7 +1,9 @@
 # pieFX — handoff
 
+Paths in this file are relative to the REPO ROOT, one level up from `docs/`.
+
 If you are picking this up cold, read this file, then `poc/README.md`,
-`poc/SETTINGS.md` and `ARCHITECTURE.md`. **For the macOS port, read
+`poc/SETTINGS.md` and `ARCHITECTURE.md` (beside this one). **For the macOS port, read
 `HANDOFF_MAC.md`** — the product builds and runs there too now, and the
 platform seam it describes is why this file's Windows detail still reads as it
 always did. `SPIKES.md` is the Phase 0 record and
@@ -69,6 +71,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | `Comp > Copy to Clipboard` sends the right builtin down the pipe | harness — the clipboard half is native and needs AE |
 | Releasing on `Effects` opens the search window, and nothing crosses the pipe | harness — a real window, raised, and the overlay still answers `quit` |
 | The search window filters, ranks and keyboard-navigates a catalogue | harness fixture + browser preview |
+| The **installer**: elevates, installs, and AE loads the .aex from the `Plug-ins\pieFX\` SUBFOLDER | **live** — the user ran it and the plug-in came up |
 
 Two menu commands to run after any install, both under `Window`:
 **pieFX Self-Test (Executors)** fires one of every action kind, and
@@ -124,7 +127,7 @@ were "code, not facts" for too long.
 - **`copy-frame` is watched live and pastes.** `Comp > Copy to Clipboard`
   writes the frame to `%TEMP%\pieFX_clipboard_frame.png` through
   `saveFrameToPng` at 1:1, decodes it with WIC and puts three formats on the
-  clipboard ("PNG", CF_DIBV5, CF_DIB - see SETTINGS.md for why three). Watched:
+  clipboard ("PNG", CF_DIBV5, CF_DIB - see poc/SETTINGS.md for why three). Watched:
   the toast, the log, and a successful paste out of AE.
 - **Its second failure was a check in the wrong place, and that is the reusable
   part.** The script asked `f.exists` the instant `saveFrameToPng` returned and
@@ -318,13 +321,18 @@ not contain `Anchor to Center`.
 
 ## Repo layout
 
-    README.md            Public-facing overview
-    HANDOFF.md           This file
-    SPIKES.md            The Phase 0 log — still the record of what cannot work
-    ARCHITECTURE.md      The locked two-process design
-    MAC_SESSION.md       Pre-written macOS checklist (executed once)
-    MAC_RESULTS.md       What the macOS bench found
-    MAC_PORT.md          What porting the PRODUCT would take, and in what order
+    README.md            Public-facing overview. The only .md at the root.
+    docs/                everything else, including this file:
+      HANDOFF.md           this file — the Windows/product handoff
+      HANDOFF_MAC.md       the macOS handoff
+      SPIKES.md            the Phase 0 log — still the record of what cannot work
+      ARCHITECTURE.md      the locked two-process design
+      MAC_SESSION.md       pre-written macOS checklist (executed once)
+      MAC_RESULTS.md       what the macOS bench found
+      MAC_PORT.md          what porting the PRODUCT took, and in what order
+
+    Win/                 the Windows installer (pieFX.iss, build_installer.ps1)
+    Mac/                 the macOS build, package and sign scripts
 
     _archive/            retired, kept on purpose. See its own README.
       phase0-spike-win/  the FROZEN Windows Phase 0 spike (S1,S2,S3,S5): its
@@ -424,25 +432,28 @@ consider them:
 Adding a certificate later is one `signtool` call at the end of
 `build_installer.ps1` and nothing else changes.
 
-### What is NOT proven about the installer
+### What the installer has and has not been through
 
-**It has never been run.** It compiles clean and the payload guard is tested in
-both directions, but no `.exe` from it has installed anything: this session's
-shell is not elevated and After Effects was open the whole time (which is itself
-the condition the installer is written to refuse). Everything below is written
-from measured facts about the machine, not from a watched install:
+**Run, and the plug-in loaded from it** — 2026-09-03, the user's own machine.
+That settles the question that would have hurt: **After Effects DOES load a
+`.aex` out of the `Plug-ins\pieFX\` subfolder**, so the subfolder layout — which
+is what makes the payload atomic and the uninstall exact — is a real option and
+not a guess from the loading log. The install path, the elevation, and the
+plug-in coming up in AE afterwards are all watched.
 
-- the registry walk and the `AfterFX.exe` confirmation — the facts they encode
-  were checked by hand, the Pascal that encodes them was not run
-- the running-AE check
-- the version checkbox page, and installing into two AE versions at once
-- the uninstaller, including the settings.json question
-- whether AE actually loads a `.aex` from the `pieFX` SUBFOLDER — the loading
-  log says it scans sub-directories and every vendor there relies on it, but
-  this plug-in has only ever been loaded from `Plug-ins/` directly
+Still unwatched, and all of it cheap to settle when the occasion arises:
 
-That last one is the one that would hurt, and it is 30 seconds to settle: quit
-AE, run the installer, start AE, look at the Window menu.
+- **installing into two AE versions at once.** Only one real AE exists on the
+  build machine; the second entry is the leftover shell the detection skips, so
+  the multi-tick path has never had two boxes to tick.
+- **the uninstaller**, including the settings.json question.
+- **the running-AE refusal.** Written from the fact that AE holds the handle;
+  the RETRY/CANCEL loop itself has not been seen.
+- **upgrade over an existing install** — `ignoreversion` should make it a
+  straight overwrite, but AE must be closed for it and that has not been tried.
+- **SmartScreen.** The installer has only ever been run from local disk, which
+  carries no mark-of-the-web. The full-screen panel is what a DOWNLOADED copy
+  gets, and nobody has downloaded one yet.
 
 ## The Effects search — what was built, and what is not yet true
 

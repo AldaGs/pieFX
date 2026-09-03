@@ -67,4 +67,4 @@ echo "    pieFX (Mac) S4: Watch Right-Hold"
 echo "    pieFX (Mac) S4: Swallow Hold OFF/ON"
 echo "    pieFX (Mac) S3: Overlay Test"
 echo
-echo "Run them in the order MAC_SESSION.md gives: S1, then S5, then S4, then S3."
+echo "Run them in the order docs/MAC_SESSION.md gives: S1, then S5, then S4, then S3."

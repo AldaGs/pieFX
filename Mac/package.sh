@@ -8,7 +8,7 @@
 #
 #	The result is UNSIGNED beyond ad-hoc, which is fine and is measured: AE
 #	ships com.apple.security.cs.disable-library-validation, and a quarantined
-#	plug-in was tested by hand and loaded normally. See MAC_RESULTS.md.
+#	plug-in was tested by hand and loaded normally. See docs/MAC_RESULTS.md.
 #
 #	  ./Mac/package.sh
 #

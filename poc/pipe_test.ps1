@@ -51,7 +51,7 @@ $summon = '{"type":"summon","x":800,"y":500,"hasSelection":true,"layerCount":1}'
 # reaches it is now DEAD(49.7px) to ARM_DIST(54px) - about four pixels - so
 # under this rule a default is not reachable by hand and there is nothing
 # honest to assert about it. It is still reachable under `center` and `exit`,
-# neither of which this script exercises; see HANDOFF.md.
+# neither of which this script exercises; see docs/HANDOFF.md.
 #
 # These two used to be labelled "default" at 300px out. They passed anyway, one
 # because Comp's default and its S child happen to be the same command and the

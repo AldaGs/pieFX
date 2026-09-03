@@ -13,7 +13,7 @@
 	be on macOS. A downloaded unsigned .exe gets SmartScreen's full-screen
 	"Windows protected your PC" panel with the Run button behind "More info" --
 	whereas a plain .zip of the same files does not. Signing is a real decision
-	with a real price, not a formality; see HANDOFF.md. When a certificate
+	with a real price, not a formality; see docs/HANDOFF.md. When a certificate
 	exists, one signtool call goes at the end of this script and nothing else
 	changes.
 #>
