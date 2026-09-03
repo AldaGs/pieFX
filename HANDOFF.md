@@ -60,6 +60,7 @@ the offline harness (`poc/pipe_test.ps1`).
 | The Effects search: window opens in front of AE, filters, Enter applies | **live** — the user's own session |
 | `layerCount` counts LAYERS, not selected things | **live** — `layers=1` with a layer's properties selected |
 | `copy-frame`: the frame reaches the Windows clipboard and pastes | **live** — pasted out of AE |
+| `copy-frame` reports the frame the TIMELINE shows | **live** — checked at several playhead positions |
 | `Comp > Copy to Clipboard` sends the right builtin down the pipe | harness — the clipboard half is native and needs AE |
 | Releasing on `Effects` opens the search window, and nothing crosses the pipe | harness — a real window, raised, and the overlay still answers `quit` |
 | The search window filters, ranks and keyboard-navigates a catalogue | harness fixture + browser preview |
@@ -129,12 +130,13 @@ were "code, not facts" for too long.
   waits for the same non-zero size twice in a row. **A test whose failure mode
   is indistinguishable from the thing it is testing for is not a test** - the
   same shape as the settings-window bug that passed against the pre-fix binary.
-- **What is NOT proven about it: the frame NUMBER.** The one watched run
-  reported `Frame 0` and there is no record of where the playhead was, so the
-  number has been seen printing, not seen being right. The arithmetic is
-  `Math.round(c.time/c.frameDuration) + displayStartFrame`; the check worth
-  making is one copy parked somewhere that is not frame 0, and one in a comp
-  whose first frame is not 0.
+- **The frame number is right**, watched across several playhead positions in
+  one session. `Math.round(c.time/c.frameDuration) + displayStartFrame` is
+  therefore measured, not merely reasoned about - the first run reported
+  `Frame 0` and proved nothing, because a formula that is wrong in every term
+  still prints 0 at the start of a comp. The one case still untried is a comp
+  whose first frame is NOT 0, which is the only thing `displayStartFrame`
+  contributes.
 - **The Effects search works end to end in AE**, watched by the user: the
   catalogue file appears, the window comes to the front, the filter finds
   effects and Enter applies one. The multi-layer refusal and the
