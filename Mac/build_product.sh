@@ -48,7 +48,7 @@ clang++ -std=c++17 -O2 -Wall ${ARCHS} \
 	"${ROOT}/poc/native/mac/pieFX_fifo.cpp" \
 	"${ROOT}/poc/native/mac/pieFX_launch.cpp" \
 	"${ROOT}/poc/native/mac/pieFX_gesture.mm" \
-	"${ROOT}/poc/native/mac/pieFX_paths.cpp" \
+	"${ROOT}/poc/native/mac/pieFX_paths.mm" \
 	"${ROOT}/poc/native/mac/pieFX_text.cpp" \
 	"${ROOT}/poc/native/mac/pieFX_clipboard.mm" \
 	-o "${BIN}"

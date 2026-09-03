@@ -202,10 +202,16 @@ is what the mixed-DPI coordinate bug looked like from the outside.
      cannot be checked; the match name is the fallback.
    - ~~The clipboard~~ — `NSPasteboard`, one format instead of three, alpha
      asserted by harness.
-   - **`WritePresets` remains**, and it is the one the plan always put last:
-     it needs the macOS equivalent of a localised, possibly redirected
-     Documents folder plus the shipped-presets root inside the AE install —
-     the fiddliest of the four for the least payoff.
+   - ~~`WritePresets`~~ — done last, as planned, and cheaper than feared: the
+     install's SHAPE is the same on both platforms (Presets is a sibling of
+     Plug-ins), so the walk-up rule needed no variant, only more ancestors for
+     the `.plugin` bundle. The seam is `opendir` vs `FindFirstFile` and
+     nothing above it. 621 shipped presets found against the real install.
+     It also turned up a defect nobody was looking for: 136 of AE's preset
+     names are stored DECOMPOSED, and the search matched on a plain substring,
+     so those presets could not be found by typing their own names.
+
+   **Step 5 is complete. Nothing is stubbed on macOS.**
 6. ~~**Localisation of menu ids**~~ — **investigated**, on a Spanish AE. The
    ids are language-independent and the fallback now works. ~~what remains is
    the effect-name encoding~~ — that is done too, in step 5.

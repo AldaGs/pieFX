@@ -1013,6 +1013,103 @@ Confirmed in AE afterwards: both windows open on the display the cursor is on.
 Windows has the same `.center()` bug, untested and unfixed here — see
 `HANDOFF_MAC.md`.
 
+## The effect catalogue, confirmed in AE — and where the file actually is
+
+456 entries, AE claims 456, no mismatch. `file` calls `effects.json` "Unicode
+text, UTF-8 text", it parses, and 189 of its entries carry non-ASCII that is
+correct Spanish rather than mojibake or a match-name fallback:
+
+```
+    CC Ball Action        | Simulación
+    CC Color Neutralizer  | Corrección de color
+    CC Glass Wipe         | Transición
+```
+
+That settles the encoding work end to end, on the install that motivated it.
+
+**The file is at `~/Library/Application Support/pieFX/`, and the reason it
+looked missing is that Finder hides `~/Library`.** All three files were there
+the whole time. `open ~/Library/Application\ Support/pieFX` is the way in; the
+plug-in also logs the absolute path it wrote to, which is the more reliable
+answer and is why that log line names the path.
+
+## Presets: the last stub, and the seam that made it shared
+
+621 shipped presets found under `/Applications/Adobe After Effects 2026/Presets`,
+which matches `find -name '*.ffx'` exactly. Zero user presets on this machine,
+which is a real answer rather than a failure.
+
+**The install's shape is the same on both platforms even though the paths are
+not.** Windows keeps the plug-in in `<install>/Support Files/Plug-ins` and the
+presets in `<install>/Support Files/Presets`; macOS uses `<install>/Plug-ins`
+and `<install>/Presets`. Either way **Presets is a sibling of Plug-ins**, so
+`ShippedPresetRoot`'s rule — walk up from our own module path until an ancestor
+holds both — needed no macOS variant at all. It only needed more ancestors: a
+`.plugin` is a bundle, so the binary sits five levels down rather than two, and
+the existing limit of eight already covered it.
+
+### The seam is `opendir`, and nothing above it
+
+The walk has a depth cap, a count cap, a `.ffx` filter, a two-root search and a
+category rule in it. All of that is logic, and none of it is platform-specific.
+The single thing that genuinely differs is *listing a directory*, so that is
+where the split went — three small functions, `DirOpen` / `DirNext` /
+`DirClose`, with `FindFirstFileA` behind one and `opendir` behind the other,
+and roughly 120 lines of walk shared above them.
+
+`DirNext` carries one trap worth naming: `d_type` is a free answer on the
+filesystems AE installs onto, but it is **not guaranteed**, and a filesystem
+reporting `DT_UNKNOWN` would have stopped the recursion at the first subfolder.
+That fails in the direction of looking fine — it reads as "this AE ships almost
+no presets" rather than as an error — so there is a `stat` fallback.
+
+### 136 presets were unfindable by typing their own name
+
+The bug this file exists to record. Preset names come from `readdir`, and **APFS
+is normalisation-preserving**: it stores whatever bytes the installer wrote. So
+AE's own Presets tree is MIXED — measured here, 136 of 213 accented names are
+decomposed and the other 77 are not.
+
+A keyboard produces composed text. `search.js` matches with a plain lowercased
+substring test. So typing a preset's own accented name would fail to find it:
+
+```
+  raw .ffx names: 621
+    typing "caída" BEFORE:  6 matches
+    typing "caída" AFTER:   8 matches
+    names unfindable by their own accented spelling: 136
+```
+
+The preset would be sitting in the list and would not come back from a search
+for itself — which is the same shape of failure as the truncated PNG: nothing
+errors, and the wrong answer looks like a complete one.
+
+The fix is NFC, applied where the catalogue is written rather than where it is
+searched, so the file itself is canonical for anything that reads it later.
+`PieFX_LegacyToUtf8` now does it, which means the effects catalogue gets it too.
+That function grew a second job and is better for it: "AE's text, or the
+filesystem's, made canonical" is one idea, and the two callers were both
+already asking for it — one for the encoding, one for the normalisation.
+
+**Paths are deliberately NOT normalised.** That string is opened, not read, so
+it keeps exactly the bytes the directory gave us. All 621 still `stat`.
+
+### A harness that includes the translation unit
+
+`WritePresets` touches no AEGP suite — it is a directory walk and some JSON —
+so it is testable with AE installed but not running. It is `static`, so
+`presets_test.cpp` **includes `pieFX.cpp`** rather than linking against it.
+
+That is deliberate: what runs in the harness is the SHIPPING function, not a
+copy of it that could drift. It is also the only way to test the walk without
+first extracting it into a module it does not otherwise need to be in.
+
+The assertions worth having are the ones about the OUTPUT, not the count:
+every path must `stat`, and no category may end in `.ffx`. That second one
+caught a real bug during development — the joined relative path was being
+passed where the folder belonged, so every category had the preset's filename
+glued to the end of it.
+
 ## The backstop that nearly went missing
 
 The idle hook carries a backstop for a press whose UP was never seen — a

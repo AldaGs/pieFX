@@ -47,6 +47,19 @@ int PieFX_ConfigBase(char *out, size_t cap);
 //	of the file it actually wanted, which is a better message than "mkdir".
 int PieFX_ConfigPath(const char *rel, char *out, size_t cap);
 
+//	The user's Documents folder, as the SYSTEM reports it — it can be
+//	relocated (iCloud's "Desktop & Documents Folders" moves the real directory
+//	under ~/Library/Mobile Documents), and a hand-built $HOME/Documents does
+//	not follow. Returns 1 on success. The user's animation presets live under
+//	it, which is why this matters at all.
+int PieFX_DocumentsDir(char *out, size_t cap);
+
+//	The full path of the binary this code is compiled into — dladdr, which is
+//	the macOS answer to GetModuleHandleEx + GetModuleFileName. The shipped
+//	presets are found relative to it, so the plug-in needs no guess at where AE
+//	was installed. Returns 1 on success.
+int PieFX_ModulePath(char *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

@@ -27,8 +27,9 @@ by its own harness, launch and lifetime are proven, and the gesture is the
 Phase 0 spike moved into a module. The second half of the
 feature set was blocked behind one decision about where files live; that
 decision is now taken on both sides of the wire, and the effect search, saved
-settings and copy-frame are written on the back of it. **They have not been
-run in AE.** Presets remain stubbed, deliberately and last.
+settings and copy-frame are written on the back of it. Presets came last, as
+planned, and are in: 621 shipped presets found against the real install.
+**Nothing is stubbed on macOS any more.**
 
 ## What is actually proven
 
@@ -52,19 +53,19 @@ Watched working in AE, or measured by a harness against the real binaries.
 | a half-written PNG is refused, not pasted | `pieFX_clipboard_test`, against a truncated 1600x1200 |
 | **copy-frame pastes the WHOLE frame** | in AE, on the 6656x2270 comp that originally failed |
 | **settings and search open on the cursor’s display** | `CGWindowListCopyWindowInfo` from outside the process, then in AE on the second display |
+| **the effect catalogue, with its accents** | in AE: 456 of 456, valid UTF-8, 189 non-ASCII entries correct |
+| **the preset walk** | `pieFX_presets_test` against the real AE install: 621 found, every path opens |
 
 ## What is NOT proven
 
-- **Settings and the effect catalogue, inside After Effects.** Both are
-  written and both have passing harnesses, but neither has run with AE in the
-  picture. Specifically unchecked: that `ReadSettings` honours a `holdMs`
-  written by the settings window, and that the catalogue AE produces parses in
-  the search window with its accented names intact.
-  **The search WINDOW has now been seen working in AE and the search CONTENTS
-  have not** — those are two different claims, and only the first is settled.
-  The clipboard and the window placement were in this same list and the first
-  hand-check found a real bug in each, so treat "harness passes" as weak
-  evidence here.
+- **Presets, inside After Effects.** `pieFX_presets_test` walks the real
+  install and finds 621 with every path openable, but nothing has APPLIED one
+  from the wheel — the `.ffx` path crossing to ExtendScript and coming back as
+  an applied preset is untested on macOS.
+- **The settings round trip.** That `ReadSettings` honours a `holdMs` written
+  by the settings window has never been watched. It is the last thing in step 5
+  with no observation behind it at all.
+- **Windows, at all, since this port began.** See "What to do next".
 - **The wheel summoned on a second display from the real gesture.** The window
   move is measured and the driver script summons there correctly, but nobody has
   right-held on the second screen in AE. This is a five-minute check and it is
@@ -78,24 +79,18 @@ Watched working in AE, or measured by a harness against the real binaries.
 
 ## Stubbed, and where
 
-**One** function is still stubbed. It logs
-`not implemented on macOS yet (MAC_PORT step 5)` rather than failing quietly.
+**Nothing.** All four functions that logged
+`not implemented on macOS yet (MAC_PORT step 5)` are written:
+`ReadSettings`, `WriteEffectCatalogue`, `CopyFrameToClipboard` and
+`WritePresets`.
 
-| stub | user-visible effect | blocked on |
-|---|---|---|
-| `WritePresets` | no animation presets in the search | the macOS Documents equivalent, and the shipped-presets root inside the AE install |
-
-Returning 0 is honest here in a way the clipboard stub could not be: the
-catalogue is a LIST, so an empty one degrades to "no presets found" rather than
-to a silent wrong answer. The effects half of the same file is populated.
-
-The other three — `ReadSettings`, `WriteEffectCatalogue` and
-`CopyFrameToClipboard` — are written. Note that they are no longer behind
-`#else // AE_OS_WIN` at all: each turned out to have exactly ONE line that was
-genuinely platform-specific, so the seam moved down to that line
-(`PieFX_ConfigPath`, `PieFX_LegacyToUtf8`, `PngFileToClipboard`) and the bodies
-are now shared between the two platforms. Do not go looking for a macOS copy of
-them.
+None of them ended up behind `#else // AE_OS_WIN`, and that is the shape of the
+whole step. Each was split whole, and each turned out to contain one or two
+genuinely platform-specific LINES — the config path, the encoding, the
+pasteboard call, and listing a directory. The seams moved down to those lines
+(`PieFX_ConfigPath`, `PieFX_LegacyToUtf8`, `PngFileToClipboard`, and
+`DirOpen`/`DirNext`/`DirClose`) and the bodies are shared. Do not go looking for
+a macOS copy of any of them.
 
 ## What to do next
 
@@ -121,12 +116,16 @@ Then, with AE open:
   check `$TMPDIR/pieFX_poc.txt` for
   `settings: /Users/…/Library/Application Support/pieFX/settings.json -> armOnLaunch=… holdMs=600`.
   Then feel it: the wheel should need a noticeably longer press.
-- **The catalogue.** Arm pieFX and look for `effects: wrote N entries (AE
-  claims N)` in the same log — **with no `*** MISMATCH ***`** — then open the
-  effect search and confirm the list is populated and the accented Spanish
-  names are correct rather than mojibake. This is the one place the encoding
-  work can still be wrong: the harness proved the conversion, not that AE's
-  bytes are the ones the conversion expects.
+- ~~**The catalogue.**~~ **DONE**: 456 entries, AE claims 456, no mismatch,
+  valid UTF-8, and 189 non-ASCII names correct (`Simulación`, `Corrección de
+  color`). The encoding work is settled on the install that motivated it.
+- **Presets, which are new and unwatched in AE.** `pieFX_presets_test` finds
+  621 against the real install with every path openable, but nothing has fired
+  one from the wheel. Arm pieFX and look for
+  `presets: 621 under /Applications/Adobe After Effects 2026/Presets` in
+  `$TMPDIR/pieFX_poc.txt`, then search for one and apply it. **Type an accented
+  name** — `caída` is a good one — because 136 of AE's preset names are stored
+  decomposed and were unfindable before this build normalised them.
 - ~~**Copy-frame, on a BIG comp.**~~ **DONE, and it was the one that already
   failed:** a 6656x2270 frame pasted as 6656x804, because the wait for AE to
   finish writing was a timing guess and a truncated PNG keeps its full
@@ -147,24 +146,25 @@ Then, with AE open:
 second screen and confirm the wheel appears under the cursor. It is the last
 coordinate question outstanding.
 
-### 2. Presets
+### 2. A Windows build
 
-The remaining stub, and the plan always had it last: the fiddliest of the four
-for the least payoff. It needs the macOS equivalent of a localised, possibly
-redirected Documents folder, plus the shipped-presets root inside the AE
-install — which on macOS is inside the `.app`, not beside it.
+The largest un-repaid debt in the project, and it has been growing all through
+step 5. **None of the Windows code changed in this port has been compiled**,
+because there is no Windows toolchain on this machine. What changed there:
+`PieFX_ConfigPath`, `PieFX_LegacyToUtf8`, `FrameFileSize`, `PngIsComplete` and
+the `WaitForFrameFile` rewrite, `EmitPreset`, and the
+`DirOpen`/`DirNext`/`DirClose` iterator that `WalkPresetFolder` and
+`WritePresets` were rebuilt on.
 
-The path half is now much cheaper than it was: `PieFX_ConfigBase` and
-`PieFX_ConfigPath` exist in `poc/native/mac/pieFX_paths.cpp` and the Documents
-lookup can sit beside them. The Windows side uses `SHGetFolderPath` rather
-than `%USERPROFILE%\Documents` for a reason recorded at the call site — the
-author's folder is redirected to OneDrive AND localised — and the macOS
-equivalent (`NSSearchPathForDirectoriesInDomains` with
-`NSDocumentDirectory`) is the same kind of answer for the same kind of reason.
+Every one of those was a deliberate choice to share a body rather than
+duplicate it, and each is defensible on its own. The accumulated risk is not:
+the Windows product is SHIPPING, and it currently ships on code that has only
+ever been compiled for macOS. A build — even one that only compiles and loads —
+should come before the next Windows release.
 
-`WriteEffectCatalogue` already calls `WritePresets` and already writes the
-`presets` array around whatever it returns, so this is a self-contained
-function with a defined contract and a working harness path around it.
+Two of those changes are also FIXES for Windows, which is the other half of the
+argument: `WaitForFrameFile`'s timing guess and the effect-name encoding are
+both latent there.
 
 ### Also outstanding
 
@@ -242,6 +242,8 @@ poc/overlay/src-tauri/target/release/pieFX_fifo_test
 poc/overlay/src-tauri/target/release/pieFX_paths_test
 ./poc/native/mac/build_clipboard_test.sh                    # REPLACES your clipboard
 poc/overlay/src-tauri/target/release/pieFX_clipboard_test
+./poc/native/mac/build_presets_test.sh                     # needs AE INSTALLED, not running
+poc/overlay/src-tauri/target/release/pieFX_presets_test
 
 # the gesture, in a host that is not AE
 ./poc/native/mac/build_gesture_test.sh
@@ -275,13 +277,14 @@ poc/native/mac/
   pieFX_fifo.{h,cpp}        the transport
   pieFX_launch.{h,cpp}      launch, process group, teardown
   pieFX_gesture.{h,mm}      the right-hold gesture
-  pieFX_paths.{h,cpp}       ~/Library/Application Support/pieFX, and mkdir -p
-  pieFX_text.{h,cpp}        legacy AE text -> UTF-8 (there are no Unicode accessors)
+  pieFX_paths.{h,mm}        ~/Library/Application Support/pieFX, Documents, mkdir -p
+  pieFX_text.{h,cpp}        AE and filesystem text -> canonical (NFC) UTF-8
   pieFX_clipboard.{h,mm}    a PNG onto NSPasteboard; three formats become one
   fifo_test.cpp             transport harness, plug-in side
   gesture_test.mm           the gesture in a host that is not AE
   paths_test.cpp            the two-sided path agreement, and the encoding
   clipboard_test.mm         the clipboard, alpha included
+  presets_test.cpp          the preset walk vs the real AE install; #includes pieFX.cpp
 poc/pipe_test.py            transport harness, overlay side
 poc/scripts/ag_localeProbe.jsx
 ```
