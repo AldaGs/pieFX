@@ -155,14 +155,18 @@ is what the mixed-DPI coordinate bug looked like from the outside.
    both halves, proven offline in `poc/native/mac/fifo_test.cpp` (19
    assertions, no AE). Send POINTS, top-left origin, from `NSEvent`; the
    overlay converts nothing.
-4. **The gesture** — **module written**
+4. ~~**The gesture**~~ — **DONE**, module written
    (`poc/native/mac/pieFX_gesture.mm`), armed and exercised in a host that is
    not AE. What remains is not the gesture: it is the macOS **target** for the
    product plug-in. Everything built so far compiles standalone, and
-   `Mac/pieFXMac.xcodeproj` still builds the Phase 0 spike rather than
-   `poc/native/pieFX.cpp`. ← next, and it is the integration step the whole
-   port has been deferring.
-5. **Paths, clipboard, Unicode accessors.**
+   `Mac/pieFXMac.xcodeproj` still builds the Phase 0 spike. **That target now
+   exists too** — `Mac/build_product.sh` builds a loadable `pieFX.plugin` from
+   `poc/native/pieFX.cpp` plus the macOS modules. It has not been loaded by AE
+   yet.
+5. **Paths, clipboard, Unicode accessors.** ← next. Four functions are stubbed
+   and say so in the log; see `MAC_RESULTS.md`. The `%APPDATA%` ones are a
+   TWO-SIDED agreement — the overlay reads and writes the same files — so they
+   want deciding once, for both ends, rather than half here.
 6. **Localisation of menu ids** — its own investigation.
 
 Steps 3 to 5 are mechanical. Step 1 DID change the design, in the one way it

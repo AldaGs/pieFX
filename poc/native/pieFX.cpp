@@ -25,6 +25,16 @@
 
 #include "pieFX.h"
 
+#ifndef AE_OS_WIN
+	//	The regions that genuinely ARE Windows, in their macOS form. Each is
+	//	proven on its own OUTSIDE After Effects by the harnesses in
+	//	poc/native/mac, which is why they can be relied on here before this
+	//	file has ever been loaded by AE at all.
+	#include "mac/pieFX_fifo.h"
+	#include "mac/pieFX_launch.h"
+	#include "mac/pieFX_gesture.h"
+#endif
+
 // ---------------------------------------------------------------------------
 //	globals
 // ---------------------------------------------------------------------------
@@ -53,6 +63,12 @@ static void			ReadSettings(void);
 static A_Boolean	Arm(AEGP_SuiteHandler &suites, A_Boolean announce);
 
 //	gesture state (from the S2D spike)
+//
+//	The HOOK and the TIMER are Windows objects and the state machine that uses
+//	them lives in MouseProc below. On macOS both, and the state machine, belong
+//	to poc/native/mac/pieFX_gesture.mm — a local NSEvent monitor and a
+//	dispatch_after — so none of this is declared there.
+#ifdef AE_OS_WIN
 static HHOOK			S_mouse_hook	= NULL;
 static UINT_PTR			S_hold_timer	= 0;
 static DWORD			S_rdown_tick	= 0;
@@ -60,12 +76,15 @@ static POINT			S_rdown_pt		= { 0, 0 };
 static A_Boolean		S_rdownB		= FALSE;
 static A_Boolean		S_hold_firedB	= FALSE;
 static int				S_replay_pending = 0;
+#endif
 
 //	summon session. No cell here: the overlay owns the wheel geometry and does
 //	its own hit-testing, so the native side only reports where the cursor is.
 static LONG				S_summon_cx		= 0;
 static LONG				S_summon_cy		= 0;
+#ifdef AE_OS_WIN
 static POINT			S_last_sent		= { 0, 0 };
+#endif
 
 //	selection context, refreshed in IdleHook so the summon (which runs inside the
 //	mouse hook, where AEGP calls would be reentrant) can read a cached value.
@@ -113,6 +132,12 @@ static int				S_q_tail		= 0;
 static char				S_tx_name[128]	= { 0 };
 static char				S_rx_name[128]	= { 0 };
 
+//	The pipe HANDLES, the job object and the critical section are all Windows
+//	objects with no macOS counterpart to declare here: the FIFO server owns its
+//	own descriptors (poc/native/mac/pieFX_fifo.cpp) and the launcher owns the
+//	child pid and its process group (pieFX_launch.cpp). What survives on both
+//	sides is the NAMES and the connected flag, which the portable code reads.
+#ifdef AE_OS_WIN
 static HANDLE			S_overlay_proc	= NULL;
 //	Kept open for the life of the process ON PURPOSE. The job is configured to
 //	kill everything in it when its last handle closes, and process exit closes
@@ -125,6 +150,10 @@ static HANDLE			S_pipe_thread	= NULL;
 static HANDLE			S_pipe_dead_evt	= NULL;	// UI -> bg: this connection broke
 static HANDLE			S_pipe_stop_evt	= NULL;	// UI -> bg: shut down
 static A_Boolean		S_pipe_connected = FALSE;
+#endif	// AE_OS_WIN
+
+//	Outside the guard: this also serialises the ACTION QUEUE, which is written
+//	on the transport thread and drained on AE's UI thread on both platforms.
 static CRITICAL_SECTION	S_pipe_cs;
 static A_Boolean		S_pipe_cs_ready	= FALSE;
 
@@ -292,6 +321,7 @@ static const char *S_anchor_script_fmt =
 	"       + (skipped ? ', ' + skipped + ' skipped' : '');"
 	"})()";
 
+#ifdef AE_OS_WIN
 // ---------------------------------------------------------------------------
 //	pipe: write side (UI thread)
 // ---------------------------------------------------------------------------
@@ -345,12 +375,30 @@ PipeWrite(const char *jsonZ)
 	LeaveCriticalSection(&S_pipe_cs);
 }
 
+#else	// AE_OS_WIN
+
+//	macOS: the same guarantee, less machinery. The fd is already O_NONBLOCK, so
+//	a full pipe returns EAGAIN instead of parking and poll() supplies the
+//	deadline — see PieFX_PipeWrite. Bounded because this runs on AE's UI
+//	thread, which is the fault b9a73eb fixed on the Windows side.
+static void
+PipeWrite(const char *jsonZ)
+{
+	PieFX_PipeWrite(jsonZ);
+}
+
+#endif	// AE_OS_WIN
+
+
 static void SendSummon(LONG x, LONG y, A_Boolean hasSel, A_Boolean hasComp, A_long layers)
 {
 	char m[224];
 	sprintf_s(m, sizeof(m),
 		"{\"type\":\"summon\",\"x\":%ld,\"y\":%ld,\"hasSelection\":%s,\"hasComp\":%s,\"layerCount\":%ld}\n",
-		x, y, hasSel ? "true" : "false", hasComp ? "true" : "false", layers);
+		//	(long) casts: A_long is 32-bit and %ld is 64-bit on arm64. See
+		//	MAC_RESULTS.md — this is Phase 0's third bug, in new code.
+		(long)x, (long)y, hasSel ? "true" : "false",
+		hasComp ? "true" : "false", (long)layers);
 	PipeWrite(m);
 }
 //	Raw position only. The overlay owns the wheel geometry and hit-tests for
@@ -623,6 +671,27 @@ HandleOverlayLine(const char *lineZ)
 	QueuePush(&a);
 }
 
+#ifndef AE_OS_WIN
+// ---------------------------------------------------------------------------
+//	bridges into the macOS modules
+// ---------------------------------------------------------------------------
+//	The modules are deliberately free of AEGP and of this file's globals, so
+//	they can be built and proven standalone, outside After Effects. These two
+//	functions are the entire coupling between them and the plug-in.
+static void
+PieFXLogBridge(const char *msg, void *)
+{
+	Log("%s", msg);
+}
+
+static void
+PieFXOverlayLineBridge(const char *line, void *)
+{
+	HandleOverlayLine(line);
+}
+#endif	// !AE_OS_WIN
+
+#ifdef AE_OS_WIN
 // ---------------------------------------------------------------------------
 //	pipe: server thread (accept + read + re-accept)
 // ---------------------------------------------------------------------------
@@ -842,6 +911,36 @@ StopPipeServer(void)
 	S_pipe_rx	= INVALID_HANDLE_VALUE;
 }
 
+#else	// AE_OS_WIN
+
+// ---------------------------------------------------------------------------
+//	the transport, macOS
+// ---------------------------------------------------------------------------
+//	poc/native/mac/pieFX_fifo.cpp. A mkfifo pair rather than a named-pipe
+//	server, which keeps the overlay's end unchanged — it opens both with a
+//	plain File::open on a path. What differs is open() semantics and SIGPIPE,
+//	and both are argued at their call sites there.
+static void
+StartPipeServer(void)
+{
+	if (!PieFX_StartPipeServer(S_tx_name, sizeof(S_tx_name),
+							   S_rx_name, sizeof(S_rx_name),
+							   PieFXOverlayLineBridge, NULL,
+							   PieFXLogBridge, NULL)) {
+		Log("  pipe: server would not start\n");
+	}
+}
+
+static void
+StopPipeServer(void)
+{
+	PieFX_StopPipeServer();
+}
+
+#endif	// AE_OS_WIN
+
+
+#ifdef AE_OS_WIN
 // ---------------------------------------------------------------------------
 //	launch the overlay (best-effort; it retries connecting on its own)
 // ---------------------------------------------------------------------------
@@ -942,6 +1041,22 @@ LaunchOverlay(void)
 	}
 }
 
+#else	// AE_OS_WIN
+
+//	macOS: poc/native/mac/pieFX_launch.cpp. The Windows job object splits in
+//	two here — the process GROUP covers a deliberate teardown and takes the
+//	WebKit children with it, --owner-pid covers AE crashing — and neither half
+//	covers both cases. See MAC_RESULTS.md.
+static void
+LaunchOverlay(void)
+{
+	PieFX_LaunchOverlay(S_tx_name, S_rx_name, 0, PieFXLogBridge, NULL);
+}
+
+#endif	// AE_OS_WIN
+
+
+#ifdef AE_OS_WIN
 // ---------------------------------------------------------------------------
 //	the gesture engine (reused from S2D). Swallow is ALWAYS on while armed.
 // ---------------------------------------------------------------------------
@@ -1057,6 +1172,50 @@ MouseProc(int code, WPARAM wParam, LPARAM lParam)
 	}
 	return CallNextHookEx(S_mouse_hook, code, wParam, lParam);
 }
+
+#else	// AE_OS_WIN
+
+// ---------------------------------------------------------------------------
+//	the gesture engine, macOS
+// ---------------------------------------------------------------------------
+//	The same state machine, in poc/native/mac/pieFX_gesture.mm: a local NSEvent
+//	monitor instead of SetWindowsHookEx, dispatch_after with a generation
+//	counter instead of SetTimer/KillTimer (a dispatch block cannot be
+//	cancelled, so a stale one is invalidated rather than stopped), and the
+//	ORIGINAL NSEvent re-posted instead of a synthesised SendInput replay.
+//
+//	The module reports through these three callbacks and decides nothing else:
+//	which slot is under the cursor, and what should fire, remain the overlay's
+//	business exactly as they are on Windows.
+static void
+MacOnHold(int x, int y, void *)
+{
+	S_summon_cx = x;
+	S_summon_cy = y;
+	SendSummon(x, y, S_has_selection, S_has_comp, S_layer_count);
+	Log("  HOLD -> summon at (%d,%d) hasSel=%d hasComp=%d layers=%ld\n",
+		x, y, S_has_selection, S_has_comp, (long)S_layer_count);
+}
+
+static void
+MacOnMove(int x, int y, void *)
+{
+	SendCursor(x, y);
+}
+
+static void
+MacOnRelease(void *)
+{
+	//	We do NOT decide what fires: the overlay knows which slot the cursor is
+	//	on and sends back a finished action, which IdleHook executes.
+	SendRelease();
+	Log("  UP -> release sent; awaiting the overlay's action\n");
+}
+
+static void CancelHoldTimer(void) { /* the module owns its own clock */ }
+
+#endif	// AE_OS_WIN
+
 
 // ---------------------------------------------------------------------------
 //	selection context (safe here in idle), and the deferred anchor action
@@ -1305,6 +1464,7 @@ JsonEscapeInto(const char *srcZ, char *outZ, size_t out_max)
 //	it is C:\\Users\\aldai\\OneDrive\\Documentos - redirected to OneDrive AND
 //	localised. SHGetFolderPath is what follows both; building the path by hand
 //	would have found zero user presets and reported it as "you have none".
+#ifdef AE_OS_WIN
 static void
 WalkPresetFolder(FILE *fp, const char *rootZ, const char *labelZ, const char *relZ,
 				 A_long *countP, int depth)
@@ -1524,6 +1684,30 @@ WritePresets(FILE *fp)
 //	`claimed` is written beside the count for the same reason S5A reported it:
 //	the interesting number is not how many there are, it is whether walking the
 //	list agrees with what AE says is in it.
+
+#else	// AE_OS_WIN
+
+//	MAC_PORT.md step 5. The presets live under a localised, possibly
+//	redirected Documents folder on Windows, which is why SHGetFolderPath is
+//	used rather than a hand-built path; the macOS equivalent has its own
+//	answer and its own place to look, and that is a decision rather than a
+//	translation.
+//
+//	Returning 0 is honest here in a way the clipboard stub cannot be: the
+//	catalogue is a LIST, and an empty one degrades to "no presets found"
+//	rather than to a silent wrong answer. The search window still works on the
+//	effects catalogue.
+static A_long
+WritePresets(FILE *fp)
+{
+	(void)fp;
+	Log("  presets: not enumerated on macOS yet (MAC_PORT step 5)\n");
+	return 0;
+}
+
+#endif	// AE_OS_WIN
+
+#ifdef AE_OS_WIN
 static void
 WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 {
@@ -1612,6 +1796,26 @@ WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 	}
 }
 
+#else	// AE_OS_WIN
+
+//	MAC_PORT.md step 5, blocked on the same %APPDATA% agreement as
+//	ReadSettings — the overlay READS this file.
+//
+//	And there is a second reason it is not merely a path fix. Phase 0 measured
+//	AEGP_GetEffectName returning single-byte legacy text on a Spanish AE, and
+//	these names go straight into effects.json, where JSON.parse on invalid
+//	UTF-8 is not a graceful failure. The Unicode accessors are a PREREQUISITE
+//	for this function on a localised Mac, not a polish item.
+static void
+WriteEffectCatalogue(AEGP_SuiteHandler &suites)
+{
+	(void)suites;
+	Log("  effects: catalogue not written on macOS yet (MAC_PORT step 5)\n");
+}
+
+#endif	// AE_OS_WIN
+
+
 // ---------------------------------------------------------------------------
 //	Current frame -> the clipboard.
 //
@@ -1633,6 +1837,7 @@ WriteEffectCatalogue(AEGP_SuiteHandler &suites)
 //	              behind the alpha, which is usually black - that is a property
 //	              of the format, not a bug here.
 //	Order is a preference hint, not a rule; the consumer chooses.
+#ifdef AE_OS_WIN
 static A_Boolean
 ReadWholeFile(const char *pathZ, BYTE **bufPP, DWORD *sizeP)
 {
@@ -2024,6 +2229,27 @@ CopyFrameToClipboard(AEGP_SuiteHandler &suites)
 	Log("  copy-frame: %s\n", t);
 	SendToast("info", t);
 }
+
+#else	// AE_OS_WIN
+
+//	MAC_PORT.md step 5. Not written yet, and stubbed LOUDLY rather than
+//	silently: a copy-frame that quietly does nothing looks identical to a copy
+//	that worked, and the user would find out at paste time.
+//
+//	The port makes this code SMALLER. Three clipboard formats exist on Windows
+//	because CF_DIB cannot express alpha; NSPasteboard takes the PNG bytes as
+//	they are, so the WIC decode, the DIB construction and the force-opaque
+//	fallback all disappear.
+static void
+CopyFrameToClipboard(AEGP_SuiteHandler &suites)
+{
+	Log("  copy-frame: not implemented on macOS yet (MAC_PORT step 5)\n");
+	suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id,
+		"pieFX: copying the frame is not available on macOS yet.");
+}
+
+#endif	// AE_OS_WIN
+
 
 //	S5's lookup: walk the installed catalogue for an exact match name.
 static A_Boolean
@@ -2445,10 +2671,10 @@ ProbeCommand(AEGP_SuiteHandler &suites, long id, const char *nameZ,
 		sprintf_s(line, sizeof(line), "  %-15s %4ld %s : NO ACTIVE COMP\n", nameZ, id, howZ);
 	} else if (after > before) {
 		sprintf_s(line, sizeof(line), "  %-15s %4ld %s : WORKS (%ld -> %ld)\n",
-				  nameZ, id, howZ, before, after);
+				  nameZ, (long)id, howZ, (long)before, (long)after);
 	} else {
 		sprintf_s(line, sizeof(line), "  %-15s %4ld %s : DID NOTHING (%ld, err %d)\n",
-				  nameZ, id, howZ, before, (int)err2);
+				  nameZ, (long)id, howZ, (long)before, (int)err2);
 	}
 	Log("%s", line);
 	Append(summaryZ, summary_max, line);
@@ -2585,6 +2811,7 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 	//	during the modal press loop, so this can only evaluate once the press has
 	//	actually ended - at which point, if we still think the button is down but
 	//	it is physically up, the release happened off-AE. Treat it as a cancel.
+#ifdef AE_OS_WIN
 	if (S_active && S_rdownB && !(GetAsyncKeyState(VK_RBUTTON) & 0x8000)) {
 		CancelHoldTimer();
 		if (S_hold_firedB) {
@@ -2594,9 +2821,22 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 		S_hold_firedB = FALSE;
 		Log("  backstop: right-up unseen (released off-AE) -> cancel, wheel hidden\n");
 	}
+#else
+	//	Same backstop, same reason: a LOCAL NSEvent monitor has the identical
+	//	blind spot, and asks the HID layer the same question through
+	//	CGEventSourceButtonState. The press state lives in the module, so the
+	//	check does too.
+	if (S_active) {
+		PieFX_GesturePoll();
+	}
+#endif
 
 	//	Keep selection context warm while armed (cheap; only when not dragging).
+#ifdef AE_OS_WIN
 	if (S_active && !S_rdownB) {
+#else
+	if (S_active && !PieFX_GestureBusy()) {
+#endif
 		RefreshSelectionContext(suites);
 	}
 
@@ -2630,6 +2870,7 @@ IdleHook(AEGP_GlobalRefcon, AEGP_IdleRefcon, A_long *max_sleepPL)
 static void
 StopOverlay(void)
 {
+#ifdef AE_OS_WIN
 	if (S_overlay_proc) {
 		if (WaitForSingleObject(S_overlay_proc, 0) == WAIT_TIMEOUT) {
 			BOOL  ok = TerminateProcess(S_overlay_proc, 0);
@@ -2652,6 +2893,13 @@ StopOverlay(void)
 		S_overlay_job = NULL;
 		Log("  overlay: job closed (takes the WebView2 children with it)\n");
 	}
+#else
+	//	ONE call, because the process GROUP is what the job object was for: the
+	//	kill reaches the WebKit children too, so there is no separate "and now
+	//	the children" step. It escalates SIGTERM -> SIGKILL rather than going
+	//	straight to force.
+	PieFX_EndOverlay(2000);
+#endif
 }
 
 static A_Err
@@ -2659,7 +2907,11 @@ DeathHook(AEGP_GlobalRefcon, AEGP_DeathRefcon)
 {
 	Log("=== death hook ===\n");
 	CancelHoldTimer();
+#ifdef AE_OS_WIN
 	if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
+#else
+	PieFX_DisarmGesture();
+#endif
 	S_active = FALSE;
 
 	//	ORDER IS THE FIX. Ask first, while the pipe it is reading is still
@@ -2667,11 +2919,27 @@ DeathHook(AEGP_GlobalRefcon, AEGP_DeathRefcon)
 	//	what left it blocked in a read that no longer had a server, and a
 	//	process in that state survives being terminated.
 	SendQuit();
+#ifdef AE_OS_WIN
 	if (S_overlay_proc) {
 		DWORD w = WaitForSingleObject(S_overlay_proc, 2000);
 		Log("  overlay: asked to quit -> %s\n",
 			w == WAIT_OBJECT_0 ? "gone" : "still up after 2s");
 	}
+#else
+	//	Same order, same reason: ask while the FIFO it is reading is still
+	//	whole, and give it a moment. StopPipeServer below depends on this
+	//	having happened first.
+	{
+		int waited = 0;
+
+		while (waited < 2000 && PieFX_OverlayAlive()) {
+			Sleep(50);
+			waited += 50;
+		}
+		Log("  overlay: asked to quit -> %s\n",
+			PieFX_OverlayAlive() ? "still up after 2s" : "gone");
+	}
+#endif
 
 	StopPipeServer();
 	StopOverlay();
@@ -2725,6 +2993,7 @@ FindKey(const char *bufZ, const char *keyZ)
 	return p;
 }
 
+#ifdef AE_OS_WIN
 static void
 ReadSettings(void)
 {
@@ -2776,12 +3045,37 @@ ReadSettings(void)
 		path, S_arm_on_launch ? "true" : "false", S_hold_ms);
 }
 
+#else	// AE_OS_WIN
+
+//	MAC_PORT.md step 5. %APPDATA% has a documented macOS answer
+//	(~/Library/Application Support/pieFX), but PIEFX_SETTINGS_REL is a
+//	BACKSLASH path and the OVERLAY writes the same file from its own side — so
+//	the two ends have to agree, and that is one decision to take rather than
+//	half a decision to take here.
+//
+//	Falling through to the built-in defaults is safe: they are the same
+//	defaults the overlay uses under --settings none, which is how every
+//	harness in this project already runs.
+static void
+ReadSettings(void)
+{
+	S_settings_read = TRUE;
+	Log("  settings: not read on macOS yet (MAC_PORT step 5); using defaults\n");
+}
+
+#endif	// AE_OS_WIN
+
+
 static void
 Disarm(AEGP_SuiteHandler &suites, A_Boolean announce)
 {
 	S_active = FALSE;
 	CancelHoldTimer();
+#ifdef AE_OS_WIN
 	if (S_mouse_hook) { UnhookWindowsHookEx(S_mouse_hook); S_mouse_hook = NULL; }
+#else
+	PieFX_DisarmGesture();
+#endif
 	SendCancel();
 
 	//	Same order as the death hook, for the same reason: ask the overlay to
@@ -2791,11 +3085,27 @@ Disarm(AEGP_SuiteHandler &suites, A_Boolean announce)
 	//	AE's next write hung on. Arm() launches a fresh one, so turning pieFX
 	//	back on costs nothing.
 	SendQuit();
+#ifdef AE_OS_WIN
 	if (S_overlay_proc) {
 		DWORD w = WaitForSingleObject(S_overlay_proc, 2000);
 		Log("  overlay: asked to quit -> %s\n",
 			w == WAIT_OBJECT_0 ? "gone" : "still up after 2s");
 	}
+#else
+	//	Same order, same reason: ask while the FIFO it is reading is still
+	//	whole, and give it a moment. StopPipeServer below depends on this
+	//	having happened first.
+	{
+		int waited = 0;
+
+		while (waited < 2000 && PieFX_OverlayAlive()) {
+			Sleep(50);
+			waited += 50;
+		}
+		Log("  overlay: asked to quit -> %s\n",
+			PieFX_OverlayAlive() ? "still up after 2s" : "gone");
+	}
+#endif
 	StopPipeServer();
 	StopOverlay();
 	Log("=== pieFX disarmed ===\n");
@@ -2822,27 +3132,47 @@ Arm(AEGP_SuiteHandler &suites, A_Boolean announce)
 		fclose(fp);
 	}
 
-	S_mouse_hook = SetWindowsHookEx(WH_MOUSE, MouseProc, NULL, GetCurrentThreadId());
-	if (!S_mouse_hook) {
-		char m[160];
+	{
+		//	Installing the gesture is the one step of arming that can fail, and
+		//	it fails differently on each platform. Everything around it — the
+		//	log, the pipe server, the overlay — is identical.
+		A_Boolean	hooked;
+		char		m[160];
 
+#ifdef AE_OS_WIN
+		S_mouse_hook = SetWindowsHookEx(WH_MOUSE, MouseProc, NULL, GetCurrentThreadId());
+		hooked = (S_mouse_hook != NULL);
 		sprintf_s(m, sizeof(m), "pieFX: SetWindowsHookEx failed, err=%lu",
 				  (unsigned long)GetLastError());
-		Log("  %s\n", m);
-		//	A silent auto-arm that fails still has to be reachable: it leaves
-		//	S_active FALSE, so the menu item is the way to try again AND to see
-		//	why. A modal error thrown during AE's startup is not.
-		if (announce) { suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, m); }
-		return FALSE;
+#else
+		PieFXGestureCallbacks cb;
+
+		cb.hold		= MacOnHold;
+		cb.move		= MacOnMove;
+		cb.release	= MacOnRelease;
+		cb.user		= NULL;
+		hooked = PieFX_ArmGesture(&cb, PieFXLogBridge, NULL) ? TRUE : FALSE;
+		sprintf_s(m, sizeof(m), "pieFX: could not install the event monitor");
+#endif
+		if (!hooked) {
+			Log("  %s\n", m);
+			//	A silent auto-arm that fails still has to be reachable: it
+			//	leaves S_active FALSE, so the menu item is the way to try again
+			//	AND to see why. A modal error thrown during AE's startup is not.
+			if (announce) { suites.UtilitySuite3()->AEGP_ReportInfo(S_my_id, m); }
+			return FALSE;
+		}
 	}
 
 	StartPipeServer();
 	LaunchOverlay();
 
 	S_active = TRUE;
+#ifdef AE_OS_WIN
 	S_rdownB = FALSE;
 	S_hold_firedB = FALSE;
 	S_replay_pending = 0;
+#endif
 	Log("=== pieFX armed (hold %ums) ===\n", S_hold_ms);
 
 	if (!announce) { return TRUE; }

@@ -30,6 +30,8 @@ typedef struct {
 	//	The button came up on a press that was ours. The overlay decides what
 	//	fires; this side must not, or it would fire twice.
 	void (*release)(void *user);
+	//	The press ended somewhere we could not see it — see PieFX_GesturePoll.
+	void (*cancel)(void *user);
 	void *user;
 } PieFXGestureCallbacks;
 
@@ -40,6 +42,20 @@ typedef struct {
 //	which is what makes the UP visible at all.
 int  PieFX_ArmGesture(const PieFXGestureCallbacks *cb, PieFXLogFn log, void *log_user);
 void PieFX_DisarmGesture(void);
+
+//	The backstop, called from the idle hook.
+//
+//	A LOCAL monitor sees only events destined for After Effects, so a
+//	right-release over ANOTHER application is invisible to it: the press would
+//	stay "down" forever and the wheel would be left on screen. Windows has the
+//	identical blind spot with a thread-local WH_MOUSE hook and the identical
+//	backstop; only the question "is the button actually up?" is asked
+//	differently.
+void PieFX_GesturePoll(void);
+
+//	Is a right-press in progress? The idle hook skips its selection refresh
+//	during one, exactly as the Windows side skips it while S_rdownB is set.
+int  PieFX_GestureBusy(void);
 int  PieFX_GestureArmed(void);
 
 #ifdef __cplusplus

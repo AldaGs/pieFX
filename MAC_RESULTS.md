@@ -691,6 +691,110 @@ that a silent discard and a correct replay produce identical logs.
 poc/overlay/src-tauri/target/release/pieFX_gesture_test
 ```
 
+---
+
+# The target — the plug-in builds on macOS
+
+`poc/native/pieFX.cpp` compiles and links on macOS, and `Mac/build_product.sh`
+produces a loadable `pieFX.plugin`: universal (arm64 + x86_64), `_EntryPointFunc`
+exported as a bare C symbol, a 478-byte PiPL carrying `8BIMkind` = `AEgx` with
+`mi64` and `ma64`, `PkgInfo` = `AEgxFXTC`, and the overlay copied in beside the
+binary where `dladdr` will find it.
+
+**It has not been loaded by After Effects yet.** That needs AE quit and an
+install into a root-owned folder, which is a person at a keyboard.
+
+## The partition, and what it cost
+
+347 compile errors at the start. They were never 347 problems:
+
+| | |
+|---|---|
+| **vocabulary** | `BOOL`, `MAX_PATH`, `sprintf_s`, `ZeroMemory`, `CRITICAL_SECTION` — spread thinly over code that is otherwise pure AEGP |
+| **five regions** | the pipe server, the overlay launch, the gesture, the clipboard, the paths |
+
+Only the second group is a port. The first is translated once, in
+`poc/native/mac/pieFX_compat.h`, which leaves the ~300 lines that merely SPEAK
+Windows **byte-identical across both platforms** — the property that matters,
+because the Windows product is shipping and a port is not a licence to churn
+it.
+
+The result is 337 added lines against **10 deleted**, and all ten are the
+`Arm` hook-install block, which had to be restructured because installing the
+gesture is the one step of arming that fails differently on each platform.
+Everything else is `#ifdef` nesting around code that was not touched.
+
+The compat header deliberately does not emulate Windows. It covers what
+pieFX.cpp uses and stops; anything with a real decision in it went to a module
+instead. `CRITICAL_SECTION` is the interesting case — it maps to a RECURSIVE
+pthread mutex, because a Windows critical section is recursive and quietly
+changing the locking semantics of a queue written on one thread and drained on
+another is not a translation.
+
+## Phase 0's third bug, in new code
+
+`-Wall` found four `%ld` against a 32-bit `A_long` — the same defect
+MAC_RESULTS already records from the S5 spike. Harmless on Windows, where
+`long` is 32 bits. On arm64 varargs it reads eight bytes from a four-byte slot,
+and one of the four was in `SendSummon`: the summon coordinates, on every
+gesture.
+
+It is worth noting HOW it was found. Nothing detected it on Windows because
+there is nothing to detect there; it appeared the moment the same source was
+compiled for a platform with a different `long`. Cross-compiling is its own
+kind of test.
+
+## What is stubbed, and why loudly
+
+Four functions log "not implemented on macOS yet (MAC_PORT step 5)" rather
+than failing silently:
+
+- **`CopyFrameToClipboard`** — and it also reports to the user, because a
+  copy-frame that quietly does nothing is indistinguishable from one that
+  worked until paste time.
+- **`WritePresets`** — returning 0 is honest here in a way the clipboard stub
+  cannot be: the catalogue is a LIST, so an empty one degrades to "no presets
+  found" rather than to a silent wrong answer.
+- **`ReadSettings`** — falls through to the built-in defaults, which are the
+  same defaults every harness in this project already runs under.
+- **`WriteEffectCatalogue`** — blocked on the same `%APPDATA%` decision, and
+  on the Unicode accessors: Phase 0 measured `AEGP_GetEffectName` returning
+  single-byte legacy text on a Spanish AE, and those names go straight into
+  `effects.json`, where `JSON.parse` on invalid UTF-8 is not a graceful
+  failure.
+
+The `%APPDATA%` ones share a reason worth stating: the overlay reads and writes
+those same files from its own side, so where they live is a two-sided
+agreement, and taking half of it here would be worse than taking none.
+
+## The backstop that nearly went missing
+
+The idle hook carries a backstop for a press whose UP was never seen — a
+right-release over a NON-AE window is invisible to a thread-local hook, so
+`S_rdownB` would stay set and the wheel would be left on screen.
+
+A local NSEvent monitor has the **identical** blind spot, for the identical
+reason, so the backstop is not Windows trivia to be guarded away. It is
+`PieFX_GesturePoll`, asking the HID layer through `CGEventSourceButtonState` —
+the same question the Windows side asks through `GetAsyncKeyState`.
+
+It would have been easy to `#ifdef` this one out and never notice: the failure
+only shows up as a wheel stuck on screen after a release the plug-in could not
+see.
+
+## Building it
+
+```bash
+./Mac/build_product.sh              # build only
+./Mac/build_product.sh --install    # and install (AE must be quit; asks for sudo)
+```
+
+Not an Xcode project, on purpose. A `.plugin` is a directory with a binary, an
+Info.plist, a PkgInfo and a Rez'd PiPL; assembling that in twenty lines of
+shell is far easier to read — and to review — than a `pbxproj`.
+`Mac/pieFXMac.xcodeproj` still builds the Phase 0 spike, which is a separate
+thing and stays as it is.
+
 ## Carried forward
 
 **The Unicode accessors.** This AE runs in Spanish, and `AEGP_GetEffectName` /

@@ -40,7 +40,7 @@ static NSEvent *S_swallowed_down	= nil;
 //	generation instead of stopped.
 static long		S_press_gen			= 0;
 
-static PieFXGestureCallbacks	S_cb	= { NULL, NULL, NULL, NULL };
+static PieFXGestureCallbacks	S_cb	= { NULL, NULL, NULL, NULL, NULL };
 static PieFXLogFn				S_log	= NULL;
 static void					   *S_log_user = NULL;
 
@@ -284,6 +284,39 @@ PieFX_DisarmGesture(void)
 	S_hold_fired	= NO;
 	ForgetSwallowedDown();
 	Log("  gesture: disarmed\n");
+}
+
+//	See the header. Asked of the HID layer rather than of our own event stream,
+//	because the whole point is that our event stream missed the release.
+void
+PieFX_GesturePoll(void)
+{
+	if (!S_armed || !S_rdown) {
+		return;
+	}
+	if (CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,
+								 kCGMouseButtonRight)) {
+		return;						// still genuinely held
+	}
+
+	//	We think it is down; the hardware says otherwise. The release happened
+	//	somewhere we could not see, so treat it as a cancel: the wheel must not
+	//	be left on screen.
+	BOOL had_wheel = S_hold_fired;
+
+	S_rdown			= NO;
+	S_hold_fired	= NO;
+	ForgetSwallowedDown();
+	Log("  backstop: right-up unseen (released off-AE) -> cancel\n");
+	if (had_wheel && S_cb.cancel) {
+		S_cb.cancel(S_cb.user);
+	}
+}
+
+int
+PieFX_GestureBusy(void)
+{
+	return S_rdown ? 1 : 0;
 }
 
 int

@@ -25,6 +25,12 @@
 #ifdef AE_OS_WIN
 	#define VC_EXTRALEAN
 	#include <windows.h>
+#else
+	//	The Win32 VOCABULARY only — BOOL, MAX_PATH, sprintf_s and friends —
+	//	so the ~300 lines that merely SPEAK Windows stay byte-identical across
+	//	the two platforms. The five regions that genuinely ARE Windows get
+	//	modules with argued implementations instead; see poc/native/mac.
+	#include "mac/pieFX_compat.h"
 #endif
 
 #include "entry.h"

@@ -65,6 +65,16 @@ OnRelease(void *)
 	fflush(stdout);
 }
 
+static void
+OnCancel(void *)
+{
+	//	The press ended where the monitor could not see it — another app took
+	//	the release. Reachable in this host by right-pressing in the window and
+	//	releasing over a different application.
+	printf("  >> CANCEL — the release happened off-window; wheel would be hidden\n");
+	fflush(stdout);
+}
+
 @interface Delegate : NSObject <NSApplicationDelegate>
 @property (retain) NSWindow *win;
 @end
@@ -118,6 +128,7 @@ OnRelease(void *)
 	cb.hold		= OnHold;
 	cb.move		= OnMove;
 	cb.release	= OnRelease;
+	cb.cancel	= OnCancel;
 	cb.user		= NULL;
 	if (!PieFX_ArmGesture(&cb, OnLog, NULL)) {
 		printf("FAIL: could not arm the gesture\n");
