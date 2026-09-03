@@ -655,17 +655,43 @@ fn dbg(msg: String) {
     dlog(&format!("  js: {}", msg));
 }
 
-// Where we are installed, which is beside the .aex — the plug-in launches us
-// from there. Scripts that SHIP with pieFX are resolved against this, so a
-// binding can say "scripts/ag_masterNull.jsx" and travel with the product
-// instead of naming one machine's Dropbox.
+// Where the shipped files are. Scripts that travel WITH pieFX are resolved
+// against this, so a binding can say "scripts/ag_masterNull.jsx" instead of
+// naming one machine's Dropbox.
+//
+// Inside a .app this is `Contents/Resources`, NOT the executable's own
+// directory, and that is a signing requirement rather than a matter of taste.
+// `codesign` treats everything in `Contents/MacOS` as code that must itself be
+// signed, so two .jsx files sitting beside the binary made the whole bundle
+// fail with "code object is not signed at all" — not just the scripts, the
+// bundle. Ad-hoc and Developer ID alike. Resources is the one place a bundle
+// may carry things that are not code.
+//
+// The bare executable used in development has no Contents/Resources, so it
+// falls back to the executable's directory and behaves exactly as before.
 #[tauri::command]
 fn overlay_dir() -> String {
-    let d = std::env::current_exe()
+    let exe_dir = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
+    let d = exe_dir
+        .as_ref()
+        .and_then(|dir| {
+            // .../Contents/MacOS -> .../Contents/Resources, and only when it
+            // is really there: a missing Resources means this is not a bundle
+            // we assembled, and guessing would send every script binding to a
+            // path that does not exist.
+            if dir.file_name()? != "MacOS" {
+                return None;
+            }
+            let res = dir.parent()?.join("Resources");
+            if res.is_dir() { Some(res) } else { None }
+        })
+        .or(exe_dir)
         .map(|d| d.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
         .unwrap_or_default();
+
     dlog(&format!("  overlay_dir -> {}", d));
     d
 }

@@ -112,11 +112,53 @@ lipo -info "${BIN}" | sed 's/^/    /'
 #	so one kill takes its WebKit children with it. And exec'ing the inner
 #	binary still gets bundle semantics, because NSBundle.main is derived from
 #	the executable's PATH: Info.plist is read either way.
-OVERLAY="${ROOT}/poc/overlay/src-tauri/target/release/pieFX-overlay"
+#	The overlay has to be UNIVERSAL too, and it is the half that is easy to
+#	forget: the plug-in gets `-arch arm64 -arch x86_64` explicitly, while
+#	`cargo build --release` quietly builds for the host and nothing complains.
+#	An Intel machine would then load the plug-in — its x86_64 slice is there —
+#	and fail to exec the overlay, so the wheel would simply never appear.
+#
+#	Both slices are lipo'd together when both exist. When only one does the
+#	bundle is still built, because that is the development case and blocking it
+#	would be worse, but it says so LOUDLY: a single-arch overlay is only wrong
+#	when it ships.
+#
+#	  rustup target add x86_64-apple-darwin
+#	  cd poc/overlay/src-tauri && cargo build --release --target x86_64-apple-darwin
+TGT="${ROOT}/poc/overlay/src-tauri/target"
+OVERLAY="${TGT}/release/pieFX-overlay"
+OV_X86="${TGT}/x86_64-apple-darwin/release/pieFX-overlay"
+OV_ARM="${TGT}/aarch64-apple-darwin/release/pieFX-overlay"
 OAPP="${APP}/Contents/MacOS/pieFX-overlay.app"
-if [ -x "${OVERLAY}" ]; then
+
+SLICES=()
+[ -x "${OVERLAY}" ] && SLICES+=("${OVERLAY}")
+for extra in "${OV_X86}" "${OV_ARM}"; do
+	if [ -x "${extra}" ]; then
+		#	Skip a slice we already have from the host build.
+		have=0
+		for s in "${SLICES[@]}"; do
+			if lipo -info "${s}" 2>/dev/null | grep -q "$(lipo -info "${extra}" | sed 's/.*: //')"; then
+				have=1
+			fi
+		done
+		[ "${have}" = "0" ] && SLICES+=("${extra}")
+	fi
+done
+
+if [ "${#SLICES[@]}" -gt 0 ]; then
 	mkdir -p "${OAPP}/Contents/MacOS" "${OAPP}/Contents/Resources"
-	cp "${OVERLAY}" "${OAPP}/Contents/MacOS/pieFX-overlay"
+	if [ "${#SLICES[@]}" -gt 1 ]; then
+		lipo -create "${SLICES[@]}" -output "${OAPP}/Contents/MacOS/pieFX-overlay"
+	else
+		cp "${SLICES[0]}" "${OAPP}/Contents/MacOS/pieFX-overlay"
+	fi
+	OARCHS="$(lipo -info "${OAPP}/Contents/MacOS/pieFX-overlay" | sed 's/.*: //')"
+	case "${OARCHS}" in
+		*x86_64*arm64*|*arm64*x86_64*) echo "    overlay is universal (${OARCHS})" ;;
+		*) echo "    !! overlay is ${OARCHS} ONLY — fine for development, WRONG to ship"
+		   echo "       build the other slice: cargo build --release --target x86_64-apple-darwin" ;;
+	esac
 
 	#	LSUIElement declares what mac_accessory_app() also sets at runtime.
 	#	Both, deliberately: the plist is read before any of our code runs, so
@@ -159,23 +201,50 @@ fi
 
 #	The .jsx snippets the wheel invokes by RELATIVE path. menu.js binds the
 #	master-null slots to "scripts/ag_masterNull.jsx", and the overlay resolves
-#	that against its OWN directory — current_exe().parent().
+#	that against `overlay_dir` — which inside a bundle is Contents/RESOURCES.
 #
-#	Which MOVED when the overlay became a bundle. They now belong beside the
-#	inner binary, inside pieFX-overlay.app/Contents/MacOS, and putting them
-#	where they used to be would break every script slot with a file-not-found
-#	the wheel reports as a thrown error.
+#	They lived in Contents/MacOS for exactly one build, and that was a mistake
+#	with a hard consequence: codesign treats everything in MacOS as code that
+#	must itself be signed, so two text files beside the binary made the ENTIRE
+#	bundle fail to sign with "code object is not signed at all". Resources is
+#	the one place a bundle may carry things that are not code.
 #
 #	The snippet the wheel sends carries a fallback that hunts through AE's user
 #	Scripts folders, so a missing file degrades to a thrown error naming the
 #	path rather than to silence — but shipping it is the point.
-SCRIPTS="${OAPP}/Contents/MacOS/scripts"
+SCRIPTS="${OAPP}/Contents/Resources/scripts"
 mkdir -p "${SCRIPTS}"
 if compgen -G "${ROOT}/poc/scripts/*.jsx" > /dev/null; then
 	cp "${ROOT}"/poc/scripts/*.jsx "${SCRIPTS}/"
 	echo "    scripts: $(ls "${SCRIPTS}" | tr '\n' ' ')"
 else
 	echo "    NOTE: no .jsx scripts found to copy"
+fi
+
+#	An AD-HOC signature over the finished bundle, inside out.
+#
+#	Not a substitute for Developer ID (see Mac/sign_product.sh) — it identifies
+#	nobody and Gatekeeper is unmoved by it. It is here for two smaller reasons.
+#
+#	arm64 macOS refuses to run code with NO signature at all, and `lipo -create`
+#	produces a fat file whose slices carry whatever they carried: the Rust
+#	x86_64 slice has none, so `codesign --verify` on the merged binary reports
+#	"code object is not signed at all" even though the arm64 slice is fine. That
+#	is a confusing thing to hand somebody who is debugging on an Intel machine.
+#
+#	And it rehearses the ORDER. Inner bundle first, outer second, because a
+#	signature covers everything beneath it — the same rule sign_product.sh
+#	depends on, exercised on every build rather than once, months later, with a
+#	real certificate.
+if [ -d "${OAPP}" ]; then
+	echo "==> ad-hoc signing"
+	codesign --force --sign - "${OAPP}" >/dev/null 2>&1 || echo "    (overlay bundle: codesign declined)"
+fi
+codesign --force --sign - "${APP}" >/dev/null 2>&1 || echo "    (plug-in bundle: codesign declined)"
+if codesign --verify --deep --strict "${APP}" 2>/dev/null; then
+	echo "    verifies"
+else
+	echo "    !! the bundle does not verify even ad-hoc — it may not load"
 fi
 
 if [ "${INSTALL}" = "1" ]; then

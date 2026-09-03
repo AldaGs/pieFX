@@ -59,16 +59,18 @@ Watched working in AE, or measured by a harness against the real binaries.
 | **all four window properties, bundled** | in AE: click-through, no Dock icon, no focus theft — the three a probe cannot reach |
 | **applying a preset from the wheel** | in AE |
 | **an unsigned, QUARANTINED plug-in loads** | in AE, with the download attribute set by hand — so signing is not a gate |
+| **`holdMs` from settings.json reaches the gesture** | in AE, by feel, and the log states the armed threshold |
+| **the bundle signs and verifies** | ad-hoc, on every build, inside out |
 | **`ag_masterNull.jsx` from a slot** | in AE |
 | **the wheel on both displays, from the real gesture** | in AE, on a 2x and a 1x screen |
 | **launch and teardown from inside the bundle** | `fifo_test` run beside the `.app`: it picks the `.app`, connects, and the watchdog still fires |
 
 ## What is NOT proven
 
-- **The `holdMs` FIX, in AE.** The setting was broken and is now fixed — see
-  `MAC_RESULTS.md` — but the fix itself has only been exercised by
-  `gesture_test`, which is not After Effects. Set the hold to something obvious
-  and feel it.
+- **Intel, and an English AE.** The binary is universal — both halves of it now,
+  the overlay included — but only arm64 has ever run, and every observation in
+  this port is from an es_ES install, so the ENGLISH path is the untested one.
+  Both are one machine away and neither can be checked here.
 - **Windows, at all, since this port began.** See "What to do next".
 - **Anything on an English macOS AE.** Every observation here is from an es_ES
   install. That is mostly an asset — see the traps below — but it does mean the

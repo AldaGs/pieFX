@@ -1320,6 +1320,57 @@ signing at all, not merely a harder signing. Had signing been a GATE, it would
 have had to happen before the machine went back, on a $99 enrolment that takes
 days. It is not a gate, so it can wait for the next loan.
 
+## Two things caught by preparing to hand the build to someone else
+
+Both were found by asking "what would an Intel machine do with this?" rather
+than by anything failing here.
+
+### The overlay was arm64 only, and the plug-in was not
+
+The plug-in gets `-arch arm64 -arch x86_64` explicitly and has been universal
+since the first build. `cargo build --release` builds for the HOST and says
+nothing about it, so the overlay was arm64 only for the whole port.
+
+The failure that would have produced is the nasty kind: an Intel machine loads
+the plug-in — its x86_64 slice is really there — arms it, and the wheel simply
+never appears, because the exec of the overlay fails. Everything else looks
+fine. Nobody would have suspected the architecture.
+
+`build_product.sh` now lipos every slice it can find and, when only one exists,
+says so loudly rather than quietly shipping half a product. Building the second
+slice is `rustup target add x86_64-apple-darwin` and one more `cargo build`, and
+it is worth noting that the x86_64 build COMPILED first time — including every
+`objc_msgSend` transmute in `lib.rs`, which is the part with a real ABI
+question in it.
+
+### `.jsx` files in `Contents/MacOS` made the bundle unsignable
+
+Ad-hoc signing the finished bundle — free, no certificate — failed:
+
+```
+pieFX-overlay.app: code object is not signed at all
+In subcomponent: .../Contents/MacOS/scripts/ag_masterNull.jsx
+```
+
+`codesign` treats everything in `Contents/MacOS` as CODE that must itself be
+signed, and a text file cannot be. So two `.jsx` snippets beside the binary did
+not merely fail to sign themselves — they made the whole bundle fail, and the
+whole PLUG-IN fail above it. Developer ID would have hit exactly the same wall,
+months later, on a borrowed machine, with a certificate that expires.
+
+They were there because `overlay_dir` returned `current_exe().parent()`, which
+inside a bundle is `Contents/MacOS`. It now returns `Contents/Resources` when
+that directory exists — Resources being the one place a bundle may carry things
+that are not code — and falls back to the executable's directory for the bare
+development binary, which is unchanged. Verified both ways: bundled, the wheel
+sends a path under `Contents/Resources/scripts` and the file is there; bare, the
+path is the target directory as before.
+
+Ad-hoc signing is now part of every build, inside out. It identifies nobody and
+Gatekeeper is unmoved by it, but it rehearses the ORDER that `sign_product.sh`
+depends on — inner bundle first, because a signature covers everything beneath
+it — on every build instead of once, later, for real.
+
 ## The backstop that nearly went missing
 
 The idle hook carries a backstop for a press whose UP was never seen — a
