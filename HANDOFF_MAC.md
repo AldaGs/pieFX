@@ -8,10 +8,11 @@ specific. Everything below is true as of 2026-09-03.
 
 **Start here: finish the hand-check in AE.** The first pass through it found
 two real bugs — a truncated frame on the clipboard, and the settings and search
-windows opening on the wrong display — and both are fixed and measured. What
-that pass did NOT get to is the settings round trip, the effect catalogue, and
-the second-display gesture. It is the first section under "What to do next",
-and its record so far is two bugs in two features, which is the best argument
+windows opening on the wrong display. Both are fixed, and **both fixes are now
+confirmed in After Effects on the author's machine.** What that pass did NOT
+reach is the settings round trip, the effect catalogue, and the second-display
+gesture. It is the first section under "What to do next", and its record so far
+is two bugs in the first two features it touched — which is the best argument
 available for finishing it.
 
 ## One-paragraph state
@@ -45,6 +46,12 @@ Watched working in AE, or measured by a harness against the real binaries.
 | bounded write, SIGPIPE, re-accept, quit | `fifo_test`, 23 assertions |
 | launch, the process group, the kqueue watchdog | `fifo_test` |
 | the `.jsx` snippets ship in the bundle | `build_product.sh`, layout checked |
+| the two processes agree on where files live | `pieFX_paths_test`, plus the overlay started on NO arguments finding a file written by hand at the agreed path |
+| legacy effect names become UTF-8, both ways | `pieFX_paths_test`, against real MacRoman bytes |
+| a frame reaches the clipboard WITH its alpha | `pieFX_clipboard_test`, read back as PNG data and as an `NSImage` |
+| a half-written PNG is refused, not pasted | `pieFX_clipboard_test`, against a truncated 1600x1200 |
+| **copy-frame pastes the WHOLE frame** | in AE, on the 6656x2270 comp that originally failed |
+| **settings and search open on the cursor’s display** | `CGWindowListCopyWindowInfo` from outside the process, then in AE on the second display |
 
 ## What is NOT proven
 
@@ -52,12 +59,12 @@ Watched working in AE, or measured by a harness against the real binaries.
   written and both have passing harnesses, but neither has run with AE in the
   picture. Specifically unchecked: that `ReadSettings` honours a `holdMs`
   written by the settings window, and that the catalogue AE produces parses in
-  the search window with its accented names intact. The clipboard and the
-  window placement were in this same list and the first hand-check found a real
-  bug in each, so treat "harness passes" as weak evidence here.
-- **The clipboard fix itself, in AE.** The truncation is understood, measured
-  and fixed, but the fix has only been exercised against PNGs this project
-  wrote. The frame that failed was 6656x2270; that is the one to retry.
+  the search window with its accented names intact.
+  **The search WINDOW has now been seen working in AE and the search CONTENTS
+  have not** — those are two different claims, and only the first is settled.
+  The clipboard and the window placement were in this same list and the first
+  hand-check found a real bug in each, so treat "harness passes" as weak
+  evidence here.
 - **The wheel summoned on a second display from the real gesture.** The window
   move is measured and the driver script summons there correctly, but nobody has
   right-held on the second screen in AE. This is a five-minute check and it is
@@ -120,17 +127,18 @@ Then, with AE open:
   names are correct rather than mojibake. This is the one place the encoding
   work can still be wrong: the harness proved the conversion, not that AE's
   bytes are the ones the conversion expects.
-- **Copy-frame, on a BIG comp.** This is the one that already failed: a
-  6656x2270 frame pasted as 6656x804, because the wait for AE to finish writing
-  was a timing guess and a truncated PNG keeps its full advertised dimensions.
-  Retry that exact comp. The log now says
+- ~~**Copy-frame, on a BIG comp.**~~ **DONE, and it was the one that already
+  failed:** a 6656x2270 frame pasted as 6656x804, because the wait for AE to
+  finish writing was a timing guess and a truncated PNG keeps its full
+  advertised dimensions. Retried on that exact comp and correct. The log says
   `copy-frame: complete PNG after Nms, N bytes` on success and names the byte
   count on failure, so "AE never finished" and "AE wrote nothing" are no longer
   the same message. Then paste — Preview and Photoshop are both worth trying,
   and a transparent comp is the interesting case, because it is the one Windows
   cannot do properly.
-- **The two windows, on the second display.** Also already failed once, and
-  fixed: settings and search now open on the screen under the cursor. Settings
+- ~~**The two windows, on the second display.**~~ **DONE**, and also a bug
+  that had already failed once: settings and search now open on the screen
+  under the cursor, watched working on the second display. Settings
   is placed only when it is first created, so a settings window you dragged
   somewhere stays there; search is placed on every summon, because it has no
   title bar and cannot be dragged at all.

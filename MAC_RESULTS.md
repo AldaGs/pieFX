@@ -904,7 +904,9 @@ other tests do in passing.
 
 Both were found the first time a human used the features on a real machine,
 and both are worth recording because in each case a harness was PASSING over
-the defect.
+the defect. **Both fixes have since been confirmed in AE**, on the same
+machine and — for the clipboard — on the same 6656x2270 comp that exposed the
+bug.
 
 ### A 6656x2270 frame pasted as 6656x804
 
@@ -942,6 +944,8 @@ Two things follow from the check being exact rather than probabilistic:
   case that used to fail by silently pasting the wrong thing.
 - **The size is logged on both paths.** "Grew to 40MB and stopped" and "never
   appeared" are different problems and used to produce the same message.
+
+Confirmed in AE afterwards: the full frame pastes.
 
 **This was never a macOS bug.** `WaitForFrameFile` is shared code and the
 heuristic was inherited from Windows, where a big enough comp would do the same
@@ -1003,6 +1007,8 @@ arm64 and x86_64. setFrameTopLeftPoint: takes the frame's top-left corner in
 screen coordinates: the flip needs only the primary height, and it cannot
 resize by accident. `mac_set_frame_points` stays for the overlay window, which
 genuinely does need to resize itself onto each screen.
+
+Confirmed in AE afterwards: both windows open on the display the cursor is on.
 
 Windows has the same `.center()` bug, untested and unfixed here — see
 `HANDOFF_MAC.md`.
