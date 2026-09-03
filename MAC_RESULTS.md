@@ -795,6 +795,86 @@ shell is far easier to read — and to review — than a `pbxproj`.
 `Mac/pieFXMac.xcodeproj` still builds the Phase 0 spike, which is a separate
 thing and stays as it is.
 
+---
+
+# Localisation — measured on a Spanish AE
+
+`app.isoLanguage` = `es_ES`, AE 26.3x87. `poc/scripts/ag_localeProbe.jsx`.
+
+```
+command                       english   spanish
+--------------------------------------------------
+Add to Render Queue             --      2161
+Composition Settings...         --      2007
+Pre-compose...                  --      2071
+New Composition...              --      2000
+Adjustment Layer                --      2279
+```
+
+Two findings, and the second is the one that matters.
+
+## findMenuCommandId follows the UI language
+
+Not one English name resolved. Every ae-command binding pieFX ships resolves
+to **0** on this machine, which means the name-first design — the thing that
+makes a binding checkable at the moment it is made — cannot be SEEDED in
+English on a localised install.
+
+The design itself is not broken. A user binding a command in their OWN
+language gets the full check, because `findMenuCommandId` resolves their
+spelling. It is the shipped DEFAULTS that cannot be validated this way.
+
+## The ids are NOT localised
+
+Every Spanish name resolved to **exactly the id pieFX already ships** for the
+English one. 2161, 2007, 2071, 2000, 2279 — all five match
+`ae-commands-2025.json`.
+
+So an id is stable across LANGUAGES and fragile only across VERSIONS, which is
+a much smaller claim than the one this project has been carrying. `MAC_PORT.md`
+worried that "the id fallback would carry the whole wheel"; on a localised AE
+it does, and that turns out to be survivable, because the thing it falls back
+to is correct.
+
+It also relocates the check. Id rot is a per-VERSION question, so it wants
+answering once per AE release by whoever has an English install — not by every
+user at runtime, where it cannot be answered at all.
+
+## The bug that was hiding behind it
+
+The executor preferred the name and, when the name did not resolve, returned
+`NO SUCH MENU COMMAND` and stopped — **with the id sitting unused in the same
+binding.** The comment three lines above says "Names are localised, so the id
+stays as the fallback". The fallback was described and never implemented.
+
+On this machine that meant every ae-command slot on the wheel failed with an
+error toast: the gesture worked, the wheel drew, and nothing fired.
+
+It now falls back to the id, and says so in the log rather than silently:
+
+```
+id 2161 (BY ID: the name did not resolve), layers 3->3, rq 0->1
+```
+
+The toast survives for the case it was actually written for — a name that does
+not resolve AND no id to fall back to, which is a genuinely unbound slot rather
+than one bound in another language.
+
+This is the second time in this port that a localised AE has exposed a defect
+that is not about localisation: the first was `%ld` against a 32-bit `A_long`,
+which only appeared when the same source met a different compiler. Neither was
+a macOS bug. Both were latent everywhere and needed a different environment to
+show up.
+
+## What is still open
+
+- **Effect names** still need the legacy-to-UTF-8 conversion (step 5). There
+  are no Unicode accessors; see the correction above.
+- **The wheel's own labels** are pieFX's vocabulary, not AE's menu strings, so
+  they are a separate and optional translation job. A Spanish user reads
+  "Comp Settings" on the wheel and gets `Ajustes de composición`; only the
+  label is English, and nothing about it is broken.
+
 ## Carried forward
 
 **The effect names, and a correction.** This AE runs in Spanish, and

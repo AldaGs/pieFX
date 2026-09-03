@@ -128,12 +128,21 @@ Both were noted as harmless for a spike. Neither is harmless for the product.
    the header marks `UTF8!!` and which is a stable, non-localised identifier.
    That makes it the right fallback when a name will not convert, and the right
    key for anything that has to be remembered.
-2. **Menu command names are localised too.** The entire `ae-command` table was
-   resolved against an English AE, and `findMenuCommandId("Add to Render
-   Queue")` returns 0 on a Spanish one. The id fallback would carry the whole
-   wheel — which is the exact situation the name-first design exists to avoid,
-   because an id is the thing that silently rots into some other command. This
-   is its own investigation, and it is probably bigger than it looks.
+2. **Menu command names are localised too — MEASURED, and smaller than feared.**
+   `findMenuCommandId("Add to Render Queue")` does return 0 on a Spanish AE, so
+   the id fallback does carry the whole wheel. But the ids are **not**
+   localised: on es_ES every Spanish spelling resolved to exactly the id pieFX
+   already ships. An id is stable across LANGUAGES and fragile only across
+   VERSIONS.
+
+   That makes id rot a per-RELEASE question for whoever has an English install,
+   rather than a per-user runtime one — which is fortunate, because at runtime
+   on a localised AE it cannot be answered at all: `AEGP_CommandSuite1` has no
+   way to ask what a command is called.
+
+   It also exposed a real bug. The executor described the id fallback in a
+   comment and never implemented it, so every ae-command slot failed with a
+   toast on a localised AE. Fixed; see `MAC_RESULTS.md`.
 
 ## The thing that would otherwise get skipped
 
@@ -177,7 +186,9 @@ is what the mixed-DPI coordinate bug looked like from the outside.
    and say so in the log; see `MAC_RESULTS.md`. The `%APPDATA%` ones are a
    TWO-SIDED agreement — the overlay reads and writes the same files — so they
    want deciding once, for both ends, rather than half here.
-6. **Localisation of menu ids** — its own investigation.
+6. ~~**Localisation of menu ids**~~ — **investigated**, on a Spanish AE. The
+   ids are language-independent and the fallback now works; what remains is
+   the effect-name encoding, which belongs to step 5.
 
 Steps 3 to 5 are mechanical. Step 1 DID change the design, in the one way it
 was most likely to. Step 6 is still the one most likely to be bigger than it

@@ -2384,6 +2384,19 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 			//	other command the way a stale id does. Names are localised, so the
 			//	id stays as the fallback.
 			//
+			//	That fallback was DESCRIBED here and never implemented: a name
+			//	that did not resolve returned NO SUCH MENU COMMAND and stopped,
+			//	with the id sitting unused in the same binding. Measured on a
+			//	Spanish AE (es_ES), where findMenuCommandId follows the UI
+			//	language and every English name pieFX ships resolves to 0 — so
+			//	every ae-command slot on the wheel failed with a toast.
+			//
+			//	The ids themselves are NOT localised. The same probe resolved
+			//	the Spanish names to exactly the ids shipped for the English
+			//	ones — 2161, 2007, 2071, 2000, 2279 — so an id is stable across
+			//	LANGUAGES and only fragile across VERSIONS. Falling back to it
+			//	is a much smaller risk than not firing at all.
+			//
 			//	It measures itself either way: a command that returns cleanly and
 			//	changes nothing is the failure that cost two sessions.
 			char code[1024];
@@ -2393,6 +2406,8 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 				sprintf_s(code, sizeof(code),
 					"(function(){"
 					"  var id = app.findMenuCommandId('%s');"
+					"  var byName = !!id;"
+					"  if (!id) { id = %ld; }"
 					"  if (!id) { return 'NO SUCH MENU COMMAND'; }"
 					"  var c = app.project.activeItem;"
 					"  var isC = (c && c instanceof CompItem);"
@@ -2401,8 +2416,9 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 					"  app.executeCommand(id);"
 					"  var L1 = isC ? c.numLayers : -1;"
 					"  var R1 = app.project.renderQueue.numItems;"
-					"  return 'id ' + id + ', layers ' + L0 + '->' + L1 + ', rq ' + R0 + '->' + R1;"
-					"})()", aP->text);
+					"  return 'id ' + id + (byName ? '' : ' (BY ID: the name did not resolve)')"
+					"       + ', layers ' + L0 + '->' + L1 + ', rq ' + R0 + '->' + R1;"
+					"})()", aP->text, (long)aP->id);
 				sprintf_s(what, sizeof(what), "ae-command '%s'", aP->text);
 			} else {
 				sprintf_s(code, sizeof(code),
@@ -2420,9 +2436,13 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 			}
 
 			RunScript(suites, code, what);
+			//	Only reachable now when the name did not resolve AND the binding
+			//	carries no id to fall back to — a genuinely unbound slot, rather
+			//	than a slot bound in another language.
 			if (0 == strcmp(S_last_result, "NO SUCH MENU COMMAND")) {
 				char t[200];
-				sprintf_s(t, sizeof(t), "No menu command named \"%s\"", aP->text);
+				sprintf_s(t, sizeof(t),
+					"No menu command named \"%s\", and no id to fall back to", aP->text);
 				SendToast("error", t);
 			}
 		} break;
