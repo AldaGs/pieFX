@@ -56,6 +56,7 @@ Watched working in AE, or measured by a harness against the real binaries.
 | **the effect catalogue, with its accents** | in AE: 456 of 456, valid UTF-8, 189 non-ASCII entries correct |
 | **the preset walk** | `pieFX_presets_test` against the real AE install: 621 found, every path opens — and the list checked against AE's own by hand |
 | **the overlay as a bundled `.app`** | `overlay_probe` before and after: level, alpha, bounds and z-order all unchanged; LaunchServices reports `type="UIElement"` |
+| **all four window properties, bundled** | in AE: click-through, no Dock icon, no focus theft — the three a probe cannot reach |
 | **launch and teardown from inside the bundle** | `fifo_test` run beside the `.app`: it picks the `.app`, connects, and the watchdog still fires |
 
 ## What is NOT proven
@@ -68,11 +69,6 @@ Watched working in AE, or measured by a harness against the real binaries.
   by the settings window has never been watched. It is the last thing in step 5
   with no observation behind it at all.
 - **Windows, at all, since this port began.** See "What to do next".
-- **Click-through, since the overlay was bundled.** It is the one of the four
-  window properties `CGWindowList` cannot see — `overlay_probe.swift` has
-  always said so — and it is set by the same call in both layouts, so there is
-  no reason to expect a change. No reason to expect is not a measurement. One
-  right-hold over an AE panel answers it.
 - **The wheel summoned on a second display from the real gesture.** The window
   move is measured and the driver script summons there correctly, but nobody has
   right-held on the second screen in AE. This is a five-minute check and it is

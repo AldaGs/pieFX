@@ -1125,12 +1125,20 @@ Measured before and after, with the same instrument:
 | z-order | frontmost | frontmost |
 | LaunchServices | `bundleID=[ NULL ]` | `bundleID="com.piefx.overlay"`, `type="UIElement"` |
 
-Three of the four properties are unchanged. **Click-through is the fourth and
-the probe still cannot see it** — `CGWindowList` does not expose
-`ignoresMouseEvents`, which `overlay_probe.swift` has always said out loud. It
-is set by the same `set_ignore_cursor_events(true)` in both layouts, so there
-is no reason to expect a change, but "no reason to expect" is not a
-measurement and it is listed as unproven.
+Three of the four properties are unchanged by measurement. **Click-through is
+the fourth and the probe cannot see it** — `CGWindowList` does not expose
+`ignoresMouseEvents`, which `overlay_probe.swift` has always said out loud — so
+it was checked the only way it can be: by hand, in After Effects, with the
+bundle installed. It holds, along with the two things the plist newly affects,
+no Dock icon and no focus theft.
+
+That check is easier than it sounds and worth writing down for whoever repeats
+it. The overlay spans the screen at level 25 **permanently**, not only while
+the wheel is drawn, so a broken click-through does not need a gesture to
+expose: After Effects would be dead to the mouse the moment pieFX is armed. Arm
+it and use AE for ten seconds. The failure mode is unmissable.
+
+**All four window properties measured in step 1 therefore survive bundling.**
 
 The gain is the last row. LaunchServices now knows what the process is:
 `type="UIElement"` is macOS agreeing it is a background app, rather than the
