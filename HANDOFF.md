@@ -364,6 +364,86 @@ that links silently and fails to load — model on `Persisto`). Install to AE's 
 automatically; otherwise `npm run tauri dev` works and the plug-in's launch
 no-ops.
 
+## Distribution on Windows — the installer
+
+`Win/build_installer.ps1` -> `Win/build/pieFX-<version>-win-setup.exe`. It is an
+[Inno Setup 6] script, `Win/pieFX.iss`; `winget install --id JRSoftware.InnoSetup`
+gets the compiler.
+
+Three MEASURED facts shaped it, and they are worth keeping because each one
+kills an approach that sounds better than it is.
+
+1. **There is no unprivileged install.** AE's own `Plugin Loading.log`
+   (`%APPDATA%\Adobe\After Effects\<ver>\`) lists every folder it scans, and on
+   this machine all six are under `C:\Program Files`. There is no per-user
+   plug-in folder to escape to, so the goal is ONE UAC prompt, not zero.
+2. **The registry knows where AE is; the filesystem does not.** This machine has
+   a `...\Adobe After Effects 2025\Support Files\Plug-ins` folder with **no
+   `AfterFX.exe`** beside it — the shell an uninstall left behind. A glob over
+   Program Files installs into it and the user gets nothing. So versions come
+   from `HKLM\SOFTWARE\Adobe\After Effects\<ver>\InstallPath`, confirmed by
+   `AfterFX.exe` being there.
+3. **The payload is three things that must land together** — `pieFX.aex`, the
+   overlay .exe, and `scripts/`. Someone who copies only the .aex out of a zip
+   gets a plug-in that loads, arms, and never shows a wheel. Atomicity is most
+   of what the installer buys.
+
+It installs into `<AE>\Support Files\Plug-ins\pieFX\` — a SUBFOLDER, which AE
+scans and every other vendor in that folder already uses. It keeps the three
+items together, makes the uninstall exact, and costs nothing because the plug-in
+finds its neighbours with `GetModuleFileName` on itself.
+
+It also refuses to run while AE is open (RETRY/CANCEL, re-asked on the way out
+of the version page, because the usual order is "start the installer, then
+remember to quit AE"), ticks every detected AE version by default, and registers
+an uninstaller — which the zip never had.
+
+`build_installer.ps1` carries the same kind of guard `Mac/package.sh` has, for
+the mistake THIS platform actually made: it reads the staged `.aex` and refuses
+to package it unless it contains `pieFX (Show/Hide)` and does not contain
+`Anchor to Center`. Both directions of that check are tested.
+
+### Signing — decide this before shipping, it is not the macOS answer
+
+On macOS, signing was measured NOT to be a gate: AE ships
+`com.apple.security.cs.disable-library-validation`, and a quarantined plug-in
+loaded fine. **Windows comes out the other way round.** A downloaded unsigned
+`.exe` gets SmartScreen's full-screen "Windows protected your PC" panel with the
+Run button hidden behind "More info" — and a plain `.zip` of the same files does
+not. So an unsigned installer trades "copy three things into a folder" for
+"convince the user to click past a malware warning". Options, in the order to
+consider them:
+
+1. **OV certificate** (~$200-400/yr) — warning clears once reputation accrues.
+2. **EV certificate** (~$400-600/yr, hardware token) — instant reputation.
+3. **Ship unsigned + publish to winget.** `winget install pieFX` skips the
+   browser-download path entirely, and it composes with the installer rather
+   than competing with it.
+4. **Ship unsigned with a "More info -> Run anyway" screenshot in the README.**
+
+Adding a certificate later is one `signtool` call at the end of
+`build_installer.ps1` and nothing else changes.
+
+### What is NOT proven about the installer
+
+**It has never been run.** It compiles clean and the payload guard is tested in
+both directions, but no `.exe` from it has installed anything: this session's
+shell is not elevated and After Effects was open the whole time (which is itself
+the condition the installer is written to refuse). Everything below is written
+from measured facts about the machine, not from a watched install:
+
+- the registry walk and the `AfterFX.exe` confirmation — the facts they encode
+  were checked by hand, the Pascal that encodes them was not run
+- the running-AE check
+- the version checkbox page, and installing into two AE versions at once
+- the uninstaller, including the settings.json question
+- whether AE actually loads a `.aex` from the `pieFX` SUBFOLDER — the loading
+  log says it scans sub-directories and every vendor there relies on it, but
+  this plug-in has only ever been loaded from `Plug-ins/` directly
+
+That last one is the one that would hurt, and it is 30 seconds to settle: quit
+AE, run the installer, start AE, look at the Window menu.
+
 ## The Effects search — what was built, and what is not yet true
 
 The input model was chosen with the user before anything was drawn: **release to

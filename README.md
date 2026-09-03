@@ -30,6 +30,9 @@ The three findings that shaped everything:
 
 ## Layout
 
+    Win/                  the Windows installer: pieFX.iss + build_installer.ps1
+    Mac/                  the macOS build, package and sign scripts
+
     poc/native/           THE PRODUCT plug-in (pieFX.cpp/.h, Win/, mac/)
     poc/overlay/          the Tauri overlay: the wheel, settings, effect search
     poc/scripts/          ExtendScript that ships with pieFX
@@ -42,10 +45,9 @@ The three findings that shaped everything:
                           hooks the mouse. Read its README before using it —
                           it used to build pieFX.aex over the product's.
 
-    pieFXMac.mm      macOS spikes: S1, S3, S4, S5
-    pieFXMac_PiPL.r
-    Mac/                  the Xcode project for the spikes, and the product's
-                          build/package/sign scripts
+    pieFXMac.mm      macOS spikes: S1, S3, S4, S5  (Mac/pieFXMac.xcodeproj
+    pieFXMac_PiPL.r  builds them; they make pieFXMac.plugin, not pieFX.plugin,
+                     which is why they did not need archiving)
 
     SPIKES.md             The spike log. The actual deliverable of Phase 0.
     MAC_SESSION.md        Ordered checklist for the first macOS session.
@@ -61,6 +63,14 @@ include paths and expect that depth.
 `poc/native/Win/pieFX.sln` (`Debug|x64`). Output lands in
 `$(AE_PLUGIN_BUILD_DIR)\AEGP\pieFX.aex`. Close After Effects first — it locks
 the loaded `.aex`.
+
+To make the thing other people install, `.\Winuild_installer.ps1` produces
+`Win/build/pieFX-<version>-win-setup.exe`. It finds every After Effects version
+in the registry, installs all three payload items together into
+`<AE>\Support Files\Plug-ins\pieFX\`, refuses to run while AE is open, and
+registers an uninstaller. It needs Inno Setup 6
+(`winget install --id JRSoftware.InnoSetup`). **The installer is unsigned**, so
+a downloaded copy trips SmartScreen — see HANDOFF.md before shipping it.
 
 The archived spike under `_archive/` builds `pieFX_spike.aex` from its own
 solution. The two used to share a filename, which is a mistake worth not
