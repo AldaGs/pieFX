@@ -267,9 +267,10 @@ are not effects in any other sense, and three differences drive the code:
   follows both; a hand-built path finds nothing and reports it as "you have
   none".
 - **No AEGP apply.** `applyPreset` is a LAYER method in the scripting DOM, so
-  the `preset` kind runs a snippet rather than calling a suite. It opens one
-  undo group, because a preset can add half a dozen effects and keyframes and
-  the user who dislikes the result wants ONE undo.
+  the `preset` kind runs a snippet rather than calling a suite (watched live).
+  It opens one undo group, because a preset can add half a dozen effects and
+  keyframes and the user who dislikes the result wants ONE undo - that last
+  part is reasoned, not yet watched.
 
 Identity is the **path**, the way an effect's is its match name. The category is
 the folder it was found in - the only grouping a .ffx file carries - which is
