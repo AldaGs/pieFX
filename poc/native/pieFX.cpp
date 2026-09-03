@@ -1801,8 +1801,23 @@ ExecuteAction(AEGP_SuiteHandler &suites, const PieAction *aP)
 			}
 			break;
 
-		default:
+		case PK_COPY_FRAME:
+			CopyFrameToClipboard(suites);
 			break;
+
+		//	NOT a silent break. A kind that reaches here is one the wire parser
+		//	accepted and this switch forgot - which is exactly what happened to
+		//	copy-frame: parsed, queued, and dropped, so the gesture fired and
+		//	absolutely nothing happened, no toast and no log line to say why.
+		//	The rule this project keeps re-learning is that silence is the worst
+		//	answer, and the default arm of a dispatch switch is where it hides.
+		default: {
+			char t[120];
+
+			sprintf_s(t, sizeof(t), "pieFX: action kind %d has no executor", (int)aP->kind);
+			Log("  %s\n", t);
+			SendToast("error", t);
+		} break;
 	}
 }
 

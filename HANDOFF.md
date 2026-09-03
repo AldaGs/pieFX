@@ -103,7 +103,15 @@ were "code, not facts" for too long.
   long expired by the time anyone clicks the menu. A test that passes before
   and after the fix is worse than no test, so it was not kept. Confirming this
   one needs a real AE.
-- **`copy-frame` is built and UNWATCHED IN AE.** `Comp > Copy to Clipboard`
+- **`copy-frame` fired NOTHING on its first live run, and the reason is the
+  rule.** The kind was added to the enum, to the wire parser and to the
+  self-test, and never to `ExecuteAction`'s switch - so the message crossed the
+  pipe, parsed cleanly, queued, and fell out of `default: break;` with no toast
+  and no log line. The default arm of a dispatch switch is where silence hides;
+  it now names the kind and toasts. Nothing offline could have caught it (the
+  harness ends at the pipe) but **probe 6 of the executor self-test would have**,
+  and it existed - it was written in the same commit and never run.
+- **`copy-frame` is otherwise UNWATCHED IN AE.** `Comp > Copy to Clipboard`
   writes the frame to `%TEMP%\pieFX_clipboard_frame.png` through
   `saveFrameToPng` at 1:1, decodes it with WIC and puts three formats on the
   clipboard ("PNG", CF_DIBV5, CF_DIB - see SETTINGS.md for why three). What the
