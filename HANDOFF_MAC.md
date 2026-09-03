@@ -261,6 +261,14 @@ swift poc/overlay/test/armmode_test.swift
 # the icon set, rebuilt from the SVG and recoloured to the wheel's accent
 ./icon/make_icons.sh
 
+# both slices of the overlay, then a zip for someone else's machine
+rustup target add x86_64-apple-darwin
+(cd poc/overlay/src-tauri && cargo build --release --target x86_64-apple-darwin)
+./Mac/build_product.sh && ./Mac/package.sh
+
+# what came back from their machine
+./Mac/report.sh
+
 # the gesture, in a host that is not AE
 ./poc/native/mac/build_gesture_test.sh
 poc/overlay/src-tauri/target/release/pieFX_gesture_test
@@ -288,6 +296,8 @@ icon/make_icons.sh          the icon set, recoloured to hexdraw.js's accent
 icon/render_svg.swift       SVG -> transparent PNG (qlmanage flattens; see MAC_RESULTS)
 Mac/build_product.sh        builds + installs the PRODUCT plug-in (not Xcode)
 Mac/sign_product.sh         sign + notarize + staple — WRITTEN BUT NEVER RUN
+Mac/package.sh              a zip somebody else can install, + the report script
+Mac/report.sh               diagnostics from a machine that is not this one
 Mac/overlay_probe.swift     window levels, bounds, z-order, focus
 Mac/span_test.swift         can one window span two displays (no)
 Mac/overlay_drive.sh        drive the overlay by hand, no plug-in
