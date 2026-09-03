@@ -565,30 +565,128 @@ What is left is smaller and mostly unmeasured rather than unbuilt.
 
 ## Next steps for a fresh session
 
-Roughly in order. Both are measurements that only a running After Effects can
-make; the code they are measuring is written and passes the harness.
+The product is feature-complete and shipping on Windows: every executor kind,
+the settings window and the effects/presets search have been watched working in
+a real After Effects, and there is an installer a stranger can run. What follows
+is the list between that and handing it to someone who is not the author.
 
-1. **Watch the new `distance` arming rule in After Effects.** It is measured
-   against the state machine and passes the harness, but the thing it is meant
-   to fix is a feeling in the hand, and only a real flick can report on that.
-   Two questions in particular: does the one-flick category default still land
-   where you expect (releasing ON the hexagon), and does pushing past it to a
-   child feel like one motion or like two? An existing
-   `%APPDATA%\pieFX\settings.json` still says whatever it was saved with, so
-   a machine that has used the settings window is still on `center` until the
-   dropdown is changed or the defaults are reset.
+### 1. Make `copy-frame` asynchronous — the only user-facing defect left
 
-`Save Frame as PNG` no longer goes through the Render Queue: it is a snippet
-that opens a save dialog and calls `saveFrameToPng` at 1:1, restoring the comp's
-resolutionFactor afterwards. Unwatched in AE.
+`CopyFrameToClipboard` calls `WaitForFrameFile(path, 15000)` at
+`poc/native/pieFX.cpp:2546`, and that function is a `Sleep(40)` poll loop
+running **on AE's UI thread**. When it is reached, After Effects is frozen for
+as long as it takes — up to fifteen seconds — with no cursor, no redraw and no
+indication of why.
 
-2. **Watch the Effects search in AE**, in the order its section above gives:
-   the catalogue file first (it is the piece everything else stands on), then
-   the window's z-order, then the apply. Nothing else in the feature can be
-   judged until the walk has been seen producing a file.
+**It has not happened to anyone.** The wait only runs long when AE never
+finishes writing the frame, and in every observed run the PNG has completed in
+well under a second. That is exactly why it should be fixed now: the first time
+it fires it will be on someone else's machine, on a frame bigger than anything
+tested here, and what they will report is "pieFX hung After Effects" — which is
+both true and unanswerable after the fact.
 
-After that: the macOS port. `ARCHITECTURE.md` is still accurate; the Mac side
-needs the two-pipe transport and the `ready` handshake replicated.
+Note that the budget went from 4s to 15s deliberately and correctly, when the
+completion check became exact (`PngIsComplete` reads the IEND chunk instead of
+guessing from a stable file size — see the comment above it; the guess produced
+a 6656x2270 frame that pasted as 6656x804). The fix is not to shorten the wait
+back. A shorter wait re-introduces truncated pastes on large frames, which is a
+silent wrong answer and worse than a visible freeze.
+
+**The shape of the fix, and the machinery is already there.** `IdleHook` runs on
+AE's UI thread, is called repeatedly, and already drains the action queue. Turn
+the blocking wait into one poll per idle:
+
+- `CopyFrameToClipboard` runs the script, parses the frame/comp/path it returns,
+  stashes them plus a deadline in a small `S_frame_pending` struct, and
+  **returns immediately**. AE stays live.
+- `IdleHook` gains one block: if a copy is pending, call `PngIsComplete` **once**
+  (it is a stat plus two short reads — no sleep, safe to do every idle). On TRUE,
+  do the WIC decode and the three clipboard formats exactly as today, then clear
+  the pending state. Past the deadline, toast the failure and clear it.
+- One press cancels any previous pending copy, so a user who fires it twice
+  gets the second frame rather than a race.
+
+Two things to get right. **Idle is starved during a modal loop**, so a pending
+copy can be delayed by a menu the user opens — strictly better than blocking,
+but it means the toast should fire from the deadline check rather than from a
+timer. And the clipboard write must stay on the UI thread, which it does: the
+whole point is that it moves from one UI-thread call site to another.
+
+Nothing about this is platform-specific — `WaitForFrameFile` is already shared —
+so it fixes both platforms at once, and `poc/pipe_test.ps1` cannot see any of it
+because the harness ends at the pipe. It needs a real AE to confirm, with a
+large comp, and the log line `copy-frame: complete PNG after Nms` is what says
+it worked.
+
+### 2. Two five-minute items that get worse if they wait
+
+- **A LICENSE file.** The README has said "license not yet chosen" since Phase
+  0. Until one exists the default is all rights reserved, so "open source, free"
+  is not true yet and nobody can legally fork or contribute.
+- **A version constant.** `poc/native/pieFX.h` has none: `0.1.0` exists only as
+  an argument to `Win/build_installer.ps1`. So a bug report cannot say which
+  build it came from and an upgrade cannot say what it replaced. Put it in the
+  header, have the installer read it rather than be told it, and log it at
+  startup. Retrofitting this after a release is much more annoying than doing it
+  before one.
+
+### 3. Exercise the ported bodies on Windows
+
+The macOS port rewrote several function bodies to be shared, and they have now
+been COMPILED by MSVC (Debug and Release, `/WX`, clean) but not RUN on Windows
+since: `PieFX_ConfigPath`, `PieFX_LegacyToUtf8`, `FrameFileSize`,
+`PngIsComplete`, the `WaitForFrameFile` rewrite, `EmitPreset`, and the
+`DirOpen`/`DirNext`/`DirClose` iterator under `WalkPresetFolder` and
+`WritePresets`.
+
+Two actions reach all of them: **`Comp > Copy to Clipboard`** and **a preset
+search that applies**. If they both work, this item is closed. Step 1 rewrites
+the caller of half that list anyway, so it is cheapest to do them together.
+
+### 4. Distribution, the rest of it
+
+- **Windows signing.** See "Signing" above for the options and the prices. Not a
+  gate for handing a colleague a file; a real one for a public link, because a
+  downloaded unsigned `.exe` gets SmartScreen's full-screen panel where a `.zip`
+  does not. `winget` is the cheap way round it and composes with the installer.
+- **A macOS installer.** Today it is `sudo cp -R`. A `.pkg` has to cope with AE
+  being open, several AE versions side by side, and uninstalling — the same
+  three problems `Win/pieFX.iss` already solves, so read it first.
+- **`Mac/sign_product.sh` has never been run.** There is no certificate in that
+  keychain. Read its header before trusting it.
+
+### 5. Then: the machines nobody has
+
+- **An Intel Mac.** Both binaries are universal; only arm64 has ever run.
+- **An English After Effects.** Every macOS observation is from an es_ES
+  install. That has been an asset — it exposed two defects that were not about
+  localisation at all — but it does leave the English path as the untested one,
+  which is an unusual way round. `findMenuCommandId` follows the UI language and
+  no English name resolves on a localised AE; the ids themselves do not vary by
+  language, which was checked.
+
+### Smaller open questions, carried forward
+
+- **`Master Null`'s plain variant is unreachable.** Under the shipped `distance`
+  arming rule a category default fires only in the four pixels between the dead
+  zone and the arming radius, so a default that must stay reachable has to exist
+  as a child slot too. Every other one in the tree does; this one does not, and
+  the category has two empty slots (SE, NW) waiting for it. Filling a hole moves
+  nothing — but it is the user's menu, so it is the user's call.
+- **`poc/pipe_test.ps1` cannot reach category defaults at all**, for the same
+  reason, so that path has no automated coverage. The cheapest fix is a second
+  overlay started with `--settings <a file pinning armMode>`, which would also
+  be the first exercise of the `--settings <path>` branch. See the harness notes
+  below.
+
+### Still unwatched about the installer
+
+It has been run, it elevated, it installed, and AE loaded the `.aex` out of the
+`Plug-ins\pieFX\` subfolder. Not yet seen: two AE versions ticked at once (this
+machine only has one real install), the uninstaller including its settings.json
+question, the running-AE refusal, an upgrade over an existing install, and
+SmartScreen — every run so far has been from local disk, which carries no
+mark-of-the-web.
 
 **Before handing over any build, run `poc/pipe_test.ps1`.** It drives the real
 overlay binary with no AE involved and has caught every transport bug in this
