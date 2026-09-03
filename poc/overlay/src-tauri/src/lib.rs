@@ -315,15 +315,24 @@ fn show_search(app: &tauri::AppHandle) {
         dlog("  search window refocused");
         return;
     }
+    // NO TITLE BAR, unlike the settings window, and the difference is what the
+    // two windows are. Settings is a place you go and stay; this is a palette
+    // that answers one question and leaves. A close button, a minimise button
+    // and a title are three ways to interact with a window whose entire
+    // lifetime is "type, Enter, gone" - and the two dismissals that matter
+    // (Enter, and clicking away) are handled in search.js.
+    //
+    // Out of the taskbar for the same reason: it is not a place you alt-tab
+    // back to, it is summoned.
     match WebviewWindowBuilder::new(app, "search", WebviewUrl::App("search.html".into()))
         .title("pieFX — Apply Effect")
-        .inner_size(560.0, 560.0)
-        .min_inner_size(420.0, 360.0)
-        .resizable(true)
-        .decorations(true)
+        .inner_size(560.0, 460.0)
+        .min_inner_size(420.0, 320.0)
+        .resizable(false)
+        .decorations(false)
         .transparent(false)
         .always_on_top(false)
-        .skip_taskbar(false)
+        .skip_taskbar(true)
         .focused(true)
         .center()
         .build()
@@ -445,6 +454,21 @@ fn effects_path() -> Option<PathBuf> {
             Some(PathBuf::from(base).join("pieFX").join("effects.json"))
         }
     }
+}
+
+// Dismissal, asked for by the window itself: Enter applied something, Escape,
+// or the focus went elsewhere. Done here rather than with the JS window API so
+// there is ONE way a search window goes away, and it is the same call whatever
+// asked for it.
+#[tauri::command]
+async fn hide_search(app: tauri::AppHandle) {
+    let h = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = h.get_webview_window("search") {
+            let _ = w.hide();
+            dlog("  search window hidden");
+        }
+    });
 }
 
 #[tauri::command]
@@ -569,6 +593,7 @@ pub fn run() {
             save_settings,
             open_settings,
             open_search,
+            hide_search,
             load_effects,
             load_recents,
             save_recents,

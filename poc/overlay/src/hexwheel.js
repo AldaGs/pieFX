@@ -271,8 +271,15 @@ function drawAnchorWidget() {
 // the gesture is a press-and-hold. So the panel is not an input: it is the
 // recents list, which is the part of a search that needs no typing, and a
 // release opens the real focused window (search.js) for everything else.
-const W_W = 360;
-const W_H = 232;
+const W_W = 340;
+// The panel is sized to what is IN it, not to a fixed rectangle. With the fake
+// search box gone and a recents list that is empty on a fresh install, a fixed
+// height was mostly dead grey glass sitting over the user's comp.
+const W_PAD = 40; // caption above the rows
+const W_ROW = 30;
+function widgetHeight(rowCount) {
+  return W_PAD + Math.max(1, rowCount) * W_ROW + 14;
+}
 
 // Filled from `recents.json`, which the search window writes. Refreshed on each
 // summon rather than watched: a summon is user-paced, one read is free, and a
@@ -305,29 +312,22 @@ function shortMatch(m) {
 }
 
 function drawSearchWidget() {
+  const rows = RECENTS.length ? RECENTS.map(shortMatch) : ["No recent effects yet"];
+  const h = widgetHeight(rows.length);
   const x = S.cx - W_W / 2;
-  const y = S.cy - W_H / 2;
-  glassPanel(x, y, W_W, W_H, 16);
+  const y = S.cy - h / 2;
+  glassPanel(x, y, W_W, h, 16);
 
-  // The field is a picture of where you are going, not a field: it says what
-  // the release will do. Drawing a caret here would promise typing that cannot
-  // happen.
-  ctx.save();
-  roundRect(x + 14, y + 14, W_W - 28, 34, 9);
-  ctx.fillStyle = "rgba(12,13,16,0.45)";
-  ctx.fill();
-  ctx.strokeStyle = hotPalette(ACCENT).accent;
-  ctx.lineWidth = 1.2;
-  ctx.stroke();
-  ctx.restore();
-
+  // NO SEARCH BOX IS DRAWN HERE. There used to be one, and it was the single
+  // most misleading thing on the wheel: a field with a border invites typing,
+  // and the wheel cannot take a keystroke — the box was a picture of a control
+  // that does not exist. What the panel says instead is what the release will
+  // actually do, in plain text.
   ctx.font = "600 14px system-ui, 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = C.ink;
-  ctx.fillText("Release to search…", x + 26, y + 31);
-
-  const rows = RECENTS.length ? RECENTS.map(shortMatch) : ["No recent effects yet"];
+  ctx.fillStyle = hotPalette(ACCENT).accent;
+  ctx.fillText("Release to search…", x + 22, y + 28);
 
   // Nothing here is highlighted, deliberately. A hot row would say "release
   // fires this", and release opens the window; the rows are what you will find
@@ -336,17 +336,17 @@ function drawSearchWidget() {
   ctx.save();
   ctx.globalAlpha = RECENTS.length ? 0.82 : 0.45;
   rows.forEach((name, i) => {
-    const ry = y + 58 + i * 33;
+    const ry = y + W_PAD - 6 + i * W_ROW;
     ctx.font = "500 13.5px system-ui, 'Segoe UI', sans-serif";
     ctx.fillStyle = C.ink;
-    ctx.fillText(name, x + 26, ry + 15);
+    ctx.fillText(name, x + 22, ry + 15);
   });
   ctx.restore();
 
   ctx.font = "600 13px system-ui, 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
   ctx.fillStyle = C.ink;
-  ctx.fillText("Effects", S.cx, y + W_H + 20);
+  ctx.fillText("Effects", S.cx, y + h + 20);
 }
 
 // --- render ---------------------------------------------------------------

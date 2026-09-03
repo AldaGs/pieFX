@@ -265,10 +265,12 @@ function apply() {
   );
 }
 
+// Hidden, not closed: the next summon should be instant, and rebuilding the
+// window would also mean asking Windows for the foreground again. The window
+// has no title bar and so no close button — Enter, Escape and clicking away
+// are the three ways out, and all three land here.
 function dismiss() {
-  // Hidden, not closed: the next summon should be instant, and rebuilding the
-  // window would also mean asking Windows for the foreground again.
-  if (T && T.window && T.window.getCurrentWindow) T.window.getCurrentWindow().hide();
+  invoke("hide_search").catch(() => {});
 }
 
 // --- wiring ----------------------------------------------------------------
@@ -304,6 +306,7 @@ hiddenEl.addEventListener("change", () => {
 // looks broken.
 function freshen() {
   qEl.value = "";
+  document.dispatchEvent(new Event("piefx-shown"));
   return Promise.all([loadCatalogue(), loadRecents()]).then(() => {
     buildRows();
     render();
@@ -314,6 +317,26 @@ function freshen() {
 
 if (T && T.event) {
   T.event.listen("piefx-search-shown", freshen).catch(() => {});
+}
+
+// Clicking away dismisses it. A window with no title bar that stays up after
+// you have gone back to After Effects is litter on top of the comp, and there
+// is no close button to get rid of it with.
+//
+// The guard matters: `freshen()` refocuses the field, and Windows delivers a
+// focus-lost for the moment BEFORE a newly shown window takes the foreground.
+// Without it the window hides itself on the way in, which looks exactly like a
+// release that never opened it.
+if (T && T.window && T.window.getCurrentWindow) {
+  let shownAt = Date.now();
+  const armAfter = 400;
+  document.addEventListener("piefx-shown", () => (shownAt = Date.now()));
+  T.window
+    .getCurrentWindow()
+    .onFocusChanged(({ payload: focused }) => {
+      if (!focused && Date.now() - shownAt > armAfter) dismiss();
+    })
+    .catch(() => {});
 }
 
 freshen();

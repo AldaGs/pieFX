@@ -218,8 +218,10 @@ backslash-escaping question entirely.
 ## The effect search: two files beside the settings
 
 `builtin` / `effect-search` is the one action kind that never reaches the
-plug-in. It opens a **focused window** in the overlay process, because a search
-field needs a keyboard and nothing in the gesture can take one: the overlay is
+plug-in. It opens a **focused, undecorated window** in the overlay process -
+no title bar, no close or minimise button, not in the taskbar, dismissed by
+Enter, Escape or clicking away - because a search field needs a keyboard and
+nothing in the gesture can take one: the overlay is
 click-through and unfocused, the plug-in hooks `WH_MOUSE` only, and the gesture
 is a press-and-hold. Applying the effect the user picks is an ordinary
 `effect` fire from that window, so nothing new crosses the pipe.

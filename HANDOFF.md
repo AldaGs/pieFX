@@ -292,19 +292,28 @@ typing. That has not changed; it has been designed around.
                assertion was never the count, it was whether the two agree.
 
     wheel      The `search` widget no longer draws a fake query and five
-               hard-coded results. It draws the RECENTS list and "Release to
-               search…", and nothing in it is highlighted, because a hot row
+               hard-coded results, and it no longer draws a SEARCH BOX either:
+               a field with a border invites typing, and the wheel cannot take
+               a keystroke, so the box was a picture of a control that does
+               not exist. It draws "Release to search…" as plain text over the
+               RECENTS list, sized to what is in it, and nothing in it is
+               highlighted, because a hot row
                would promise that releasing fires that row and releasing opens
                a window. Releasing outside the dead zone opens it; the centre
                still cancels, so an aborted gesture never puts a window in
                front of AE.
 
     window     search.html / search.js / search.css — a third window in the
-               overlay process, built and raised exactly like the settings
-               window. Substring filter over display name then match name,
-               prefix matches ranked first, arrows to walk, Enter to apply,
-               Esc to dismiss. Dismissing HIDES it, so the next summon is
-               instant.
+               overlay process, raised exactly like the settings window but
+               with NO TITLE BAR and out of the taskbar: settings is a place
+               you go and stay, this is a palette whose whole lifetime is
+               "type, Enter, gone", and a close button, a minimise button and
+               a title are three ways to interact with that. Substring filter
+               over display name then match name, prefix matches ranked first,
+               arrows to walk. Three ways out and all of them go through one
+               `hide_search` command: Enter (after the effect is applied),
+               Escape, and the focus going anywhere else. Hidden rather than
+               closed, so the next summon is instant.
 
     recents    %APPDATA%\pieFXecents.json, its own file rather than a key in
                settings.json: the settings window writes that file whole, and
