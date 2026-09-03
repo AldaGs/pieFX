@@ -245,6 +245,9 @@ poc/overlay/src-tauri/target/release/pieFX_clipboard_test
 ./poc/native/mac/build_presets_test.sh                     # needs AE INSTALLED, not running
 poc/overlay/src-tauri/target/release/pieFX_presets_test
 
+# the wheel's own settings logic, in JavaScriptCore (no Node in this project)
+swift poc/overlay/test/armmode_test.swift
+
 # the gesture, in a host that is not AE
 ./poc/native/mac/build_gesture_test.sh
 poc/overlay/src-tauri/target/release/pieFX_gesture_test

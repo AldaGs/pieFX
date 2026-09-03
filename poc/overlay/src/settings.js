@@ -15,7 +15,7 @@
 //     action has a TEST-FIRE button that goes down the same pipe the gesture
 //     uses.
 
-import { DEFAULTS, compile, parseSettings, cloneSettings, settingsError } from "./menu.js";
+import { DEFAULTS, compile, parseSettings, cloneSettings, settingsError, ARM_MODES } from "./menu.js";
 import { R, bindDraw, slotPosAt, DEFAULT_ACCENT } from "./hexdraw.js";
 import { sendFire, setInstallDir } from "./actions.js";
 
@@ -582,7 +582,11 @@ el("g_autoarm").addEventListener("change", (e) => {
 function syncGlobals() {
   const g = state.settings.gesture || {};
   el("g_hold").value = g.holdMs === undefined ? 200 : g.holdMs;
-  el("g_armmode").value = g.armMode || "distance";
+  // A file written before "exit" was removed still names it, and an unknown
+  // value would leave the select showing blank and then SAVE that blank. The
+  // coercion lives in parseSettings; this asserts the result rather than
+  // repeating the rule.
+  el("g_armmode").value = ARM_MODES.includes(g.armMode) ? g.armMode : "distance";
   el("g_accent").value = wheelAccent();
   const sc = (state.settings.appearance && state.settings.appearance.scale) || 1;
   el("g_scale").value = sc;

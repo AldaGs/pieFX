@@ -363,7 +363,8 @@ Notes that are load-bearing rather than cosmetic:
 - **A ring may also carry an `action`** — that is its *default*, fired when the
   user flicks to it and releases without drilling in. This is what keeps the
   common case one flick.
-- **`armMode`** is a setting, and the default is now `"distance"`. The three:
+- **`armMode`** is a setting, and the default is `"distance"`. There were
+  three; there are now two.
 
   - **`distance`** — a child is live once the stroke is clear of the **centre
     hexagon** (`ARM_DIST = R`). Once a category is open, the six hexagons on
@@ -378,22 +379,33 @@ Notes that are load-bearing rather than cosmetic:
     under this rule.** The band that would fire it is `DEAD` (49.7px) to
     `ARM_DIST` (54px) — about four pixels — so in practice a flick into a
     category lands on the child in that direction. Defaults still work under
-    `center` and `exit`. Anything that must stay reachable therefore needs to be
+    `center`. Anything that must stay reachable therefore needs to be
     a child slot as well as a default: in the shipped tree that is
     **`Master Null`'s plain variant**, which exists only as the category default
     and so is currently unreachable under `distance`.
   - **`center`** — level 2 stays inert until the cursor passes back through the
     middle. Was the default.
-  - **`exit`** — armed at once, but the child lying in the direction you arrived
-    from stays inert until you leave that sector and return.
 
-  `distance` replaced `center` because **neither of the other two can select the
+  `distance` replaced `center` because **neither of the others can select the
   child that lies in its parent's own direction in one stroke** — the case that
   sent a user back to report `Create > Adjustment Layer` as broken. `center`
-  holds every child inert until the cursor comes back to the middle; `exit`
-  holds that specific child inert on purpose. Distance also leaves the one-flick
-  default intact, because releasing anywhere ON the category hexagon is still
-  inside the radius.
+  holds every child inert until the cursor comes back to the middle. Distance
+  also leaves the one-flick default intact, because releasing anywhere ON the
+  category hexagon is still inside the radius.
+
+  **`exit` was removed.** It armed at once but held the child lying in the
+  direction you arrived from inert until you left that sector and came back —
+  so the category you had just flicked at was the one slot you could not pick,
+  which is the wrong thing to make hardest. In practice it did roughly what
+  `distance` does and did it worse, and it was the only mode that made a
+  hexagon look available and then refuse to fire.
+
+  Removing a settings VALUE is not like removing a control, because files
+  naming it already exist. `parseSettings` coerces an unrecognised `armMode` to
+  the default rather than rejecting the file — a rejection would throw away the
+  user's whole slot tree over one string. Without that coercion the wheel would
+  simply never arm at level 2: every child permanently unselectable, and nothing
+  logged. `poc/overlay/test/armmode_test.swift` pins it.
 
 - **`appearance.scale`** multiplies the whole wheel — hexagons, spacing, the
   anchor grid, the search panel, and every distance the gesture measures.

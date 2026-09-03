@@ -313,6 +313,11 @@ export function settingsError() {
 // with strstr and is unbothered by a BOM, so holdMs and armOnLaunch would be
 // honoured from a file the wheel had thrown away. Two halves of the product
 // disagreeing about whether a file exists is the bug; this is the fix.
+// The arm modes the wheel understands, and the list the settings window builds
+// its dropdown against. One array, so a mode cannot exist in the UI and not in
+// the wheel - which is exactly what removing one by hand would risk.
+export const ARM_MODES = ["distance", "center"];
+
 export function parseSettings(text) {
   lastError = "";
   if (!text) return cloneSettings(DEFAULTS);
@@ -324,6 +329,16 @@ export function parseSettings(text) {
     // Fill in whatever a file written by an older build is missing, rather
     // than treating an incomplete file as a broken one.
     s.gesture = Object.assign(cloneSettings(DEFAULTS.gesture), s.gesture || {});
+    // "exit" - arm on leaving the direction you came from - was removed. It
+    // did roughly what "distance" does and did it worse, and it had a real
+    // cost: arming immediately while blocking the entry hexagon meant the
+    // category you had just flicked at was the one slot you could not pick.
+    //
+    // Coerced rather than rejected, because a settings file naming it is a
+    // file somebody saved and a rejection would throw away their whole slot
+    // tree. Unknown values land here too, which is the same fix for the same
+    // reason.
+    if (!ARM_MODES.includes(s.gesture.armMode)) s.gesture.armMode = DEFAULTS.gesture.armMode;
     s.appearance = Object.assign(cloneSettings(DEFAULTS.appearance), s.appearance || {});
     return s;
   } catch (e) {
