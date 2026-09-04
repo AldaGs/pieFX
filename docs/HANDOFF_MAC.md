@@ -58,7 +58,7 @@ Watched working in AE, or measured by a harness against the real binaries.
 | **the overlay as a bundled `.app`** | `overlay_probe` before and after: level, alpha, bounds and z-order all unchanged; LaunchServices reports `type="UIElement"` |
 | **all four window properties, bundled** | in AE: click-through, no Dock icon, no focus theft — the three a probe cannot reach |
 | **applying a preset from the wheel** | in AE |
-| **an unsigned, QUARANTINED plug-in loads** | in AE, with the download attribute set by hand — so signing is not a gate |
+| **an unsigned, QUARANTINED plug-in loads** | in AE, with the download attribute set by hand — so signing is not a gate. It is NOT friction-free, though: a real download is refused by Gatekeeper until `xattr -dr com.apple.quarantine` clears it. Confirmed in the wild 2026-09-03; see MAC_RESULTS.md |
 | **`holdMs` from settings.json reaches the gesture** | in AE, by feel, and the log states the armed threshold |
 | **the bundle signs and verifies** | ad-hoc, on every build, inside out |
 | **`ag_masterNull.jsx` from a slot** | in AE |

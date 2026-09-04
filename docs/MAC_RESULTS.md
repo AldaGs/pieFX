@@ -1314,6 +1314,26 @@ buys Gatekeeper's approval of the CONTAINER a user downloads — the friction of
 right-click-Open or `xattr -dr com.apple.quarantine` — and nothing about whether
 the plug-in functions.
 
+**CONFIRMED IN THE WILD, 2026-09-03, and it is the friction above — not a new
+finding, but do not let it be summarised away again.** The first real download
+from Gumroad, on the user's own Mac, produced Gatekeeper's refusal: *"No se abrió
+pieFX.plugin — Apple no pudo verificar que no contenga software malicioso"*. Every
+earlier test used a locally BUILT bundle, which never carries the download
+quarantine, so the friction this section names had never actually been felt.
+
+Two things follow, and both belong in anything user-facing:
+
+- **`xattr -dr com.apple.quarantine` on the INSTALLED bundle is the fix**, and it
+  needs `sudo` because the `Plug-ins` folder is root-owned. Run it once per AE
+  version installed into.
+- **Nobody should double-click `pieFX.plugin`.** It is a bundle, not an app; the
+  Finder has nothing to open it with, and that is the dialog people meet first.
+
+The paragraph above was summarised into the packaged READ ME and the product
+landing page as "no Gatekeeper step to work around", which is the one reading it
+does not support: it says AE LOADS a quarantined bundle, and it names the
+friction in the same sentence. Both have been corrected.
+
 That is worth knowing precisely because the machine this port was written on is
 borrowed. `codesign`, `notarytool` and `stapler` are macOS-only: no Mac means no
 signing at all, not merely a harder signing. Had signing been a GATE, it would

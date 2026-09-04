@@ -415,7 +415,10 @@ to package it unless it contains `pieFX (Show/Hide)` and does not contain
 
 On macOS, signing was measured NOT to be a gate: AE ships
 `com.apple.security.cs.disable-library-validation`, and a quarantined plug-in
-loaded fine. **Windows comes out the other way round.** A downloaded unsigned
+loaded fine. Not a gate is not the same as frictionless — a real download IS
+refused by Gatekeeper until `sudo xattr -dr com.apple.quarantine` clears the
+flag, confirmed on a user's Mac 2026-09-03. That is an instruction to write
+down, not a certificate to buy. **Windows comes out the other way round.** A downloaded unsigned
 `.exe` gets SmartScreen's full-screen "Windows protected your PC" panel with the
 Run button hidden behind "More info" — and a plain `.zip` of the same files does
 not. So an unsigned installer trades "copy three things into a folder" for

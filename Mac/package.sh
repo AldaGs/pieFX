@@ -50,9 +50,16 @@ A cursor-anchored radial menu for After Effects. Free, MIT licensed.
 Source and full documentation: github.com/AldaGs/pieFX
 
 This build is universal — Apple Silicon and Intel. It is NOT signed by a
-developer certificate, and that is expected: pieFX is free and does not earn
-one. After Effects allows unsigned plug-ins, and a quarantined copy has been
-tested and loads normally, so there is no Gatekeeper step to work around.
+developer certificate: pieFX is free and does not earn one.
+
+Because it arrives as a download, macOS attaches a quarantine flag to it, and
+Gatekeeper will refuse to open the bundle — "Apple could not verify pieFX.plugin
+is free of malware". That is Gatekeeper judging the DOWNLOAD, not After Effects
+judging the plug-in. Step 3 below clears the flag and is the whole fix.
+
+Do NOT double-click pieFX.plugin. It is a plug-in bundle, not an application;
+the Finder has nothing to open it with, and that is the dialog most people hit
+first.
 
 
 INSTALL
@@ -69,7 +76,20 @@ INSTALL
 
    If you run several versions of After Effects, copy it into each one.
 
-3. Start After Effects. `pieFX (Show/Hide)` appears in the Window menu.
+3. Clear the download quarantine flag. Open Terminal and run, with the same
+   <year> you used above:
+
+     sudo xattr -dr com.apple.quarantine "/Applications/Adobe After Effects <year>/Plug-ins/pieFX.plugin"
+
+   It asks for your password and prints nothing when it works. Run it once per
+   After Effects version you copied into.
+
+   Prefer not to use Terminal? Open System Settings > Privacy & Security,
+   scroll to Security, and use "Open Anyway" if pieFX is listed there. The
+   command is the reliable route; the button is not always offered for
+   plug-in bundles.
+
+4. Start After Effects. `pieFX (Show/Hide)` appears in the Window menu.
    It arms itself on launch, so there is usually nothing to click.
 
 
