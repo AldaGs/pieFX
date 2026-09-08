@@ -784,6 +784,25 @@ fn overlay_dir() -> String {
     d
 }
 
+// The virtual desktop as (left, top, right, bottom) in physical px. Deliberately
+// NOT derived from Tauri's monitor list: see the call site.
+#[cfg(not(target_os = "macos"))]
+fn virtual_screen() -> (i32, i32, i32, i32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
+    };
+    let (x, y, w, h) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
+    (x, y, x + w, y + h)
+}
+
 #[tauri::command]
 fn overlay_origin(state: tauri::State<Origin>) -> (i32, i32, bool) {
     let o = *state.0.lock().unwrap();
@@ -1394,28 +1413,59 @@ pub fn run() {
                 }
             }
 
-            // Windows: span the union of all monitors so a summon on ANY
+            // Windows: span the whole virtual desktop so a summon on ANY
             // display is inside the canvas. Physical px, which IS one coherent
             // space there.
             #[cfg(not(target_os = "macos"))]
             {
-                let (mut minx, mut miny, mut maxx, mut maxy) =
-                    (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-                if let Ok(monitors) = win.available_monitors() {
-                    for m in &monitors {
-                        let p = m.position();
-                        let s = m.size();
-                        minx = minx.min(p.x);
-                        miny = miny.min(p.y);
-                        maxx = maxx.max(p.x + s.width as i32);
-                        maxy = maxy.max(p.y + s.height as i32);
-                    }
+                // From Win32, not from available_monitors(). Tauri reported a
+                // ROTATED display at its UNROTATED size — a portrait secondary
+                // sitting at (-1080, 0) 1080x1920 came back as (-1920, 0)
+                // 1920x1080 — and the union built from that put the canvas
+                // origin 840px left of the real desktop edge. The window still
+                // landed on the true edge, so every summon on that monitor was
+                // mapped 840px right of the cursor and drew on the PRIMARY.
+                // SM_*VIRTUALSCREEN is the compositor's own rect and knows
+                // about rotation.
+                let (minx, miny, maxx, maxy) = virtual_screen();
+                for (i, m) in win.available_monitors().unwrap_or_default().iter().enumerate() {
+                    let p = m.position();
+                    let s = m.size();
+                    dlog(&format!("  monitor {} (physical): ({}, {}) {}x{} scale={}",
+                                  i, p.x, p.y, s.width, s.height, m.scale_factor()));
                 }
-                if minx != i32::MAX {
+                if maxx > minx && maxy > miny {
+                    dlog(&format!("  virtual screen: ({}, {}) {}x{}",
+                                  minx, miny, maxx - minx, maxy - miny));
                     let _ = win.set_position(PhysicalPosition::new(minx, miny));
                     let _ = win.set_size(PhysicalSize::new((maxx - minx) as u32,
                                                            (maxy - miny) as u32));
-                    *app.state::<Origin>().0.lock().unwrap() = (minx, miny);
+
+                    // The origin is where the window IS, not where it was asked
+                    // to go. Windows can refuse or clamp either call — a DPI
+                    // change on the way, a size past what the compositor will
+                    // allow — and the frontend maps screen px to window-local
+                    // px by subtracting this. An origin off by even one pixel
+                    // from the real frame draws the wheel in the wrong place;
+                    // off by a monitor's width, it draws it on the wrong
+                    // monitor, which is exactly what a rotated second display
+                    // produced.
+                    let (ox, oy) = match win.outer_position() {
+                        Ok(p) => (p.x, p.y),
+                        Err(e) => {
+                            dlog(&format!("  outer_position failed ({});                                            using the requested origin", e));
+                            (minx, miny)
+                        }
+                    };
+                    if let Ok(sz) = win.inner_size() {
+                        dlog(&format!("  window actual: ({}, {}) {}x{}",
+                                      ox, oy, sz.width, sz.height));
+                    }
+                    if (ox, oy) != (minx, miny) {
+                        dlog(&format!("  MOVED by the OS: asked ({}, {}), got ({}, {})",
+                                      minx, miny, ox, oy));
+                    }
+                    *app.state::<Origin>().0.lock().unwrap() = (ox, oy);
                 }
             }
 

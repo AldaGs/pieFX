@@ -35,3 +35,12 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+
+# The virtual-desktop rect, read straight from Win32 (GetSystemMetrics). Tauri's
+# available_monitors() reported a ROTATED display at its unrotated width — a
+# portrait secondary at (-1080, 0) 1080x1920 came back as (-1920, 0) 1920x1080 —
+# so the union built from it was 840px wide of the truth and the overlay mapped
+# every summon onto the wrong monitor. SM_*VIRTUALSCREEN is rotation-aware and
+# is the same rect the compositor itself uses.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
