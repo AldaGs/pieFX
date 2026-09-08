@@ -177,6 +177,13 @@ input:focus, select:focus, textarea:focus {
 .row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .rule { height: 1px; background: var(--line); margin: 16px 0; }
 
+/* The field and its Browse button. The input takes the slack so a long
+   absolute path stays readable, and the button never wraps under it - a
+   Browse that jumps to its own line reads as belonging to the next field. */
+.pathrow { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.pathrow input { flex: 1 1 auto; min-width: 0; margin-top: 0; }
+.pathrow button { flex: 0 0 auto; }
+
 .colourrow { display: flex; align-items: center; gap: 10px; margin-top: 5px; }
 input[type="color"] {
   width: 46px;

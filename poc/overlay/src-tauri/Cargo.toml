@@ -34,6 +34,15 @@ tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The system file picker, used ONLY from Rust (see pick_open_path). A path
+# typed by hand is a path with a typo in it, and the two fields that take one -
+# a .jsx script and a .ffx preset - are exactly the ones whose failure mode is
+# a silent no-op at flick time rather than an error in the settings window.
+#
+# The frontend never calls the plugin directly, so no capability lists it: the
+# dialog opens behind our own #[tauri::command], which is how every other
+# privileged thing in this file already works.
+tauri-plugin-dialog = "2"
 
 
 # The virtual-desktop rect, read straight from Win32 (GetSystemMetrics). Tauri's

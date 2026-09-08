@@ -18,6 +18,8 @@
 import { DEFAULTS, compile, parseSettings, cloneSettings, settingsError, ARM_MODES,
          HOLD_MS_MIN, HOLD_MS_MAX, clampHoldMs } from "./menu.js";
 import { R, bindDraw, slotPosAt, DEFAULT_ACCENT } from "./hexdraw.js";
+import { packSettings, packSlot, serialise as packJson, shareFileName, unpack,
+         isCategory } from "./share.js";
 import { sendFire, setInstallDir } from "./actions.js";
 
 const T = window.__TAURI__;
@@ -346,6 +348,13 @@ function syncInspector() {
   el("f_needs_global").value = (a.needs && a.needs.global) || "";
   el("f_needs_file").value = (a.needs && a.needs.file) || "";
   el("f_path").value = a.path || "";
+  // ONE path field, moved to whichever kind is showing it. `script-file` and
+  // `preset` are the same question - where on disk is it - and duplicating the
+  // input would mean two elements, two bindings and one of them going stale.
+  // Before this, `preset` had no markup at all and the field it needed was
+  // inside a hidden div, so a preset binding could only be typed into the JSON.
+  if (kind === "preset") el("k_preset").insertBefore(el("pathfield"), el("k_preset").firstChild);
+  else if (kind === "script-file") el("k_script-file").insertBefore(el("pathfield"), el("k_script-file").firstChild);
   el("f_match").value = a.matchName || "";
   el("f_builtin").value = kind === "builtin" ? a.name || "anchor-grid" : "anchor-grid";
   el("f_cell").value = a.cell === undefined ? "" : a.cell;
@@ -367,6 +376,11 @@ function syncInspector() {
   el("ringnote").hidden = !isRing;
   el("clear").disabled = !slot;
   el("testfire").disabled = !(slot && slot.action);
+  // Nothing to export from a hole. Import is always live on a selected slot:
+  // filling a hole from a file is the main way a shared button arrives.
+  el("export").disabled = !slot;
+  el("shareresult").textContent = "";
+  el("shareresult").className = "testresult";
 }
 
 // Every edit writes straight into the settings object and redraws. There is no
@@ -550,6 +564,185 @@ el("testfire").addEventListener("click", () => {
       out.textContent = "failed: " + e;
     }
   );
+});
+
+// --- browse, export, import ----------------------------------------------
+//
+// Every one of these goes through a #[tauri::command] rather than a plugin
+// permission, so the browser preview has exactly one thing to check: is there
+// a T at all. Without one the buttons say so instead of failing silently.
+
+// The inspector reports into a .testresult span and the header reports into
+// the footer's one line of status. Both are "say this, and say whether it went
+// well", so the file-picking helpers below take a reporter rather than an
+// element and neither one has to know which is which.
+function spanReporter(id) {
+  return (ok, msg) => {
+    const e = el(id);
+    e.className = "testresult" + (ok === null ? "" : ok ? " ok" : " bad");
+    e.textContent = msg;
+  };
+}
+const whereReporter = (ok, msg) => {
+  el("where").textContent = msg;
+};
+
+// The kinds the Rust side filters on. A .ffx offered in the script field is
+// how a hexagon ends up bound to a file After Effects will not run.
+function pickKind() {
+  return kindOf(selected()) === "preset" ? "preset" : "script";
+}
+
+el("f_path_browse").addEventListener("click", () => {
+  const say = spanReporter("testresult");
+  if (!T) {
+    say(false, "preview — no file system here");
+    return;
+  }
+  T.core.invoke("pick_open_path", { kind: pickKind(), start: el("f_path").value || "" }).then(
+    (path) => {
+      // Cancelled. Not a failure, and not worth a line of red saying so.
+      if (!path) return;
+      // `edit` writes into the slot and then re-syncs the inspector, so the
+      // field shows the chosen path. This is the one edit that does NOT
+      // originate from the field itself.
+      edit((sl) => {
+        if (sl.action) sl.action.path = path;
+      });
+    },
+    (e) => say(false, "could not open the picker: " + e)
+  );
+});
+
+function saveShare(obj, name, say, done) {
+  T.core.invoke("pick_save_path", { kind: "config", suggested: name }).then(
+    (path) => {
+      if (!path) return;
+      T.core.invoke("write_share_file", { path, text: packJson(obj) }).then(
+        () => say(true, done + " → " + path),
+        (e) => say(false, "could not write it: " + e)
+      );
+    },
+    (e) => say(false, "could not open the picker: " + e)
+  );
+}
+
+// `then` receives the unpacked file. Every failure lands in `out` worded as
+// something to do about it, because an import that fails quietly leaves the
+// user believing a binding arrived.
+function openShare(say, then) {
+  T.core.invoke("pick_open_path", { kind: "config", start: "" }).then(
+    (path) => {
+      if (!path) return;
+      T.core.invoke("read_share_file", { path }).then(
+        (text) => {
+          let got;
+          try {
+            got = unpack(text);
+          } catch (e) {
+            say(false, "cannot use that file: " + ((e && e.message) || e));
+            return;
+          }
+          then(got, path);
+        },
+        (e) => say(false, "could not read it: " + e)
+      );
+    },
+    (e) => say(false, "could not open the picker: " + e)
+  );
+}
+
+el("export").addEventListener("click", () => {
+  const slot = selected();
+  const say = spanReporter("shareresult");
+  if (!slot) return;
+  if (!T) {
+    say(false, "preview — no file system here");
+    return;
+  }
+  const obj = packSlot(slot);
+  saveShare(obj, shareFileName(obj.kind, slot.label), say, "exported");
+});
+
+el("import").addEventListener("click", () => {
+  const say = spanReporter("shareresult");
+  if (state.sel < 0) return;
+  if (!T) {
+    say(false, "preview — no file system here");
+    return;
+  }
+  openShare(say, (got) => {
+    if (got.type !== "slot") {
+      // Refused by NAME rather than quietly restoring the whole wheel from the
+      // inspector. A backup dropped into one hexagon would replace everything,
+      // which is the single most surprising thing this feature could do.
+      say(false, "that is a whole backup — use Restore… at the top");
+      return;
+    }
+    // Depth is capped at 2. A category can only land in the top ring, and
+    // saying so beats flattening it and losing five bindings.
+    if (got.category && state.path.length > 0) {
+      say(false, "that is a category — go back to the wheel to import it");
+      return;
+    }
+    const slots = ring();
+    const had = slots[state.sel];
+    if (had) {
+      const what = isCategory(had)
+        ? `"${had.label}" and the ${had.slots.filter(Boolean).length} items in it`
+        : `"${had.label}"`;
+      if (!confirm(`Replace ${what} with "${got.slot.label}"?`)) return;
+    }
+    // The position is NOT taken from the file. Slots are positional, and a
+    // shared button that moved itself to wherever the sender kept it would
+    // rearrange a wheel the recipient's hand already knows.
+    slots[state.sel] = got.slot;
+    syncInspector();
+    syncCrumbs();
+    say(true, `imported "${got.slot.label}" — Save to keep it`);
+  });
+});
+
+// --- backup and restore ---------------------------------------------------
+
+el("backup").addEventListener("click", () => {
+  if (!T) {
+    whereReporter(false, "preview — nothing to back up");
+    return;
+  }
+  // What is ON SCREEN, unsaved edits included. Backing up the file on disk
+  // instead would hand someone a copy of a wheel they can see they are not
+  // looking at.
+  const note = dirty() ? "backed up, including your unsaved changes" : "backed up";
+  saveShare(packSettings(state.settings), shareFileName("settings"), whereReporter, note);
+});
+
+el("restore").addEventListener("click", () => {
+  if (!T) {
+    whereReporter(false, "preview — nothing to restore into");
+    return;
+  }
+  if (dirty() && !confirm("Restoring replaces the whole wheel. Discard your unsaved changes?")) {
+    return;
+  }
+  // A restore is loaded as a PENDING change: the wheel on the left redraws,
+  // "unsaved changes" lights up, and Save is what commits it. So a restore
+  // from the wrong file costs a Revert rather than the wheel you had.
+  openShare(whereReporter, (got, path) => {
+    if (got.type !== "settings") {
+      whereReporter(false, "that is a single button — select a hexagon and use Import…");
+      return;
+    }
+    state.settings = got.settings;
+    state.settings.wheel.slots = ensure6(state.settings.wheel.slots);
+    state.path = [];
+    state.sel = -1;
+    syncGlobals();
+    syncCrumbs();
+    syncInspector();
+    el("dirty").hidden = !dirty();
+    whereReporter(true, "restored from " + path + " — Save to keep it");
+  });
 });
 
 // --- global settings ------------------------------------------------------

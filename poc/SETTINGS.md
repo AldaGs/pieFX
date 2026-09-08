@@ -498,6 +498,75 @@ would move hexagons while the cursor is still travelling to one.
 Global settings sit along the bottom: hold threshold, arm mode, and **arm on
 launch**.
 
+### Browse, rather than type, a path
+
+`script-file` and `preset` are the two bindings that name a file on disk, and a
+typed path is a path with a typo in it. Worse, it is the failure mode with no
+symptom: a wrong `.jsx` fires nothing at flick time and says nothing in the
+settings window, so the hexagon simply looks dead. Both fields now have a
+**Browse…** beside them, filtered to `.jsx`/`.jsxbin` and `.ffx` respectively —
+an `.ffx` chosen in the script field is exactly how a hexagon ends up bound to a
+file After Effects will not run.
+
+It is **one** `#pathfield`, moved between the two kinds' panels by the
+inspector, because both are the same question and two inputs would mean two
+bindings and one of them going stale. Finding that out fixed an older bug on the
+way: `preset` had no markup at all, so its path could only be typed into the
+JSON by hand — and `syncInspector`, which hides every kind's panel by id, was
+reaching for an element that did not exist.
+
+The picker is `tauri-plugin-dialog`, used **only from Rust** behind our own
+`pick_open_path` / `pick_save_path` commands. No capability lists the plugin,
+which is the same shape as everything else privileged in `lib.rs`. Both are
+`async` for the reason `open_search` is: a modal dialog opened on the main
+thread is the wedge this project has already paid for once. A cancelled dialog
+returns `""`, not an error — cancelling is not a failure, and the caller should
+not have to tell the two apart to decide whether to show red text.
+
+### Sharing: backups, and one button at a time
+
+Four buttons, two scopes:
+
+- **Back up… / Restore…** in the header, for the whole configuration.
+- **Export… / Import…** in the inspector, for the selected hexagon — or the
+  whole category, if it is one.
+
+The file is JSON in an envelope (`overlay/src/share.js`):
+
+```json
+{ "piefx": "settings" | "slot", "format": 1, "exported": "…", … }
+```
+
+The envelope earns its place three times over. A `settings.json` and an exported
+button are both objects with a `label` somewhere in them, and telling them apart
+by shape is guesswork that fails on the interesting cases. A file from a newer
+pieFX can be **refused by name** rather than half-imported. And every import
+runs through `sanitise`, which keeps the keys this build knows and drops the
+rest — a share file is untrusted input, and the settings window is the one place
+a bad tree gets adopted without anyone noticing until the next flick.
+
+What the format decides, and why:
+
+- **Globals travel with a backup and never with a shared button.** Adopting a
+  colleague's snippet should not adopt their hold time, colour and wheel size.
+- **The position is not in the share file.** Import replaces *the slot you have
+  selected* and nothing else. A shared button that moved itself to wherever the
+  sender kept it would rearrange a wheel the recipient's hand already knows —
+  which is the same rule "a hole is drawn" exists to protect.
+- **Depth is still capped at 2.** A category dropped into a slot that is already
+  inside one is refused by name; flattening it would silently lose five
+  bindings.
+- **Restore is a pending change, not a write.** It loads into the editor, the
+  wheel redraws, `unsaved changes` lights up, and **Save** commits it. So a
+  restore from the wrong file costs a Revert rather than the wheel you had. A
+  backup is taken from what is **on screen**, unsaved edits included: backing up
+  the file on disk instead would hand someone a copy of a wheel they can see
+  they are not looking at.
+- **A plain `settings.json` restores too.** Refusing one would mean telling
+  users their own settings file is not a pieFX file. It goes through
+  `parseSettings` — the wheel's own parser — so a restored file cannot be one
+  the wheel would then reject.
+
 ### The two settings the plug-in reads for itself
 
 `gesture.holdMs` and `gesture.armOnLaunch` are read by the NATIVE side, from

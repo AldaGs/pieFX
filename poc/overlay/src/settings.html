@@ -11,6 +11,8 @@
       <div class="crumbs" id="crumbs"></div>
       <div class="spacer"></div>
       <span class="dirty" id="dirty" hidden>unsaved changes</span>
+      <button id="backup" class="ghost">Back up…</button>
+      <button id="restore" class="ghost">Restore…</button>
       <button id="revert" class="ghost">Revert</button>
       <button id="reset" class="ghost">Reset to defaults</button>
       <button id="save" class="primary">Save</button>
@@ -108,8 +110,11 @@
           </div>
 
           <div class="kindfields" id="k_script-file" hidden>
-            <label>Path
-              <input id="f_path" type="text" placeholder="scripts/my_script.jsx" />
+            <label id="pathfield">Path
+              <span class="pathrow">
+                <input id="f_path" type="text" placeholder="scripts/my_script.jsx" />
+                <button id="f_path_browse" class="ghost">Browse…</button>
+              </span>
             </label>
             <p class="note">
               Relative paths resolve against pieFX's install folder, so a script
@@ -125,6 +130,18 @@
               <input id="f_match" type="text" placeholder="ADBE Gaussian Blur 2" />
             </label>
             <p class="note">Applied to every selected layer by match name.</p>
+          </div>
+
+          <!-- The same #f_path field as script-file, moved here by the
+               inspector when the kind is `preset`. One field, because both
+               kinds are a path to something on disk and a user with one in the
+               clipboard should be able to paste it into either. -->
+          <div class="kindfields" id="k_preset" hidden>
+            <p class="note">
+              Pick the .ffx itself. A preset is applied to every selected layer,
+              and unlike an effect it cannot be found by name — After Effects has
+              no way to enumerate presets, so the path is the binding.
+            </p>
           </div>
 
           <div class="kindfields" id="k_builtin" hidden>
@@ -159,6 +176,19 @@
               <span class="using" id="accentusing"></span>
             </span>
           </label>
+
+          <div class="rule"></div>
+
+          <div class="row">
+            <button id="export" class="ghost">Export…</button>
+            <button id="import" class="ghost">Import…</button>
+            <span id="shareresult" class="testresult"></span>
+          </div>
+          <p class="note" id="sharenote">
+            Export writes this hexagon — or the whole category, if it is one — to
+            a file you can send someone. Import replaces <b>this position only</b>,
+            so what lands is where you put it.
+          </p>
 
           <div class="rule"></div>
 

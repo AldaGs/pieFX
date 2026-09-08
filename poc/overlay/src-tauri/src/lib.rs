@@ -1226,6 +1226,110 @@ async fn hide_search(app: tauri::AppHandle) {
     });
 }
 
+// --- the file picker, and the share files it opens ------------------------
+//
+// Four commands, all ASYNC and all for the same reason `open_search` is: the
+// rfd dialog behind tauri-plugin-dialog wants to run its own modal loop, and
+// `blocking_pick_file` on the main thread is the wedge this file has already
+// paid for once. An async command runs off the main thread, so the dialog gets
+// its loop and the event loop keeps its turn.
+//
+// The filters are named rather than generic because the pickers exist to stop
+// the wrong file being chosen: an .ffx in the script field binds a hexagon that
+// does nothing at flick time and says nothing in the settings window, which is
+// the failure this feature is here to remove.
+
+// macOS only, and it is the same bug `raise()` documents one more time. The
+// overlay is an ACCESSORY app (mac_accessory_app), which is deliberately not
+// activatable by the ordinary route — so a file panel it opens can come up
+// behind After Effects, where it is indistinguishable from a Browse button
+// that does nothing. Windows needs none of this: the panel is modal to a
+// window that already went through force_foreground.
+//
+// Queued rather than called, because NSApplication is main-thread-only and
+// these commands run OFF the main thread by design. Ordering still holds:
+// tauri-plugin-dialog dispatches the panel to that same main thread, so the
+// activation queued here lands first.
+#[cfg(target_os = "macos")]
+fn activate_for_dialog(app: &tauri::AppHandle) {
+    let _ = app.run_on_main_thread(mac_activate);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_for_dialog(_app: &tauri::AppHandle) {}
+
+fn dialog_filters(kind: &str) -> Vec<(&'static str, Vec<&'static str>)> {
+    match kind {
+        "script" => vec![("ExtendScript", vec!["jsx", "jsxbin"])],
+        "preset" => vec![("Animation preset", vec!["ffx"])],
+        // A pieFX share file is ordinary JSON, and a user who renamed one to
+        // .json should still be able to open it.
+        _ => vec![("pieFX share file", vec!["piefx", "json"])],
+    }
+}
+
+// Returns the chosen path, or "" when the user cancelled. "" rather than an
+// error: cancelling a picker is not a failure, and the caller should not have
+// to tell one apart from a real one to decide whether to show red text.
+#[tauri::command]
+async fn pick_open_path(app: tauri::AppHandle, kind: String, start: String) -> String {
+    use tauri_plugin_dialog::DialogExt;
+    activate_for_dialog(&app);
+    let mut d = app.dialog().file();
+    for (name, exts) in dialog_filters(&kind) {
+        d = d.add_filter(name, &exts);
+    }
+    // Reopening where the last one was chosen, when that is still a directory.
+    // The alternative is that every browse starts at the home folder, which for
+    // a user fixing one path in a wheel of twenty is twenty walks back.
+    if let Some(dir) = std::path::Path::new(&start).parent() {
+        if dir.is_dir() {
+            d = d.set_directory(dir);
+        }
+    }
+    match d.blocking_pick_file() {
+        Some(p) => p.to_string(),
+        None => String::new(),
+    }
+}
+
+// Same contract: "" means cancelled.
+#[tauri::command]
+async fn pick_save_path(app: tauri::AppHandle, kind: String, suggested: String) -> String {
+    use tauri_plugin_dialog::DialogExt;
+    activate_for_dialog(&app);
+    let mut d = app.dialog().file().set_file_name(&suggested);
+    for (name, exts) in dialog_filters(&kind) {
+        d = d.add_filter(name, &exts);
+    }
+    // Beside the settings file by default. A backup whose default home is the
+    // same folder as the thing it backs up is one the user can find again.
+    if let Some(dir) = piefx_dir() {
+        if dir.is_dir() {
+            d = d.set_directory(dir);
+        }
+    }
+    match d.blocking_save_file() {
+        Some(p) => p.to_string(),
+        None => String::new(),
+    }
+}
+
+// Read/write for the share files ONLY — the settings file itself still goes
+// through load_settings/save_settings, which know where it lives and broadcast
+// after writing. These two take a path the USER just chose in a dialog, which
+// is the only reason handing the frontend an arbitrary path is not a hole:
+// nothing here can name a file the user did not point at.
+#[tauri::command]
+async fn read_share_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path, e))
+}
+
+#[tauri::command]
+async fn write_share_file(path: String, text: String) -> Result<(), String> {
+    std::fs::write(&path, text).map_err(|e| format!("{}: {}", path, e))
+}
+
 #[tauri::command]
 fn load_effects() -> String {
     let s = effects_path()
@@ -1364,6 +1468,7 @@ fn pipe_client(app: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Origin(Mutex::new((0, 0))))
         .manage(Pipe(Mutex::new(None)))
         .manage(Ready(Mutex::new(false)))
@@ -1381,6 +1486,10 @@ pub fn run() {
             load_effects,
             load_recents,
             save_recents,
+            pick_open_path,
+            pick_save_path,
+            read_share_file,
+            write_share_file,
             quit_overlay
         ])
         .setup(|app| {
