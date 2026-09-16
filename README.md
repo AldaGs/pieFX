@@ -67,6 +67,57 @@ gesture ends. Type a letter and they are there. They also rank below any effect
 or preset that matched, because this is an effect search that happens to know the
 menu.
 
+## Un-precompose, and a Duplicate that copies what it nests
+
+Two verbs AE does not have, on the wheel by default. Both are ExtendScript that
+ships in `scripts/ag_compTools.jsx` and loads on first use, so a slot of your own
+can call them too.
+
+**Un-precompose** (`Layer` ring, next to Pre-comp) takes the selected precomp
+layer apart: the layers inside it come up into this comp, in order, in their
+place. What makes it a real inverse rather than a paste is the transform. A layer
+inside the precomp has coordinates in the *inner* comp's space, and its position
+out here is `P + R*S*(p - A)` — the precomp layer's position, rotation, scale and
+anchor point. That is also exactly what AE computes for a layer **parented** to
+something with that transform. So the extracted layers are parented to a null
+carrying the precomp layer's transform, keyframes and all, and their own values
+are never touched. Animation stays animated; nothing is baked.
+
+When the mapping is the identity — the ordinary "pre-comp, then change your
+mind" — there is no null at all. Parenting inside the precomp is restored by
+index, timing is shifted by the precomp layer's start and clipped to its bar, and
+a layer that was scrolled off the end of the precomp does not become visible out
+here.
+
+It **asks before it runs**, because there is exactly one decision in it that
+cannot be guessed: a precomp containing precomps either stops at the first level
+or goes all the way down, and both are things people mean. The dialog counts the
+nested precomps it found and offers to remove emptied comps from the project.
+Bind `_ct.unPrecompose({deep: true, ask: false})` to a slot if you always mean
+one of them.
+
+What cannot come up is **said out loud** rather than dropped. Effects, masks,
+opacity, a blending mode, a track matte, time remapping and time stretch are
+properties of the precomp *layer* with no counterpart inside it — there is no
+arrangement of extracted layers that reproduces a blur applied to the comp as a
+whole. Each one that applied is named in one alert after the work is committed.
+
+**Duplicate** (`Comp` ring) is not Edit > Duplicate. AE's duplicate leaves the
+copy **sharing** every precomp inside it, so editing a precomp in the "copy"
+edits the original — which is the surprise this removes. The nested comps are
+duplicated too and the copy is re-pointed at them, all the way down. A comp used
+twice inside the original is duplicated once and used twice inside the copy, so
+the sharing that was deliberate survives and the sharing that was an accident of
+duplication does not. The one thing it cannot fix is an expression that names a
+comp by string: those still point at the originals, and it counts them and says
+so.
+
+Both are one undo group each.
+
+Neither has been watched working inside After Effects yet — they are written
+against the scripting DOM and syntax-checked, which is not the same thing as
+proven, and this repo's rule is that the difference gets said.
+
 ## Installing
 
 **Windows.** Download the installer and run it with After Effects closed. It
@@ -111,6 +162,7 @@ approaches that are known **not** to work. Worth reading before changing anythin
     poc/native/           THE PRODUCT plug-in (pieFX.cpp/.h, Win/, mac/)
     poc/overlay/          the Tauri overlay: the wheel, settings, effect search
     poc/scripts/          ExtendScript that ships with pieFX
+                          (ag_masterNull.jsx, ag_compTools.jsx)
     poc/README.md         build + run + verify, by hand
     poc/SETTINGS.md       the action model and the settings file format
 

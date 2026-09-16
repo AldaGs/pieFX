@@ -145,6 +145,18 @@ and the whole variant space of that script is reachable without pieFX knowing
 anything about it. `addMasterNull` already defaults its `mods` argument when
 there is no click behind it, which is precisely the call shape a wheel makes.
 
+`ag_compTools.jsx` is the second shipped script and follows the same rule, on the
+global `_ct`:
+
+    _ct.unPrecompose()                        // asks: deep? remove emptied comps?
+    _ct.unPrecompose({deep: true, ask: false})// no dialog, all the way down
+    _ct.duplicateComp()                       // a copy whose precomps are copies
+    _ct.duplicateComp({deep: false})          // AE's own shallow duplicate
+
+Both are DOM work with no AEGP counterpart — `copyToComp`, `setParentWithJump`,
+`replaceSource` — which is why they are a script rather than a `builtin`, and
+why the wheel's default slots for them are ordinary snippets you can rebind.
+
 **The bootstrap.** "A snippet needs its script loaded first" was true and
 unhelpful: the first Master Null of every session toasted `_mn is undefined` and
 the second worked, which reads as a flaky wheel. So an action may declare what

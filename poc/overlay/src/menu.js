@@ -46,6 +46,12 @@
 //                                the other two exist to avoid.
 const MN = { global: "_mn", file: "scripts/ag_masterNull.jsx" };
 
+// The same declaration for the comp tools — Un-precompose and the deep
+// Duplicate. Both are scripting-DOM work (copyToComp, setParentWithJump,
+// replaceSource) with no AEGP counterpart, so they ship as a script rather
+// than as native built-ins, and load on first use like everything else.
+const CT = { global: "_ct", file: "scripts/ag_compTools.jsx" };
+
 const DEFAULTS = {
   version: 1,
   // armOnLaunch is read by the NATIVE plug-in, not by the overlay: it is the
@@ -208,7 +214,16 @@ const DEFAULTS = {
             label: "Queue to Render",
             action: { kind: "ae-command", name: "Add to Render Queue", id: 2161 },
           },
-          null,
+          {
+            // NOT Edit > Duplicate (2080). That duplicates the comp and leaves
+            // the copy SHARING every precomp inside it, so editing a precomp in
+            // the "copy" edits the original — which is the surprise this slot
+            // exists to remove. The script duplicates the nested comps too and
+            // re-points the copy at them, so a comp used twice inside the tree
+            // is still used twice inside the copy.
+            label: "Duplicate",
+            action: { kind: "script-snippet", code: "_ct.duplicateComp()", needs: CT },
+          },
           null,
         ],
       },
@@ -225,11 +240,18 @@ const DEFAULTS = {
           // no menu id — but findMenuCommandId("Split Layer") returns 2158.
           // The map's names are not to be trusted; AE's own lookup is.
           { label: "Split + Dup", action: { kind: "ae-command", name: "Split Layer", id: 2158 } },
-          // A hole where Save Frame as PNG was: it moved to `Comp`, by the
-          // same argument that kept Comp Settings out of here. It acts on the
-          // comp, and it was the only thing in this ring that survived with
-          // nothing selected — which made `Layer` look live when it was not.
-          null,
+          // Where Save Frame as PNG used to be — it moved to `Comp`, by the
+          // same argument that kept Comp Settings out of here. What sits here
+          // now is Pre-comp's inverse, one slot away from it on purpose.
+          //
+          // It asks before it runs: a precomp containing precomps either stops
+          // at the first level or goes all the way down, and both are things
+          // people mean. Bind `_ct.unPrecompose({deep:true, ask:false})` to a
+          // slot of your own if you always mean one of them.
+          {
+            label: "Un-precompose",
+            action: { kind: "script-snippet", code: "_ct.unPrecompose()", needs: CT },
+          },
           {
             // Resolved, and the capital I is the whole story: "Center in View"
             // returns 0, "Center In View" returns 3819. AE's menu strings are
@@ -366,4 +388,4 @@ export function parseSettings(text) {
   }
 }
 
-export { MN, DEFAULTS, compile };
+export { MN, CT, DEFAULTS, compile };
