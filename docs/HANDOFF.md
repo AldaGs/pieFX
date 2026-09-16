@@ -552,6 +552,61 @@ never been invoked from JS, so nothing had found it. **The harness found this,
 not AE**, and only because the assertion was "the log says a window was built"
 rather than "nothing came down the pipe" — silence was also what the mock did.
 
+### Menu commands in the search, and Shift+Enter
+
+Two additions, made after AE 26.2 shipped **Quick Apply** — Adobe's own
+`Ctrl+Enter` box over effects, presets and menu commands. The comparison is
+worth writing down, because it changes what this window is for: Quick Apply
+searches the same three things, filters by category, and applies to more than
+one selected layer, so the search window no longer wins on WHAT it can reach.
+What it still wins on is HOW it is reached — a right-press at the cursor rather
+than a chord — and what it can be taught that a dialog cannot: parameters,
+stacking, macros. These two are the first and cheapest of those.
+
+    commands   `ae-commands-2025.json`, the map the settings window already
+               reads, is now also a third row kind in the search. It fires
+               through the EXISTING `ae-command` kind, by ID and with NO NAME:
+               the names in that file are internal identifiers, not the display
+               strings `findMenuCommandId` resolves, so sending one would ask AE
+               to resolve a string it has never heard of. Negative ids are
+               skipped — those are effects wearing a command id, and the effect
+               kind applies them properly. The id is ON SCREEN in every command
+               row, because the map is hand-tested, has already been wrong three
+               times (see `actions.js`), and a user who fires the wrong command
+               needs to be able to see why.
+
+               Commands are SEARCHED, never BROWSED. There are 613 in the map
+               against nine effects in the fixture, so listing everything
+               alphabetically opened on "1", "1 Up", "2 Up", "3 D Layer" and
+               buried the effects — and that list is the zero-typing case, what
+               a user sees the instant the gesture ends. They are also ranked
+               strictly BELOW every effect and preset that matched: a score bias
+               was tried first, and the number was arbitrary, while the rule is
+               not. Measured on the fixture, "blur" scored the command `Blur`
+               (#3698) an exact-name match and put it above all three blur
+               effects.
+
+               The real fix, still to do: have the plug-in dump the live menu
+               from the running AE the way `WriteEffectCatalogue()` dumps
+               effects. Then the ids are true for the AE that is actually
+               running, and the per-version map stops being a maintenance debt.
+
+    stacking   Shift+Enter applies and KEEPS THE WINDOW UP with an empty field,
+               so Levels then Curves then Glow is one summon instead of three —
+               three gestures and three trips through the foreground. It does
+               not batch: each fires as it is entered, so each is its own undo,
+               exactly as if the window had been reopened. Holding them to send
+               together is a different feature (a macro) with a different undo
+               story. A counter in the footer says how many, and appears only
+               once one has been applied.
+
+               Recents are re-read between stacked applications, so the list
+               under an empty field is the stack so far, newest first.
+
+A command recent carries its display NAME as well as its id, which no other
+kind needs to: the wheel's recents panel turns an identity into something
+readable on its own, and no amount of trimming makes "2071" a word.
+
 ### What is left
 
 The three questions this list opened with - does the catalogue file appear, does

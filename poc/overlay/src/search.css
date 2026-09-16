@@ -95,10 +95,20 @@ main {
   font-family: ui-monospace, Consolas, monospace;
 }
 
-/* A preset has no match name to show — its identity is a long absolute path,
-   which tells a reader nothing at a glance. The column says what KIND it is
-   instead, because that is the thing they cannot otherwise see, and effects
-   and presets apply in different ways. */
+/* The stack counter: how many have been applied without the window being
+   dismissed. It only appears once Shift+Enter has been used, so it is a reply
+   to something the user just did rather than a permanent zero. */
+.stack {
+  margin-left: 10px;
+  font-size: 11.5px;
+  color: var(--accent-ink);
+}
+
+/* The kind pill. A preset has no match name to show — its identity is a long
+   absolute path, which tells a reader nothing at a glance — and a command is
+   not an effect at all, so both say what KIND they are. An effect wears no
+   pill: it is the default, and a list where every row carries a badge is a
+   list where the badge says nothing. */
 .kind {
   font-size: 10.5px;
   letter-spacing: 0.06em;

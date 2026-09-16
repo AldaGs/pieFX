@@ -13,17 +13,35 @@
 // The catalogue comes from a file the plug-in writes once per session
 // (`%APPDATA%\pieFX\effects.json`). Nothing is enumerated here.
 //
-// It holds TWO kinds of thing, and the window deliberately does not separate
-// them: installed effects, and animation presets (.ffx). AE's own Effects &
-// Presets panel lists both in one tree, so a search that offered only effects
-// would answer half of what the user came to ask. They differ in three ways
-// that the code has to keep straight and the UI mostly should not:
+// It holds THREE kinds of thing, and the window deliberately does not separate
+// them: installed effects, animation presets (.ffx), and AE's own MENU
+// COMMANDS. AE's own Effects & Presets panel lists effects and presets in one
+// tree, so a search that offered only effects would answer half of what the
+// user came to ask; commands are here because AE 26.2's own Quick Apply put
+// them in the same box, and a search that cannot run "Precompose" sends the
+// user to Adobe's dialog for half their day. They differ in ways the code has
+// to keep straight and the UI mostly should not:
 //
-//   identity   an effect is its MATCH NAME, a preset is its PATH
+//   identity   an effect is its MATCH NAME, a preset is its PATH, a command is
+//              its numeric ID
 //   applying   an effect goes through AEGP_ApplyEffect, a preset through the
-//              scripting DOM's layer.applyPreset - two different fire kinds
+//              scripting DOM's layer.applyPreset, a command through
+//              app.executeCommand - three different fire kinds
 //   grouping   an effect's category comes from AE, a preset's is the folder it
-//              was found in, which is the only grouping a .ffx file has
+//              was found in (the only grouping a .ffx file has), and a command
+//              has none, so it is given one
+//
+// COMMANDS COME FROM A FILE, NOT FROM AE, and that is the sharp edge. The
+// settings window already reads `ae-commands-2025.json`, and its comment there
+// is the warning worth repeating: the names in it are INTERNAL IDENTIFIERS,
+// not the display strings `findMenuCommandId` resolves. So a command row
+// cannot be fired by name the way a hand-typed binding can — it fires by id,
+// and the id is a hand-tested constant for AE 2025 that has already been
+// wrong three times (see actions.js). That is why the id is ON SCREEN in the
+// row rather than hidden behind the display name: it is the identity, it is
+// the thing that can be wrong, and a user who fires the wrong command needs to
+// be able to see why. Until the plug-in dumps the live menu from the running
+// AE, this list is a convenience with a known error bar, and the UI says so.
 
 import { sendFire } from "./actions.js";
 
@@ -33,6 +51,7 @@ const listEl = document.getElementById("list");
 const noteEl = document.getElementById("note");
 const countEl = document.getElementById("count");
 const hiddenEl = document.getElementById("showHidden");
+const stackEl = document.getElementById("stack");
 
 const MAX_ROWS = 60;
 const MAX_RECENTS = 8;
@@ -45,6 +64,8 @@ const state = {
   walked: 0,
   claimed: 0,
   presets: 0,
+  commands: 0,
+  applied: 0, // how many have been fired in this one summon - see apply(stay)
 };
 
 // --- the catalogue's three sharp edges -------------------------------------
@@ -74,6 +95,11 @@ function isInternal(e) {
 function usable(e) {
   if (!e || !e.id) return false;
   if (e.t === "preset") return true;
+  // A command is never hidden either. The obsolete/internal judgement is about
+  // AE's effect catalogue; the command map has no equivalent, and what it does
+  // have - entries that may be plain wrong - is not something a checkbox can
+  // sort out.
+  if (e.t === "command") return true;
   return !isObsolete(e) && !isInternal(e);
 }
 
@@ -130,13 +156,73 @@ function loadCatalogue() {
   });
 }
 
+// The command map. Read with `fetch` rather than a Tauri command because it is
+// a file this project SHIPS, next to the HTML, not one the plug-in writes into
+// APPDATA - the settings window reads it exactly this way, and two readers of
+// one shipped file should not need two mechanisms.
+//
+// Two entries are dropped rather than shown:
+//   - negative ids, which are EFFECTS wearing a command id. The effect kind
+//     applies those properly, by match name, and offering the same effect twice
+//     under two fire paths is a way to find out later which one was wrong.
+//   - duplicate ids, which the map does carry.
+// Duplicate NAMES are kept, because the id distinguishes them and the id is on
+// screen. Hiding one of a pair would be guessing which one the user wanted.
+function prettyCommand(raw) {
+  // "NewComposition" -> "New Composition", "RAMPreview" -> "RAM Preview". The
+  // raw identifier stays searchable: someone who knows it should be able to
+  // type it.
+  return String(raw)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .trim();
+}
+
+function loadCommands() {
+  return fetch("ae-commands-2025.json")
+    .then((r) => r.json())
+    .then((map) => {
+      const seen = new Set();
+      const out = [];
+      for (const key of Object.keys(map || {})) {
+        const n = Number(key);
+        if (!Number.isFinite(n) || n < 0) continue;
+        if (seen.has(n)) continue;
+        const raw = map[key];
+        if (!raw) continue;
+        seen.add(n);
+        out.push({
+          t: "command",
+          id: String(n),
+          cmdId: n,
+          name: prettyCommand(raw),
+          match: String(raw),
+          category: "Menu command",
+        });
+      }
+      state.commands = out.length;
+      state.all = state.all.concat(out);
+    })
+    .catch(() => {
+      // No map: the window is still a working effect search, which is what it
+      // was before commands existed. Silence is right here - there is nothing
+      // the user can do about a missing shipped file from this window.
+      state.commands = 0;
+    });
+}
+
 // Recents are {t, id} now that a recent can be a preset. The old file was a
 // bare array of match names, so a string read back is MIGRATED rather than
 // dropped: someone's recents list is not worth resetting over a format change,
 // and a match name is unambiguously an effect.
+const RECENT_KINDS = ["preset", "command"];
+
 function normaliseRecent(r) {
   if (typeof r === "string") return { t: "effect", id: r };
-  if (r && typeof r.id === "string") return { t: r.t === "preset" ? "preset" : "effect", id: r.id };
+  if (r && typeof r.id === "string") {
+    const t = RECENT_KINDS.includes(r.t) ? r.t : "effect";
+    return t === "command" ? { t, id: r.id, name: r.name } : { t, id: r.id };
+  }
   return null;
 }
 
@@ -158,6 +244,14 @@ function loadRecents() {
 
 function rememberUsed(entry) {
   const r = { t: entry.t, id: entry.id };
+  // A command recent carries its NAME as well as its identity, which no other
+  // kind needs to. The wheel's recents panel turns an identity into something
+  // readable on its own ("ADBE Gaussian Blur 2" -> "Gaussian Blur", a preset
+  // path -> its filename) precisely so it does not have to carry a copy of the
+  // catalogue - but a command id is "2071", and no amount of trimming makes
+  // that a word. The name is three characters of file per entry and the only
+  // way the panel can say "Precompose".
+  if (entry.t === "command") r.name = entry.name;
 
   state.recents = [r]
     .concat(state.recents.filter((x) => !(x.t === r.t && x.id === r.id)))
@@ -182,13 +276,38 @@ function score(e, q) {
   if (m.includes(q)) return 3;
   // Category last, and it is here for PRESETS: their names are written for a
   // folder ("Fade In"), so the folder is half of what identifies them, and
-  // typing "transitions" should find the transitions.
+  // typing "transitions" should find the transitions. It also makes "menu
+  // command" list every command, which is the only way to browse them.
   if (c.includes(q)) return 4;
   return -1;
 }
 
 function pool() {
   return hiddenEl.checked ? state.all.filter((e) => e && e.id) : state.all.filter(usable);
+}
+
+// Commands are SEARCHED, never BROWSED, and that is a measured decision rather
+// than a taste. There are 613 of them against nine effects in the fixture and a
+// few hundred in a real install, so an alphabetical list of everything opens on
+// "1", "1 Up", "2 Up", "3 D Layer" - the map's internal identifiers, in a heap,
+// burying the effects the window exists to apply. Worse, the no-query list is
+// the ZERO-TYPING case: it is what a user sees when they release the gesture
+// and have not asked for anything yet, and it should show the things they
+// apply, not a dump of AE's menu bar. Type a letter and the commands are there.
+function browsable(e) {
+  return e.t !== "command";
+}
+
+// A command sorts AFTER every effect and preset that matched, whatever it
+// scored. Not a fudge factor - a rule, because the fudge factor was tried and
+// the number was arbitrary: this is an effect search that also knows the menu,
+// so anything applicable outranks anything runnable. Measured on the fixture,
+// "blur" scored the command `Blur` (#3698) an exact-name 0 and put it above
+// all three blur EFFECTS, which is the wrong answer to the commonest query in
+// the window. Nothing is lost at the bottom of the list: "precompose" and
+// "new comp" match no effect, so their commands are still the first row.
+function rank(e) {
+  return e.t === "command" ? 1 : 0;
 }
 
 function byRecent(r) {
@@ -209,7 +328,7 @@ function buildRows() {
       rows.push({ head: "All effects and presets" });
     }
     pool()
-      .slice()
+      .filter(browsable)
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
       .slice(0, MAX_ROWS)
       .forEach((e) => rows.push(e));
@@ -217,7 +336,12 @@ function buildRows() {
     pool()
       .map((e) => ({ e, s: score(e, q) }))
       .filter((r) => r.s >= 0)
-      .sort((a, b) => a.s - b.s || (a.e.name || "").localeCompare(b.e.name || ""))
+      .sort(
+        (a, b) =>
+          rank(a.e) - rank(b.e) ||
+          a.s - b.s ||
+          (a.e.name || "").localeCompare(b.e.name || "")
+      )
       .slice(0, MAX_ROWS)
       .forEach((r) => rows.push(r.e));
   }
@@ -256,35 +380,61 @@ function render() {
       const n = document.createElement("span");
       n.className = "name";
       n.textContent = r.name || r.id;
-      const m = document.createElement("span");
-      // For an effect the match name IS the identity and worth showing. For a
-      // preset the identity is a long absolute path, which tells the reader
-      // nothing they want at a glance — so the column says what KIND it is
-      // instead, which is the thing they cannot otherwise see.
-      m.className = r.t === "preset" ? "kind" : "match";
-      m.textContent = r.t === "preset" ? "preset" : r.match;
+
+      // What the middle of the row says is per-kind, because what identifies a
+      // row is per-kind:
+      //   effect    the match name, which IS the identity and is worth showing
+      //   preset    a KIND pill - the identity is a long absolute path, which
+      //             tells a reader nothing at a glance
+      //   command   both. The pill because a command is not an effect and
+      //             firing one is not undoable the way applying an effect is,
+      //             and the id because the id is the identity AND the thing
+      //             that can be wrong in a shipped, hand-tested map.
+      const parts = [n];
+      if (r.t !== "effect") {
+        const k = document.createElement("span");
+        k.className = "kind";
+        k.textContent = r.t;
+        parts.push(k);
+      }
+      if (r.t !== "preset") {
+        const m = document.createElement("span");
+        m.className = "match";
+        m.textContent = r.t === "command" ? "#" + r.cmdId : r.match;
+        parts.push(m);
+      }
       const c = document.createElement("span");
       c.className = "cat";
       c.textContent = r.category || "(internal)";
-      li.append(n, m, c);
+      parts.push(c);
+      li.append(...parts);
       li.addEventListener("mousedown", (ev) => {
         ev.preventDefault(); // keep the focus in the field
         state.sel = i;
         render();
-        apply();
+        apply(ev.shiftKey);
       });
     }
     listEl.appendChild(li);
   });
 
   const shown = state.rows.filter((r) => !r.head).length;
+  const effects = state.all.length - state.presets - state.commands;
+  // `pool()` is the searchable set; the browsable set is smaller. Counting
+  // against the searchable one is right: "60 of 623" is a statement about what
+  // typing can reach, which is what the number is for.
   countEl.textContent = state.all.length
-    ? `${shown} of ${pool().length} shown · ${state.all.length - state.presets} effects, ` +
-      `${state.presets} presets` +
+    ? `${shown} of ${pool().length} shown · ${effects} effects, ` +
+      `${state.presets} presets, ${state.commands} commands` +
       (state.walked && state.claimed && state.walked !== state.claimed
         ? ` · AE claimed ${state.claimed}`
         : "")
     : "";
+
+  // The stack counter. Only on screen once something has been applied without
+  // dismissing, because until then it would be a zero explaining nothing.
+  stackEl.hidden = state.applied === 0;
+  stackEl.textContent = state.applied === 1 ? "1 applied" : `${state.applied} applied`;
 
   const sel = listEl.querySelector(".sel");
   if (sel) sel.scrollIntoView({ block: "nearest" });
@@ -309,21 +459,56 @@ function moveSel(d) {
   }
 }
 
-function apply() {
+function actionFor(e) {
+  // Three kinds, three firing paths, and the difference is not cosmetic: an
+  // effect is applied by AEGP from its match name, a preset by the scripting
+  // DOM from its file, a command by app.executeCommand from its id. All three
+  // reuse a path that already exists rather than inventing a fourth.
+  //
+  // The command carries NO name, deliberately. `sendFire` prefers a name when
+  // it has one, because a name can be resolved against the running AE and an
+  // id can only be trusted - but the names in `ae-commands-2025.json` are
+  // internal identifiers rather than the display strings findMenuCommandId
+  // wants, so sending one would ask AE to resolve a string it has never heard
+  // of. The id is all this map can honestly offer.
+  if (e.t === "preset") return { kind: "preset", path: e.id };
+  if (e.t === "command") return { kind: "ae-command", id: e.cmdId };
+  return { kind: "effect", matchName: e.id };
+}
+
+// `stay` is Shift+Enter: fire, and keep the window up with an empty field so
+// the next one can be typed straight away. Levels, then Curves, then Glow is
+// one summon instead of three, and three summons is three gestures and three
+// round trips through the foreground.
+//
+// It does NOT batch: each one is fired as it is entered, so each is its own
+// undo, exactly as if it had been applied and the window reopened. Holding
+// them to send together would be a different feature (a macro) and a different
+// undo story, and guessing at it here would make Shift+Enter mean something
+// the user cannot see.
+function apply(stay) {
   const e = state.rows[state.sel];
   if (!e || e.head) return;
 
-  // Two kinds, two firing paths, and the difference is not cosmetic: an effect
-  // is applied by AEGP from its match name, a preset by the scripting DOM from
-  // its file. Both cross the pipe base64-encoded, and both reuse a path that
-  // already exists rather than inventing a third.
-  const action =
-    e.t === "preset" ? { kind: "preset", path: e.id } : { kind: "effect", matchName: e.id };
-
-  sendFire(action).then(
+  sendFire(actionFor(e)).then(
     () => {
       rememberUsed(e);
-      dismiss();
+      if (!stay) {
+        dismiss();
+        return;
+      }
+      state.applied += 1;
+      // Cleared rather than left selected: the next thing in a stack is a
+      // different thing, and a field still holding "levels" is a field to
+      // empty by hand. Recents have just moved this row to the top, so the
+      // empty list is now the stack so far, newest first, which is the right
+      // thing to be looking at mid-stack.
+      qEl.value = "";
+      loadRecents().then(() => {
+        buildRows();
+        render();
+        qEl.focus();
+      });
     },
     (err) => show("Could not apply: " + err)
   );
@@ -342,6 +527,7 @@ function apply() {
 // hidden, whatever happens to the event.
 function dismiss() {
   qEl.value = "";
+  state.applied = 0;
   buildRows();
   render();
   invoke("hide_search").catch(() => {});
@@ -365,7 +551,7 @@ document.addEventListener("keydown", (ev) => {
     moveSel(-1);
   } else if (ev.key === "Enter") {
     ev.preventDefault();
-    apply();
+    apply(ev.shiftKey);
   }
 });
 
@@ -380,8 +566,15 @@ hiddenEl.addEventListener("change", () => {
 // looks broken.
 function freshen() {
   qEl.value = "";
+  state.applied = 0;
   document.dispatchEvent(new Event("piefx-shown"));
-  return Promise.all([loadCatalogue(), loadRecents()]).then(() => {
+  // loadCommands appends to state.all, so it has to run AFTER loadCatalogue
+  // replaces it - a Promise.all over the two would race and drop the commands
+  // about half the time, which is the kind of bug that only shows up on a slow
+  // disk in front of someone else.
+  return loadCatalogue()
+    .then(() => Promise.all([loadCommands(), loadRecents()]))
+    .then(() => {
     buildRows();
     render();
     qEl.focus();
