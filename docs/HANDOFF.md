@@ -552,6 +552,183 @@ never been invoked from JS, so nothing had found it. **The harness found this,
 not AE**, and only because the assertion was "the log says a window was built"
 rather than "nothing came down the pipe" — silence was also what the mock did.
 
+### Menu commands in the search, and Shift+Enter
+
+Two additions, made after AE 26.2 shipped **Quick Apply** — Adobe's own
+`Ctrl+Enter` box over effects, presets and menu commands. The comparison is
+worth writing down, because it changes what this window is for: Quick Apply
+searches the same three things, filters by category, and applies to more than
+one selected layer, so the search window no longer wins on WHAT it can reach.
+What it still wins on is HOW it is reached — a right-press at the cursor rather
+than a chord — and what it can be taught that a dialog cannot: parameters,
+stacking, macros. These two are the first and cheapest of those.
+
+    commands   `ae-commands-2025.json`, the map the settings window already
+               reads, is now also a third row kind in the search. It fires
+               through the EXISTING `ae-command` kind, by ID and with NO NAME:
+               the names in that file are internal identifiers, not the display
+               strings `findMenuCommandId` resolves, so sending one would ask AE
+               to resolve a string it has never heard of. Negative ids are
+               skipped — those are effects wearing a command id, and the effect
+               kind applies them properly. The id is ON SCREEN in every command
+               row, because the map is hand-tested, has already been wrong three
+               times (see `actions.js`), and a user who fires the wrong command
+               needs to be able to see why.
+
+               Commands are SEARCHED, never BROWSED. There are 613 in the map
+               against nine effects in the fixture, so listing everything
+               alphabetically opened on "1", "1 Up", "2 Up", "3 D Layer" and
+               buried the effects — and that list is the zero-typing case, what
+               a user sees the instant the gesture ends. They are also ranked
+               strictly BELOW every effect and preset that matched: a score bias
+               was tried first, and the number was arbitrary, while the rule is
+               not. Measured on the fixture, "blur" scored the command `Blur`
+               (#3698) an exact-name match and put it above all three blur
+               effects.
+
+               The real fix, still to do: have the plug-in dump the live menu
+               from the running AE the way `WriteEffectCatalogue()` dumps
+               effects. Then the ids are true for the AE that is actually
+               running, and the per-version map stops being a maintenance debt.
+
+    stacking   Shift+Enter applies and KEEPS THE WINDOW UP with an empty field,
+               so Levels then Curves then Glow is one summon instead of three —
+               three gestures and three trips through the foreground. It does
+               not batch: each fires as it is entered, so each is its own undo,
+               exactly as if the window had been reopened. Holding them to send
+               together is a different feature (a macro) with a different undo
+               story. A counter in the footer says how many, and appears only
+               once one has been applied.
+
+               Recents are re-read between stacked applications, so the list
+               under an empty field is the stack so far, newest first.
+
+A command recent carries its display NAME as well as its id, which no other
+kind needs to: the wheel's recents panel turns an identity into something
+readable on its own, and no amount of trimming makes "2071" a word.
+
+### The snippet compiler, and parameters in the query
+
+`src/compile.js` turns a LIST OF STEPS into one ExtendScript snippet. It exists
+because the window could apply an effect, a preset or a command — one action
+each — but not anything that has to happen AS A UNIT. ExtendScript is the only
+one of the three paths that can express a sequence, because it can do all three
+things itself (`addProperty`, `applyPreset`, `app.executeCommand`), so a
+parameterised effect is a one-step sequence, a macro will be an n-step one, and
+both ride the `script-snippet` kind that already exists. No new pipe message and
+no new executor.
+
+    parameters `gaussian 40` sets the first settable numeric property;
+               `gaussian blur=40` matches "blur" as a SUBSTRING of the property
+               name; `levels 0.2 0.8` is positional, in order. Tokens are taken
+               off the END of the query and the first one that is not a number
+               stops the walk, so "3 d layer", "1 up" and "box blur2" are still
+               searches. A parse that matches NOTHING is retried as a plain
+               query before the window says "Nothing matches".
+
+               The lookup is BY NAME AGAINST THE LIVE EFFECT, never by index.
+               `effects.json` carries no property information, so an index would
+               be a guess, and an effect's first property is very often a group
+               or a checkbox. Looking it up in the script also means it works for
+               a third-party plug-in nobody has enumerated. There is no
+               whitelist: every effect with a settable numeric property can take
+               one, which is nearly all of them.
+
+               The row shows what was PARSED ("blur = 40"), not what it resolved
+               to, and that is the honest limit: the window holds no property
+               list, so it cannot promise "Blurriness" for an effect nobody has
+               applied yet. A row that cannot take a parameter at all says
+               "ignores 40" instead, which is the more important half — typing
+               "precompose 40" and watching the 40 vanish silently is the
+               failure the chip exists to prevent.
+
+               Without parameters an effect stays on the AEGP path it has always
+               used. That path is proven live and is one message rather than a
+               kilobyte of generated source, and the commonest thing this window
+               does should not start going through a compiler on the day
+               parameters shipped.
+
+    errors     Thrown, not returned. `RunScript` already toasts whatever a
+               script throws, so a parameter that did not land reports itself in
+               the toast the user already recognises, with no C++ change. The
+               throw happens AFTER `endUndoGroup`, so the effect is still applied
+               and still undoable — a parameter is a refinement, and throwing the
+               effect away because its number did not land is the worse answer.
+
+    generated  ASCII only, `\uXXXX` above 127. The snippet crosses the pipe as
+    source     UTF-8 and is decoded into a char buffer, and what AE's
+               ExecuteScript does with UTF-8 BYTES in source has not been
+               measured here — this project has already paid for one encoding
+               assumption, when the macOS port found preset names stored
+               decomposed. A user preset folder under an accented name is not an
+               edge case. Overflow is caught at 3,900 characters with a message
+               about steps; past that the native side toasts "script too long
+               for one action", which is true but not actionable.
+
+    layers     The compiler loops `comp.selectedLayers`, and every per-layer body
+               is wrapped so that a camera or a light in a mixed selection is
+               NAMED rather than abandoning the layers after it inside a
+               half-run undo group. This does NOT yet mean the window applies to
+               a multi-layer selection: the wheel still refuses to open it with
+               more than one layer selected, and that gate is native. The
+               compiler is simply correct for N layers on the day that gate
+               changes.
+
+### Macros, recorded from a stack
+
+A macro is the n-step case of the sequence the compiler already builds, so
+`compile()` does all the work: one snippet, one undo group, one Ctrl+Z takes the
+whole thing back. `src/macros.js` is only the storage and the shape.
+
+    authoring  RECORDED, not written. Shift+Enter already applies without
+               dismissing, so by the time three things are on the layer the user
+               has performed the macro — naming it is all that is left, and the
+               steps are known to work because they just ran. Ctrl+S names the
+               stack, and the name is whatever is in the FIELD: that field is
+               the one text input this window has and is empty at that moment
+               anyway, so it needs no dialog and no chrome on a window that
+               deliberately has none. The offer appears next to the stack
+               counter, and only while there is a stack to name.
+
+               Refused rather than half-done, each said on screen: an empty
+               stack, an empty name, and a step list the compiler will not take.
+               Compiling at SAVE time means a macro that cannot run is never
+               written, rather than failing the first time someone reaches for
+               it.
+
+    storage    `%APPDATA%\pieFX\macros.json`, a THIRD file. Not settings.json,
+               which the settings window writes whole; and not recents.json
+               either, which is the opposite lifetime — recents are churn,
+               rewritten on every application and worth nothing if lost, while a
+               macro is something a person deliberately made and expects to find
+               next year. Sharing a file would mean every effect applied
+               rewrites the user's macros.
+
+               Validated on READ, step by step: a macros file can be hand-
+               edited, copied between machines, or written by a version of pieFX
+               that is not this one, and a bad entry should be dropped at the
+               door rather than become a generated-source surprise later. A file
+               that will not PARSE is a missing feature rather than an empty
+               list, and says so on screen.
+
+    in the     Macros rank ABOVE everything: there are a handful of them against
+    list       hundreds of everything else, and they are the user's own, so a
+               macro that matches is what was meant. They are browsable, unlike
+               commands. Shift+Delete removes the selected one — shifted because
+               the arrows walk this list, Delete sits next to Enter, and nothing
+               else in this window destroys anything.
+
+               A macro applied inside a stack is FLATTENED into it, not
+               referenced: a reference is a thing that can be deleted out from
+               under its user.
+
+    rust       `load_macros` / `save_macros` in `src-tauri/src/lib.rs`, a
+               mechanical copy of the recents pair including the `--settings
+               none` refusal. NOT COMPILED: the container this was written in
+               has no GTK development libraries, and the app targets Windows and
+               macOS. It is the one part of this change that has not been
+               through a compiler.
+
 ### What is left
 
 The three questions this list opened with - does the catalogue file appear, does

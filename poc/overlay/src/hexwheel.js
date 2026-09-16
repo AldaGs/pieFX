@@ -313,6 +313,14 @@ function refreshRecents() {
 // to the part a person recognises: "ADBE Gaussian Blur 2" is Gaussian Blur
 // once the vendor tag is off, and a preset is its filename.
 function shortRecent(r) {
+  // A command is the exception to the rule above: its identity is a number, so
+  // the search window writes its display name into the recent alongside the
+  // id. An older recents file predates that and has no name - "#2071" is then
+  // the honest answer, and better than a bare 2071 that reads like a layer.
+  if (r.t === "command") return r.name || "#" + r.id;
+  // A macro's identity IS its name - the user typed it - so there is nothing
+  // to trim off.
+  if (r.t === "macro") return String(r.id);
   if (r.t === "preset") {
     const leaf = String(r.id).split(/[\\/]/).pop();
     return leaf.replace(/\.ffx$/i, "");
