@@ -318,6 +318,9 @@ function shortRecent(r) {
   // id. An older recents file predates that and has no name - "#2071" is then
   // the honest answer, and better than a bare 2071 that reads like a layer.
   if (r.t === "command") return r.name || "#" + r.id;
+  // A macro's identity IS its name - the user typed it - so there is nothing
+  // to trim off.
+  if (r.t === "macro") return String(r.id);
   if (r.t === "preset") {
     const leaf = String(r.id).split(/[\\/]/).pop();
     return leaf.replace(/\.ffx$/i, "");

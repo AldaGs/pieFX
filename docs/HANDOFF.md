@@ -674,6 +674,61 @@ no new executor.
                compiler is simply correct for N layers on the day that gate
                changes.
 
+### Macros, recorded from a stack
+
+A macro is the n-step case of the sequence the compiler already builds, so
+`compile()` does all the work: one snippet, one undo group, one Ctrl+Z takes the
+whole thing back. `src/macros.js` is only the storage and the shape.
+
+    authoring  RECORDED, not written. Shift+Enter already applies without
+               dismissing, so by the time three things are on the layer the user
+               has performed the macro — naming it is all that is left, and the
+               steps are known to work because they just ran. Ctrl+S names the
+               stack, and the name is whatever is in the FIELD: that field is
+               the one text input this window has and is empty at that moment
+               anyway, so it needs no dialog and no chrome on a window that
+               deliberately has none. The offer appears next to the stack
+               counter, and only while there is a stack to name.
+
+               Refused rather than half-done, each said on screen: an empty
+               stack, an empty name, and a step list the compiler will not take.
+               Compiling at SAVE time means a macro that cannot run is never
+               written, rather than failing the first time someone reaches for
+               it.
+
+    storage    `%APPDATA%\pieFX\macros.json`, a THIRD file. Not settings.json,
+               which the settings window writes whole; and not recents.json
+               either, which is the opposite lifetime — recents are churn,
+               rewritten on every application and worth nothing if lost, while a
+               macro is something a person deliberately made and expects to find
+               next year. Sharing a file would mean every effect applied
+               rewrites the user's macros.
+
+               Validated on READ, step by step: a macros file can be hand-
+               edited, copied between machines, or written by a version of pieFX
+               that is not this one, and a bad entry should be dropped at the
+               door rather than become a generated-source surprise later. A file
+               that will not PARSE is a missing feature rather than an empty
+               list, and says so on screen.
+
+    in the     Macros rank ABOVE everything: there are a handful of them against
+    list       hundreds of everything else, and they are the user's own, so a
+               macro that matches is what was meant. They are browsable, unlike
+               commands. Shift+Delete removes the selected one — shifted because
+               the arrows walk this list, Delete sits next to Enter, and nothing
+               else in this window destroys anything.
+
+               A macro applied inside a stack is FLATTENED into it, not
+               referenced: a reference is a thing that can be deleted out from
+               under its user.
+
+    rust       `load_macros` / `save_macros` in `src-tauri/src/lib.rs`, a
+               mechanical copy of the recents pair including the `--settings
+               none` refusal. NOT COMPILED: the container this was written in
+               has no GTK development libraries, and the app targets Windows and
+               macOS. It is the one part of this change that has not been
+               through a compiler.
+
 ### What is left
 
 The three questions this list opened with - does the catalogue file appear, does

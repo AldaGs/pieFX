@@ -1373,6 +1373,41 @@ fn save_recents(json: String) -> Result<(), String> {
     Ok(())
 }
 
+// Macros live in their own file for the same reason recents do - one writer
+// each - and in a THIRD file rather than alongside recents, because the two
+// have opposite lifetimes. Recents are churn: rewritten on every application,
+// capped at eight, and losing them costs nothing. A macro is something the
+// user deliberately made and expects to still be there next year. Putting them
+// in one file would mean every effect applied rewrites the user's macros, and
+// a truncated write during that churn would take the macros with it.
+fn macros_path() -> Option<PathBuf> {
+    match settings_arg() {
+        Some(v) if v == "none" => None,
+        Some(v) => Some(PathBuf::from(v).with_file_name("macros.json")),
+        None => Some(piefx_dir()?.join("macros.json")),
+    }
+}
+
+#[tauri::command]
+fn load_macros() -> String {
+    let s = macros_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    dlog(&format!("  load_macros: {} bytes", s.len()));
+    s
+}
+
+#[tauri::command]
+fn save_macros(json: String) -> Result<(), String> {
+    let p = macros_path().ok_or("macros are disabled (--settings none)")?;
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&p, json).map_err(|e| e.to_string())?;
+    dlog(&format!("  macros saved -> {}", p.display()));
+    Ok(())
+}
+
 fn pipe_client(app: tauri::AppHandle) {
     // Wait for the webview before touching the pipes.
     loop {
@@ -1486,6 +1521,8 @@ pub fn run() {
             load_effects,
             load_recents,
             save_recents,
+            load_macros,
+            save_macros,
             pick_open_path,
             pick_save_path,
             read_share_file,

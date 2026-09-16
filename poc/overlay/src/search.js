@@ -45,6 +45,7 @@
 
 import { sendFire } from "./actions.js";
 import { compileAction } from "./compile.js";
+import { loadMacros, saveMacros, stepFor } from "./macros.js";
 
 const T = window.__TAURI__;
 const qEl = document.getElementById("q");
@@ -68,6 +69,8 @@ const state = {
   commands: 0,
   applied: 0, // how many have been fired in this one summon - see apply(stay)
   params: [], // parsed off the END of the query - see parseQuery
+  macros: [], // {name, steps} - the user's own, from macros.json
+  stack: [],  // the steps applied in THIS summon, in order - what Ctrl+S names
 };
 
 // --- the catalogue's three sharp edges -------------------------------------
@@ -97,6 +100,7 @@ function isInternal(e) {
 function usable(e) {
   if (!e || !e.id) return false;
   if (e.t === "preset") return true;
+  if (e.t === "macro") return true;
   // A command is never hidden either. The obsolete/internal judgement is about
   // AE's effect catalogue; the command map has no equivalent, and what it does
   // have - entries that may be plain wrong - is not something a checkbox can
@@ -217,7 +221,7 @@ function loadCommands() {
 // bare array of match names, so a string read back is MIGRATED rather than
 // dropped: someone's recents list is not worth resetting over a format change,
 // and a match name is unambiguously an effect.
-const RECENT_KINDS = ["preset", "command"];
+const RECENT_KINDS = ["preset", "command", "macro"];
 
 function normaliseRecent(r) {
   if (typeof r === "string") return { t: "effect", id: r };
@@ -226,6 +230,22 @@ function normaliseRecent(r) {
     return t === "command" ? { t, id: r.id, name: r.name } : { t, id: r.id };
   }
   return null;
+}
+
+// A macros file that will not parse is a MISSING FEATURE, not an empty list,
+// and this project has already lost a session to a file that was read,
+// rejected and never mentioned. The error is kept and said on screen.
+function readMacros() {
+  return loadMacros().then(
+    (list) => {
+      state.macros = list;
+      state.macroError = "";
+    },
+    (err) => {
+      state.macros = [];
+      state.macroError = String(err.message || err);
+    }
+  );
 }
 
 function loadRecents() {
@@ -338,6 +358,23 @@ function browsable(e) {
   return e.t !== "command";
 }
 
+// Macros go into the same flat list as everything else, rebuilt whenever they
+// change. They are not in `state.all` permanently because saving one has to be
+// able to REPLACE the list without walking the catalogue looking for the old
+// entries.
+function macroEntries() {
+  return state.macros.map((m) => ({
+    t: "macro",
+    id: m.name,
+    name: m.name,
+    category: m.steps.length === 1 ? "Macro, 1 step" : "Macro, " + m.steps.length + " steps",
+    steps: m.steps,
+  }));
+}
+
+// A macro is the user's own, made deliberately, and there are a handful of them
+// against hundreds of everything else. If one matches, it is what was meant.
+//
 // A command sorts AFTER every effect and preset that matched, whatever it
 // scored. Not a fudge factor - a rule, because the fudge factor was tried and
 // the number was arbitrary: this is an effect search that also knows the menu,
@@ -347,6 +384,7 @@ function browsable(e) {
 // the window. Nothing is lost at the bottom of the list: "precompose" and
 // "new comp" match no effect, so their commands are still the first row.
 function rank(e) {
+  if (e.t === "macro") return -1;
   return e.t === "command" ? 1 : 0;
 }
 
@@ -411,6 +449,8 @@ function render() {
 
   if (state.parseError) {
     show(`The effects catalogue could not be read: ${state.parseError}`);
+  } else if (state.macroError) {
+    show(`Your macros are not loaded — ${state.macroError}`);
   } else if (!state.all.length) {
     // Said out loud rather than shown as an empty list, because this project
     // has already lost a session to a file that was read, rejected, and never
@@ -452,7 +492,11 @@ function render() {
         k.textContent = r.t;
         parts.push(k);
       }
-      if (r.t !== "preset") {
+      // Only the kinds that HAVE one. A macro's identity is its name, which is
+      // already the first column, so a match column would have nothing to put
+      // in it - it printed "undefined" until this was a whitelist rather than
+      // "everything except a preset".
+      if (r.t === "effect" || r.t === "command") {
         const m = document.createElement("span");
         m.className = "match";
         m.textContent = r.t === "command" ? "#" + r.cmdId : r.match;
@@ -505,7 +549,12 @@ function render() {
   // The stack counter. Only on screen once something has been applied without
   // dismissing, because until then it would be a zero explaining nothing.
   stackEl.hidden = state.applied === 0;
-  stackEl.textContent = state.applied === 1 ? "1 applied" : `${state.applied} applied`;
+  stackEl.textContent =
+    (state.applied === 1 ? "1 applied" : `${state.applied} applied`) +
+    // The offer is made where the count is, and only while there is something
+    // to name. A permanent "Ctrl+S saves a macro" would be a hint about a
+    // feature that is unreachable most of the time.
+    (state.stack.length ? " · name them and press Ctrl+S" : "");
 
   const sel = listEl.querySelector(".sel");
   if (sel) sel.scrollIntoView({ block: "nearest" });
@@ -542,6 +591,11 @@ function actionFor(e) {
   // internal identifiers rather than the display strings findMenuCommandId
   // wants, so sending one would ask AE to resolve a string it has never heard
   // of. The id is all this map can honestly offer.
+  // A macro is the n-step case of the same compile. It ignores any parameter
+  // in the query: its steps carry their own, and a number typed at a macro has
+  // no one property to belong to.
+  if (e.t === "macro") return compileAction(e.steps, "pieFX: " + e.name);
+
   if (e.t === "preset") return { kind: "preset", path: e.id };
   if (e.t === "command") return { kind: "ae-command", id: e.cmdId };
 
@@ -585,6 +639,17 @@ function apply(stay) {
   sendFire(action).then(
     () => {
       rememberUsed(e);
+      // Recorded on SUCCESS only, so a stack that becomes a macro contains
+      // nothing that failed to fire. A macro's steps are flattened in: a macro
+      // recorded inside a macro would be a reference, and a reference is a
+      // thing that can be deleted out from under its user.
+      if (e.t === "macro") {
+        state.stack = state.stack.concat(e.steps);
+      } else {
+        const st = stepFor(e, state.params);
+        if (st) state.stack.push(st);
+      }
+
       if (!stay) {
         dismiss();
         return;
@@ -606,6 +671,82 @@ function apply(stay) {
   );
 }
 
+// --- macros ----------------------------------------------------------------
+// Ctrl+S names the stack. The name is whatever is in the FIELD, which is the
+// one text input this window has and is empty at that moment anyway: after a
+// stacked application the field is cleared, so "type the name, press Ctrl+S"
+// needs no second control, no dialog and no chrome on a window that
+// deliberately has none.
+//
+// It is refused rather than half-done in three cases, each said out loud: an
+// empty stack, an empty name, and a step list the compiler will not take (too
+// long for one action). Compiling HERE means a macro that cannot run is never
+// saved, rather than failing the first time someone reaches for it.
+function saveStack() {
+  const name = qEl.value.trim();
+
+  if (!state.stack.length) {
+    show("Nothing to name yet — apply something with Shift+Enter first.");
+    return;
+  }
+  if (!name) {
+    show("Type a name for these " + state.stack.length + " steps, then Ctrl+S.");
+    return;
+  }
+  try {
+    compileAction(state.stack, "pieFX: " + name);
+  } catch (err) {
+    show("Cannot save: " + err.message);
+    return;
+  }
+
+  // Same name replaces, and does not ask. The alternative is a confirm dialog
+  // on a window with no chrome, and the user just typed the name they meant.
+  const kept = state.macros.filter((m) => m.name.toLowerCase() !== name.toLowerCase());
+  const next = [{ name, steps: state.stack.slice() }].concat(kept);
+
+  saveMacros(next).then(
+    () => {
+      state.macros = next;
+      state.stack = [];
+      state.applied = 0;
+      qEl.value = "";
+      refreshAll();
+      show("Saved “" + name + "”.");
+    },
+    (err) => show("Could not save: " + err)
+  );
+}
+
+// Shift+Delete on a macro row. Shifted because the arrows walk this list and
+// Delete alone next to Enter is one slip away from losing something the user
+// built - and because nothing else in this window destroys anything, so the
+// awkwardness is the point.
+function deleteSelected() {
+  const e = state.rows[state.sel];
+  if (!e || e.head || e.t !== "macro") return;
+
+  const next = state.macros.filter((m) => m.name !== e.name);
+  saveMacros(next).then(
+    () => {
+      state.macros = next;
+      refreshAll();
+      show("Deleted “" + e.name + "”.");
+    },
+    (err) => show("Could not delete: " + err)
+  );
+}
+
+// Everything on screen is rebuilt from `state.all`, so a macro change has to
+// rebuild the part of it that is macros. The catalogue and the commands are
+// left alone: they cost a file read and a 613-entry walk, and neither changed.
+function refreshAll() {
+  state.all = state.all.filter((e) => e.t !== "macro").concat(macroEntries());
+  buildRows();
+  render();
+  qEl.focus();
+}
+
 // Hidden, not closed: the next summon should be instant, and rebuilding the
 // window would also mean asking Windows for the foreground again. The window
 // has no title bar and so no close button — Enter, Escape and clicking away
@@ -620,6 +761,9 @@ function apply(stay) {
 function dismiss() {
   qEl.value = "";
   state.applied = 0;
+  // The stack is the record of THIS summon. A window that comes back holding
+  // the last one would offer to name steps the user has forgotten applying.
+  state.stack = [];
   buildRows();
   render();
   invoke("hide_search").catch(() => {});
@@ -644,6 +788,12 @@ document.addEventListener("keydown", (ev) => {
   } else if (ev.key === "Enter") {
     ev.preventDefault();
     apply(ev.shiftKey);
+  } else if (ev.key === "s" && (ev.ctrlKey || ev.metaKey)) {
+    ev.preventDefault();
+    saveStack();
+  } else if (ev.key === "Delete" && ev.shiftKey) {
+    ev.preventDefault();
+    deleteSelected();
   }
 });
 
@@ -664,9 +814,11 @@ function freshen() {
   // replaces it - a Promise.all over the two would race and drop the commands
   // about half the time, which is the kind of bug that only shows up on a slow
   // disk in front of someone else.
+  state.stack = [];
   return loadCatalogue()
-    .then(() => Promise.all([loadCommands(), loadRecents()]))
+    .then(() => Promise.all([loadCommands(), loadRecents(), readMacros()]))
     .then(() => {
+      state.all = state.all.concat(macroEntries());
     buildRows();
     render();
     qEl.focus();
