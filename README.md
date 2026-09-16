@@ -20,8 +20,52 @@ gesture inside After Effects:
 | **built-in** | the 3x3 anchor grid, and the current frame onto the clipboard |
 
 Plus one level of drill-down, per-slot greying when a slot needs a selection or a
-comp it does not have, a settings window that rebinds any of it, and an effect
-search that filters your installed catalogue and applies on Enter.
+comp it does not have, a settings window that rebinds any of it, and the search
+below.
+
+## The search
+
+Release the gesture on `Effects` and a focused window opens under the cursor. It
+searches three things in one list — **installed effects**, **animation presets**,
+and **After Effects' own menu commands** — and applies on Enter.
+
+After Effects 26.2 shipped **Quick Apply**, which searches the same three things
+from `Ctrl+Enter`. So this is no longer the only search box in AE, and it does not
+try to win on what it can reach. It is reached by a **right-press where the
+cursor already is** rather than by a chord, and it can be taught three things a
+dialog cannot:
+
+**Values in the query.** `gaussian 40` applies Gaussian Blur and sets it.
+`gaussian blur=40` names the property — matched as a substring, so you do not
+need AE's exact wording. `levels 0.2 0.8` fills two in order. The property is
+looked up **by name against the live effect**, never by index, so it works for
+third-party plug-ins nobody has catalogued, and there is no list of supported
+effects: any effect with a settable numeric property takes one. The row tells you
+what it parsed before you commit, and a row that cannot take a value says
+`ignores 40` instead of swallowing it.
+
+**Stacking.** `Shift+Enter` applies and keeps the window up with an empty field,
+so Levels then Curves then Glow is one summon instead of three. Each is still its
+own undo.
+
+**Macros.** A macro is a named list of steps, and you do not write one — you
+record it. Stack the steps with Shift+Enter, type a name, press `Ctrl+S`. The
+steps are known to work because they just ran. Applying the macro runs the whole
+list inside **one undo group**, so one Ctrl+Z takes all of it back.
+`Shift+Delete` on a macro removes it. They live in `%APPDATA%\pieFX\macros.json`,
+which is a plain file you can copy to another machine.
+
+Smaller things: recents are the list when you have typed nothing, so the common
+case needs no typing at all; effects can be found by match name (`ADBE Gauss`);
+and AE's 50-odd `_Obsolete` entries — which collide with live effects on names
+like *Levels* and *Box Blur* — are hidden behind a checkbox rather than silently
+offered.
+
+Menu commands are searched but not browsed: there are hundreds, and an
+alphabetical dump of AE's menu bar is not what you want to see the instant a
+gesture ends. Type a letter and they are there. They also rank below any effect
+or preset that matched, because this is an effect search that happens to know the
+menu.
 
 ## Installing
 
@@ -138,6 +182,12 @@ their own Xcode project via `./Mac/build_and_install.sh`. See
   and does not earn the ~$200-600/yr a certificate costs, so a downloaded copy
   trips SmartScreen once: *More info*, then *Run anyway*. A `winget` package is
   the planned way to skip that path entirely.
+- **The newest search features have not been run inside After Effects yet.**
+  Values in the query, stacking, macros and menu-command firing are all driven
+  and asserted by a harness, and the generated ExtendScript has been read but not
+  executed. Menu command ids in particular come from a hand-tested map for AE
+  2025 that has already been wrong three times, which is why every command row
+  shows its id.
 - **A failed `copy-frame` freezes AE for up to 15 seconds.** It waits on AE's UI
   thread. Only reached when AE never finishes writing the frame; making it
   asynchronous is the real answer.
