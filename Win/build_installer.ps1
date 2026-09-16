@@ -145,7 +145,7 @@ Copy-Item $Scripts (Join-Path $Stage "scripts") -Recurse
 #	`file` resolves it against the install directory, so shipping without it
 #	produces a wheel whose Master Null slot throws. Named individually because
 #	a silently-empty folder would pass a mere Test-Path.
-foreach ($s in @("ag_masterNull.jsx", "ag_localeProbe.jsx")) {
+foreach ($s in @("ag_masterNull.jsx", "ag_compTools.jsx", "ag_localeProbe.jsx")) {
 	if (-not (Test-Path (Join-Path $Stage "scripts\$s"))) { Fail "scripts\$s missing from the payload" }
 }
 
