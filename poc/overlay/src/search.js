@@ -44,6 +44,7 @@
 // AE, this list is a convenience with a known error bar, and the UI says so.
 
 import { sendFire } from "./actions.js";
+import { compileAction } from "./compile.js";
 
 const T = window.__TAURI__;
 const qEl = document.getElementById("q");
@@ -66,6 +67,7 @@ const state = {
   presets: 0,
   commands: 0,
   applied: 0, // how many have been fired in this one summon - see apply(stay)
+  params: [], // parsed off the END of the query - see parseQuery
 };
 
 // --- the catalogue's three sharp edges -------------------------------------
@@ -261,6 +263,44 @@ function rememberUsed(entry) {
   invoke("save_recents", { json: JSON.stringify(state.recents) }).catch(() => {});
 }
 
+// --- the query, which is not only a search term -------------------------
+// "gaussian 40" is a search for "gaussian" and an instruction to set 40. The
+// parameters are taken off the END, one token at a time, and the first token
+// that does not look like one stops the walk — so "3 d layer" and "1 up" are
+// searches, not a search for "3 d" with a parameter, and "box blur2" keeps its
+// 2 because "blur2" is not a number.
+//
+// Two forms, and the named one is the one to prefer:
+//
+//   gaussian blur=40     named:      matched as a substring of the property
+//                                    name against the LIVE effect
+//   gaussian 40          positional: the first settable numeric property
+//   levels 0.2 0.8       positional, in order
+//
+// Positional is a guess and is documented as one; named is not. Neither is a
+// whitelist: every effect with a settable numeric property can take one, which
+// is nearly all of them, and the ones that cannot say so in a toast rather than
+// failing to apply.
+const PARAM_TOKEN = /^(?:([a-z][a-z0-9 _-]*?)=)?(-?(?:\d+\.?\d*|\.\d+))$/i;
+
+function parseQuery(raw) {
+  const tokens = raw.trim().split(/\s+/).filter(Boolean);
+  const params = [];
+
+  while (tokens.length > 1) {
+    const m = PARAM_TOKEN.exec(tokens[tokens.length - 1]);
+    if (!m) break;
+    tokens.pop();
+    params.unshift(m[1] ? { name: m[1].toLowerCase(), value: Number(m[2]) } : { value: Number(m[2]) });
+  }
+
+  return { text: tokens.join(" "), params };
+}
+
+function paramLabel(params) {
+  return params.map((p) => (p.name ? p.name + " = " + p.value : String(p.value))).join(", ");
+}
+
 // --- matching --------------------------------------------------------------
 // Substring, case-insensitive, on the display name first and the match name
 // second, so that typing "ADBE Gauss" finds what typing "gaussian" does. A
@@ -315,8 +355,23 @@ function byRecent(r) {
 }
 
 function buildRows() {
-  const q = qEl.value.trim().toLowerCase();
+  const raw = qEl.value.trim();
+  const parsed = parseQuery(raw);
+  state.params = parsed.params;
+  let q = parsed.text.toLowerCase();
   const rows = [];
+
+  // A parse that finds NOTHING is a parse that was wrong. "levels 2" is far
+  // more likely to be someone looking for an effect with a 2 in its name than
+  // a request to set a parameter on nothing, so the whole raw string gets a
+  // second chance before the window says "Nothing matches".
+  if (q && state.params.length) {
+    const hit = pool().some((e) => score(e, q) >= 0);
+    if (!hit) {
+      state.params = [];
+      q = raw.toLowerCase();
+    }
+  }
 
   if (!q) {
     // No query: recents ARE the answer. This is the zero-typing common case,
@@ -403,6 +458,22 @@ function render() {
         m.textContent = r.t === "command" ? "#" + r.cmdId : r.match;
         parts.push(m);
       }
+      // What the parameter will DO, on the row it will do it to. This is the
+      // only confirmation available before Enter: the window holds no property
+      // list (the catalogue has none), so it cannot promise "Blurriness = 40"
+      // for an effect nobody has applied yet - it can only say what it parsed,
+      // and let the script say in a toast if that did not land. A row that
+      // CANNOT take one says so instead, which is the more important half:
+      // typing "precompose 40" and watching the 40 vanish silently is the
+      // failure this chip exists to prevent.
+      if (state.params.length) {
+        const pm = document.createElement("span");
+        pm.className = r.t === "effect" ? "param" : "param off";
+        pm.textContent =
+          r.t === "effect" ? paramLabel(state.params) : "ignores " + paramLabel(state.params);
+        parts.push(pm);
+      }
+
       const c = document.createElement("span");
       c.className = "cat";
       c.textContent = r.category || "(internal)";
@@ -473,6 +544,16 @@ function actionFor(e) {
   // of. The id is all this map can honestly offer.
   if (e.t === "preset") return { kind: "preset", path: e.id };
   if (e.t === "command") return { kind: "ae-command", id: e.cmdId };
+
+  // A parameterised effect is a SEQUENCE - add the effect, then set the
+  // property - so it compiles to one snippet and one undo group. Without
+  // parameters it stays on the AEGP path it has always used: that path is
+  // proven live, it is one message instead of a kilobyte of generated source,
+  // and the commonest thing this window does should not start going through a
+  // compiler on the day parameters shipped.
+  if (state.params.length) {
+    return compileAction([{ t: "effect", id: e.id, params: state.params }], "pieFX: " + e.name);
+  }
   return { kind: "effect", matchName: e.id };
 }
 
@@ -490,7 +571,18 @@ function apply(stay) {
   const e = state.rows[state.sel];
   if (!e || e.head) return;
 
-  sendFire(actionFor(e)).then(
+  // Compiling can fail - too many steps for one action is the real case - and
+  // it fails HERE, before anything crosses the pipe, so the window can say so
+  // instead of the toast having to.
+  let action;
+  try {
+    action = actionFor(e);
+  } catch (err) {
+    show("Could not apply: " + err.message);
+    return;
+  }
+
+  sendFire(action).then(
     () => {
       rememberUsed(e);
       if (!stay) {

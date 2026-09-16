@@ -607,6 +607,73 @@ A command recent carries its display NAME as well as its id, which no other
 kind needs to: the wheel's recents panel turns an identity into something
 readable on its own, and no amount of trimming makes "2071" a word.
 
+### The snippet compiler, and parameters in the query
+
+`src/compile.js` turns a LIST OF STEPS into one ExtendScript snippet. It exists
+because the window could apply an effect, a preset or a command — one action
+each — but not anything that has to happen AS A UNIT. ExtendScript is the only
+one of the three paths that can express a sequence, because it can do all three
+things itself (`addProperty`, `applyPreset`, `app.executeCommand`), so a
+parameterised effect is a one-step sequence, a macro will be an n-step one, and
+both ride the `script-snippet` kind that already exists. No new pipe message and
+no new executor.
+
+    parameters `gaussian 40` sets the first settable numeric property;
+               `gaussian blur=40` matches "blur" as a SUBSTRING of the property
+               name; `levels 0.2 0.8` is positional, in order. Tokens are taken
+               off the END of the query and the first one that is not a number
+               stops the walk, so "3 d layer", "1 up" and "box blur2" are still
+               searches. A parse that matches NOTHING is retried as a plain
+               query before the window says "Nothing matches".
+
+               The lookup is BY NAME AGAINST THE LIVE EFFECT, never by index.
+               `effects.json` carries no property information, so an index would
+               be a guess, and an effect's first property is very often a group
+               or a checkbox. Looking it up in the script also means it works for
+               a third-party plug-in nobody has enumerated. There is no
+               whitelist: every effect with a settable numeric property can take
+               one, which is nearly all of them.
+
+               The row shows what was PARSED ("blur = 40"), not what it resolved
+               to, and that is the honest limit: the window holds no property
+               list, so it cannot promise "Blurriness" for an effect nobody has
+               applied yet. A row that cannot take a parameter at all says
+               "ignores 40" instead, which is the more important half — typing
+               "precompose 40" and watching the 40 vanish silently is the
+               failure the chip exists to prevent.
+
+               Without parameters an effect stays on the AEGP path it has always
+               used. That path is proven live and is one message rather than a
+               kilobyte of generated source, and the commonest thing this window
+               does should not start going through a compiler on the day
+               parameters shipped.
+
+    errors     Thrown, not returned. `RunScript` already toasts whatever a
+               script throws, so a parameter that did not land reports itself in
+               the toast the user already recognises, with no C++ change. The
+               throw happens AFTER `endUndoGroup`, so the effect is still applied
+               and still undoable — a parameter is a refinement, and throwing the
+               effect away because its number did not land is the worse answer.
+
+    generated  ASCII only, `\uXXXX` above 127. The snippet crosses the pipe as
+    source     UTF-8 and is decoded into a char buffer, and what AE's
+               ExecuteScript does with UTF-8 BYTES in source has not been
+               measured here — this project has already paid for one encoding
+               assumption, when the macOS port found preset names stored
+               decomposed. A user preset folder under an accented name is not an
+               edge case. Overflow is caught at 3,900 characters with a message
+               about steps; past that the native side toasts "script too long
+               for one action", which is true but not actionable.
+
+    layers     The compiler loops `comp.selectedLayers`, and every per-layer body
+               is wrapped so that a camera or a light in a mixed selection is
+               NAMED rather than abandoning the layers after it inside a
+               half-run undo group. This does NOT yet mean the window applies to
+               a multi-layer selection: the wheel still refuses to open it with
+               more than one layer selected, and that gate is native. The
+               compiler is simply correct for N layers on the day that gate
+               changes.
+
 ### What is left
 
 The three questions this list opened with - does the catalogue file appear, does

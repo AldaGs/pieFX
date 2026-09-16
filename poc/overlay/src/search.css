@@ -95,6 +95,23 @@ main {
   font-family: ui-monospace, Consolas, monospace;
 }
 
+/* What a parsed parameter will do, on the row it will do it to. It reads as
+   part of the row rather than as a badge, because it is a statement about this
+   one action and not a property of the effect. `.off` is the row that cannot
+   take one - said in the same place, in the muted colour, so the difference is
+   visible without having to be read. */
+.param {
+  font-size: 11.5px;
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--accent-ink);
+}
+
+.param.off {
+  color: var(--ink-dim);
+  font-family: inherit;
+  font-style: italic;
+}
+
 /* The stack counter: how many have been applied without the window being
    dismissed. It only appears once Shift+Enter has been used, so it is a reply
    to something the user just did rather than a permanent zero. */
